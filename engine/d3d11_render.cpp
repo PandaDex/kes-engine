@@ -2,6 +2,9 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
+#include <cstddef>
+#include <cstring>
+#include <dxgi1_5.h>
 #include <fstream>
 #include <sstream>
 #include "file_paths.h"
@@ -398,19 +401,6 @@ static bool CreateDeviceAndSwapChain(Renderer& r, SDL_Window* window)
 {
     HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
 
-    DXGI_SWAP_CHAIN_DESC scd = {};
-    scd.BufferDesc.Width = static_cast<UINT>(r.windowWidth);
-    scd.BufferDesc.Height = static_cast<UINT>(r.windowHeight);
-    scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    scd.BufferDesc.RefreshRate.Numerator = 60;
-    scd.BufferDesc.RefreshRate.Denominator = 1;
-    scd.SampleDesc.Count = 1;
-    scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    scd.BufferCount = 1;
-    scd.OutputWindow = hwnd;
-    scd.Windowed = TRUE;
-    scd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-
     UINT deviceFlags = 0;
 #ifdef _DEBUG
     deviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
@@ -423,34 +413,20 @@ static bool CreateDeviceAndSwapChain(Renderer& r, SDL_Window* window)
         D3D_FEATURE_LEVEL_10_0
     };
 
-    HRESULT hr = D3D11CreateDeviceAndSwapChain(
-        nullptr,
-        D3D_DRIVER_TYPE_HARDWARE,
-        nullptr,
-        deviceFlags,
-        requestedLevels,
-        ARRAYSIZE(requestedLevels),
-        D3D11_SDK_VERSION,
-        &scd,
-        &r.swapChain,
-        &r.device,
-        &featureLevel,
-        &r.context
-    );
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, deviceFlags,
+        requestedLevels, ARRAYSIZE(requestedLevels), D3D11_SDK_VERSION, &r.device, &featureLevel, &r.context);
 
     if (FAILED(hr) && (deviceFlags & D3D11_CREATE_DEVICE_DEBUG) != 0)
     {
         EngineLog("D3D11 debug layer unavailable; retrying without it.");
         deviceFlags &= ~D3D11_CREATE_DEVICE_DEBUG;
-        hr = D3D11CreateDeviceAndSwapChain(
-            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, deviceFlags,
-            requestedLevels, ARRAYSIZE(requestedLevels), D3D11_SDK_VERSION,
-            &scd, &r.swapChain, &r.device, &featureLevel, &r.context);
+        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, deviceFlags,
+            requestedLevels, ARRAYSIZE(requestedLevels), D3D11_SDK_VERSION, &r.device, &featureLevel, &r.context);
     }
 
     if (FAILED(hr))
     {
-        EngineLogf("D3D11CreateDeviceAndSwapChain failed: 0x%08X", static_cast<unsigned>(hr));
+        EngineLogf("D3D11CreateDevice failed: 0x%08X", static_cast<unsigned>(hr));
         return false;
     }
 
@@ -461,6 +437,90 @@ static bool CreateDeviceAndSwapChain(Renderer& r, SDL_Window* window)
         return false;
     }
 
+    // Factory that created the device.
+    IDXGIDevice* dxgiDevice = nullptr;
+    IDXGIAdapter* adapter = nullptr;
+    IDXGIFactory2* factory = nullptr;
+    hr = r.device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgiDevice));
+    if (SUCCEEDED(hr))
+        hr = dxgiDevice->GetAdapter(&adapter);
+    if (SUCCEEDED(hr))
+        hr = adapter->GetParent(__uuidof(IDXGIFactory2), reinterpret_cast<void**>(&factory));
+    SafeRelease(adapter);
+    SafeRelease(dxgiDevice);
+    if (FAILED(hr) || !factory)
+    {
+        EngineLogf("Failed to get the DXGI factory: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+
+    // Tearing (vsync off without the compositor capping the frame rate) needs
+    // DXGI 1.5 and a flip-model swapchain.
+    IDXGIFactory5* factory5 = nullptr;
+    if (SUCCEEDED(factory->QueryInterface(__uuidof(IDXGIFactory5), reinterpret_cast<void**>(&factory5))))
+    {
+        BOOL allowTearing = FALSE;
+        if (SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing))))
+            r.tearingSupported = allowTearing == TRUE;
+        SafeRelease(factory5);
+    }
+
+    // Flip model (Windows 10+): lower latency, independent flip in borderless
+    // fullscreen, required for tearing.
+    DXGI_SWAP_CHAIN_DESC1 desc = {};
+    desc.Width = static_cast<UINT>(r.windowWidth);
+    desc.Height = static_cast<UINT>(r.windowHeight);
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.BufferCount = 2;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    desc.Scaling = DXGI_SCALING_STRETCH;
+    desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    desc.Flags = r.tearingSupported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+
+    bool flipModel = true;
+    IDXGISwapChain1* swapChain1 = nullptr;
+    hr = factory->CreateSwapChainForHwnd(r.device, hwnd, &desc, nullptr, nullptr, &swapChain1);
+    if (SUCCEEDED(hr))
+    {
+        r.swapChain = swapChain1;
+        r.swapChainFlags = desc.Flags;
+    }
+    else
+    {
+        // Older systems: blt-model swapchain.
+        EngineLogf("Flip-model swapchain unavailable (0x%08X); using the legacy swapchain.", static_cast<unsigned>(hr));
+        r.tearingSupported = false;
+        flipModel = false;
+        DXGI_SWAP_CHAIN_DESC legacy = {};
+        legacy.BufferDesc.Width = desc.Width;
+        legacy.BufferDesc.Height = desc.Height;
+        legacy.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        legacy.SampleDesc.Count = 1;
+        legacy.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        legacy.BufferCount = 1;
+        legacy.OutputWindow = hwnd;
+        legacy.Windowed = TRUE;
+        legacy.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+        hr = factory->CreateSwapChain(r.device, &legacy, &r.swapChain);
+        r.swapChainFlags = 0;
+    }
+
+    // Window modes (Alt+Enter, fullscreen) are handled by the engine through SDL.
+    if (SUCCEEDED(hr))
+        factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
+    SafeRelease(factory);
+
+    if (FAILED(hr))
+    {
+        EngineLogf("Swapchain creation failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+
+    EngineLogf("D3D11 swapchain: %s, tearing %s.",
+               flipModel ? "flip model" : "legacy",
+               r.tearingSupported ? "supported" : "not supported");
     return true;
 }
 
@@ -655,8 +715,14 @@ static bool CreateConstantBuffers(Renderer& r)
         return false;
     }
 
+    // Model constants change every draw: dynamic buffer written with
+    // MAP_WRITE_DISCARD so only the used part of the 8 KB block is touched.
     cb.ByteWidth = sizeof(ModelCBData);
+    cb.Usage = D3D11_USAGE_DYNAMIC;
+    cb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = r.device->CreateBuffer(&cb, nullptr, &r.modelCB);
+    cb.Usage = D3D11_USAGE_DEFAULT;
+    cb.CPUAccessFlags = 0;
     if (FAILED(hr))
     {
         EngineLogf("Create model constant buffer failed: 0x%08X", static_cast<unsigned>(hr));
@@ -716,6 +782,7 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
     r.renderHeight = config.renderHeight;
     r.preservePresentationAspect = config.preservePresentationAspect;
     r.preferIntegerPresentationScale = config.preferIntegerPresentationScale;
+    r.vsync = config.vsync;
 
     if (!CreateDeviceAndSwapChain(r, window))
     {
@@ -901,7 +968,7 @@ bool RendererResize(Renderer& r, int width, int height)
         static_cast<UINT>(width),
         static_cast<UINT>(height),
         DXGI_FORMAT_UNKNOWN,
-        0);
+        r.swapChainFlags);   // must match the creation flags (ALLOW_TEARING)
 
     if (FAILED(hr))
     {
@@ -910,6 +977,25 @@ bool RendererResize(Renderer& r, int width, int height)
     }
 
     return CreateRenderTargets(r);
+}
+
+bool RendererSetRenderResolution(Renderer& r, int width, int height)
+{
+    if (!r.swapChain || width <= 0 || height <= 0)
+        return false;
+    if (width == r.renderWidth && height == r.renderHeight)
+        return true;
+
+    r.renderWidth = width;
+    r.renderHeight = height;
+    r.context->OMSetRenderTargets(0, nullptr, nullptr);
+    DestroyRenderTargets(r);
+    return CreateRenderTargets(r);
+}
+
+void RendererSetVSync(Renderer& r, bool enabled)
+{
+    r.vsync = enabled;
 }
 
 static GPUMesh* GetOrUploadMesh(Renderer& r, MeshHandle handle, const AssetSystem& assets)
@@ -1145,12 +1231,6 @@ static float3 BuildLightDirection(const Transform& t)
     return { direction.x, direction.y, direction.z };
 }
 
-struct DrawItem
-{
-    const SceneObject* object = nullptr;
-    const MaterialData* material = nullptr;
-    float distanceSq = 0.0f;
-};
 
 static bool IsTransparentMaterial(const MaterialData* material)
 {
@@ -1167,6 +1247,29 @@ static ID3D11RasterizerState* SelectRasterizerState(Renderer& r, bool wireframe,
     if (wireframe)
         return doubleSided ? r.wireNoCullRS : r.wireRS;
     return doubleSided ? r.solidNoCullRS : r.solidRS;
+}
+
+// Writes the model constants the shader reads (matrices, skin info, used skin
+// matrices) instead of the whole 8 KB block. The rest of the discarded buffer
+// is undefined, which is fine: the shader only reads skin matrices < count.
+static void UpdateModelConstants(Renderer& r, const float4x4& wvp, const float4x4& world, const float* skinMatrices, uint32_t skinMatrixCount)
+{
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    if (FAILED(r.context->Map(r.modelCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+        return;
+    uint8_t* dst = static_cast<uint8_t*>(mapped.pData);
+
+    float matrix[16];
+    MatrixToArrayRowMajor(wvp, matrix);
+    std::memcpy(dst + offsetof(ModelCBData, worldViewProj), matrix, sizeof(matrix));
+    MatrixToArrayRowMajor(world, matrix);
+    std::memcpy(dst + offsetof(ModelCBData, world), matrix, sizeof(matrix));
+    if (skinMatrices && skinMatrixCount > 0)
+        std::memcpy(dst + offsetof(ModelCBData, skinMatrices), skinMatrices, skinMatrixCount * 16u * sizeof(float));
+    const float skinInfo[4] = { skinMatrixCount > 0 ? 1.0f : 0.0f, static_cast<float>(skinMatrixCount), 0.0f, 0.0f };
+    std::memcpy(dst + offsetof(ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
+
+    r.context->Unmap(r.modelCB, 0);
 }
 
 static void UpdateMaterialConstants(Renderer& r, const MaterialData* material)
@@ -1392,10 +1495,11 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
 
     r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    std::vector<DrawItem> opaqueItems;
-    std::vector<DrawItem> transparentItems;
-    opaqueItems.reserve(sceneObj.GetObjects().size());
-    transparentItems.reserve(sceneObj.GetObjects().size());
+    // Draw lists live in the renderer so their storage is reused every frame.
+    std::vector<DrawItem>& opaqueItems = r.opaqueDrawItems;
+    std::vector<DrawItem>& transparentItems = r.transparentDrawItems;
+    opaqueItems.clear();
+    transparentItems.clear();
     const Vector3 cameraPosition = { camera.x, camera.y, camera.z };
 
     for (const SceneObject& obj : sceneObj.GetObjects())
@@ -1419,11 +1523,56 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
             opaqueItems.push_back(item);
     }
 
+    // Opaque: group by material, near-to-far inside a group (early depth reject).
+    std::sort(opaqueItems.begin(), opaqueItems.end(),
+        [](const DrawItem& a, const DrawItem& b)
+        {
+            if (a.material != b.material)
+                return a.material < b.material;
+            return a.distanceSq < b.distanceSq;
+        });
+
+    // Transparent: back-to-front for correct blending.
     std::sort(transparentItems.begin(), transparentItems.end(),
         [](const DrawItem& a, const DrawItem& b)
         {
             return a.distanceSq > b.distanceSq;
         });
+
+    // Redundant state filtering across consecutive draws. The mesh setup
+    // above bound the default program; track what is currently set.
+    ID3D11RasterizerState* boundRS = nullptr;
+    ID3D11InputLayout* boundLayout = r.meshLayout;
+    ID3D11VertexShader* boundVS = r.meshVS;
+    ID3D11PixelShader* boundPS = r.meshPS;
+    ID3D11Buffer* boundVB = nullptr;
+    ID3D11Buffer* boundIB = nullptr;
+    const MaterialData* boundMaterial = nullptr;
+    bool haveMaterial = false;
+
+    auto drawMesh = [&](const GPUMesh& gpuMesh)
+    {
+        if (gpuMesh.vertexBuffer != boundVB)
+        {
+            UINT stride = sizeof(RenderVertex);
+            UINT offset = 0;
+            r.context->IASetVertexBuffers(0, 1, &gpuMesh.vertexBuffer, &stride, &offset);
+            boundVB = gpuMesh.vertexBuffer;
+        }
+        if (gpuMesh.indexBuffer)
+        {
+            if (gpuMesh.indexBuffer != boundIB)
+            {
+                r.context->IASetIndexBuffer(gpuMesh.indexBuffer, DXGI_FORMAT_R32_UINT, 0);
+                boundIB = gpuMesh.indexBuffer;
+            }
+            r.context->DrawIndexed(gpuMesh.indexCount, 0, 0);
+        }
+        else
+        {
+            r.context->Draw(gpuMesh.indexCount, 0);
+        }
+    };
 
     auto drawItems = [&](const std::vector<DrawItem>& items, bool transparent)
     {
@@ -1440,10 +1589,26 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
             if (item.material && item.material->shader != 0)
                 customProgram = GetOrCompileShaderProgram(r, item.material->shader, assets);
 
-            r.context->RSSetState(SelectRasterizerState(r, scene.wireframe, IsDoubleSidedMaterial(item.material)));
-            r.context->IASetInputLayout(customProgram ? customProgram->inputLayout : r.meshLayout);
-            r.context->VSSetShader(customProgram ? customProgram->vertexShader : r.meshVS, nullptr, 0);
-            r.context->PSSetShader(customProgram ? customProgram->pixelShader : r.meshPS, nullptr, 0);
+            ID3D11RasterizerState* rs = SelectRasterizerState(r, scene.wireframe, IsDoubleSidedMaterial(item.material));
+            ID3D11InputLayout* layout = customProgram ? customProgram->inputLayout : r.meshLayout;
+            ID3D11VertexShader* vs = customProgram ? customProgram->vertexShader : r.meshVS;
+            ID3D11PixelShader* ps = customProgram ? customProgram->pixelShader : r.meshPS;
+            if (rs != boundRS) { r.context->RSSetState(rs); boundRS = rs; }
+            if (layout != boundLayout) { r.context->IASetInputLayout(layout); boundLayout = layout; }
+            if (vs != boundVS) { r.context->VSSetShader(vs, nullptr, 0); boundVS = vs; }
+            if (ps != boundPS) { r.context->PSSetShader(ps, nullptr, 0); boundPS = ps; }
+
+            // Material constants and texture only change with the material.
+            if (!haveMaterial || item.material != boundMaterial)
+            {
+                UpdateMaterialConstants(r, item.material);
+                ID3D11ShaderResourceView* textureSrv = GetMaterialTextureSRV(r, item.material);
+                r.context->PSSetShaderResources(0, 1, &textureSrv);
+                boundMaterial = item.material;
+                haveMaterial = true;
+            }
+
+            const float4x4 objectWorld = TransformToMatrix(obj.transform);
 
             if (skinned)
             {
@@ -1451,44 +1616,19 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
                 if (!modelRenderCache)
                     continue;
 
+                const uint32_t matrixCount = obj.skinMatrixCount > SceneObject::MaxSkinMatrices ? SceneObject::MaxSkinMatrices : obj.skinMatrixCount;
                 for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
                 {
                     GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
                     if (!gpuMesh)
                         continue;
 
-                    float4x4 world = TransformToMatrix(obj.transform);
                     float4x4 meshLocal = {};
                     std::memcpy(&meshLocal, modelRenderCache->meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u, sizeof(meshLocal));
-                    world = Multiply(meshLocal, world);
-
+                    const float4x4 world = Multiply(meshLocal, objectWorld);
                     const float4x4 wvp = Multiply(world, viewProj);
-                    ModelCBData mcb = {};
-                    MatrixToArrayRowMajor(wvp, mcb.worldViewProj);
-                    MatrixToArrayRowMajor(world, mcb.world);
-                    mcb.skinInfo[0] = 1.0f;
-                    mcb.skinInfo[1] = static_cast<float>(obj.skinMatrixCount);
-                    const uint32_t matrixCount = obj.skinMatrixCount > SceneObject::MaxSkinMatrices ? SceneObject::MaxSkinMatrices : obj.skinMatrixCount;
-                    for (uint32_t index = 0; index < matrixCount * 16; ++index)
-                        mcb.skinMatrices[index] = obj.skinMatrices[index];
-                    r.context->UpdateSubresource(r.modelCB, 0, nullptr, &mcb, 0, 0);
-
-                    UpdateMaterialConstants(r, item.material);
-                    ID3D11ShaderResourceView* textureSrv = GetMaterialTextureSRV(r, item.material);
-                    r.context->PSSetShaderResources(0, 1, &textureSrv);
-
-                    UINT stride = sizeof(RenderVertex);
-                    UINT offset = 0;
-                    r.context->IASetVertexBuffers(0, 1, &gpuMesh->vertexBuffer, &stride, &offset);
-                    if (gpuMesh->indexBuffer)
-                    {
-                        r.context->IASetIndexBuffer(gpuMesh->indexBuffer, DXGI_FORMAT_R32_UINT, 0);
-                        r.context->DrawIndexed(gpuMesh->indexCount, 0, 0);
-                    }
-                    else
-                    {
-                        r.context->Draw(gpuMesh->indexCount, 0);
-                    }
+                    UpdateModelConstants(r, wvp, world, obj.skinMatrices, matrixCount);
+                    drawMesh(*gpuMesh);
                 }
             }
             else
@@ -1497,30 +1637,9 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
                 if (!gpuMesh)
                     continue;
 
-                const float4x4 world = TransformToMatrix(obj.transform);
-                const float4x4 wvp = Multiply(world, viewProj);
-                ModelCBData mcb = {};
-                MatrixToArrayRowMajor(wvp, mcb.worldViewProj);
-                MatrixToArrayRowMajor(world, mcb.world);
-                mcb.skinInfo[0] = 0.0f;
-                r.context->UpdateSubresource(r.modelCB, 0, nullptr, &mcb, 0, 0);
-
-                UpdateMaterialConstants(r, item.material);
-                ID3D11ShaderResourceView* textureSrv = GetMaterialTextureSRV(r, item.material);
-                r.context->PSSetShaderResources(0, 1, &textureSrv);
-
-                UINT stride = sizeof(RenderVertex);
-                UINT offset = 0;
-                r.context->IASetVertexBuffers(0, 1, &gpuMesh->vertexBuffer, &stride, &offset);
-                if (gpuMesh->indexBuffer)
-                {
-                    r.context->IASetIndexBuffer(gpuMesh->indexBuffer, DXGI_FORMAT_R32_UINT, 0);
-                    r.context->DrawIndexed(gpuMesh->indexCount, 0, 0);
-                }
-                else
-                {
-                    r.context->Draw(gpuMesh->indexCount, 0);
-                }
+                const float4x4 wvp = Multiply(objectWorld, viewProj);
+                UpdateModelConstants(r, wvp, objectWorld, nullptr, 0);
+                drawMesh(*gpuMesh);
             }
         }
     };
@@ -1561,7 +1680,11 @@ void RendererBeginBackbufferOverlay(Renderer& r)
 
 void RendererPresent(Renderer& r)
 {
-    r.swapChain->Present(1, 0);
+    // Vsync off: present immediately; ALLOW_TEARING lets flip-model swapchains
+    // in windowed/borderless mode skip the compositor's vblank wait.
+    const UINT syncInterval = r.vsync ? 1u : 0u;
+    const UINT presentFlags = (!r.vsync && r.tearingSupported) ? DXGI_PRESENT_ALLOW_TEARING : 0u;
+    r.swapChain->Present(syncInterval, presentFlags);
 }
 
 void RendererRender(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
@@ -1639,6 +1762,9 @@ namespace
         }
 
         bool Resize(int width, int height) override { return kes::d3d11::RendererResize(m_state, width, height); }
+        bool SetRenderResolution(int width, int height) override { return kes::d3d11::RendererSetRenderResolution(m_state, width, height); }
+        void SetVSync(bool enabled) override { kes::d3d11::RendererSetVSync(m_state, enabled); }
+        bool IsVSyncEnabled() const override { return m_state.vsync; }
 
         void RenderScene(const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets) override
         {

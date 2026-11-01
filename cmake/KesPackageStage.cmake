@@ -25,7 +25,7 @@ message(STATUS "Staging ${_stage} (${CONFIG})")
 file(REMOVE_RECURSE "${_stage}" "${_work}")
 file(MAKE_DIRECTORY "${_stage}/content" "${_work}")
 
-# --- Executable and runtime libraries -------------------------------------
+# Executable and runtime libraries
 file(COPY "${EXE}" DESTINATION "${_stage}")
 foreach(_file IN LISTS RUNTIME_FILES)
     if(_file)
@@ -40,7 +40,7 @@ if(NOT PLATFORM MATCHES "^(windows|gdk)$")
     endforeach()
 endif()
 
-# --- Paks -------------------------------------------------------------------
+# Paks
 set(_pak_args "")
 if(PAK_KEY)
     set(_pak_args --encrypt "${PAK_KEY}")
@@ -73,7 +73,7 @@ if(ENGINE_SHADERS_DIR AND EXISTS "${ENGINE_SHADERS_DIR}")
 endif()
 _kes_make_pak("${_work}/engine" "${_stage}/content/engine.pak")
 
-# --- Loose files ------------------------------------------------------------
+# Loose files
 if(CONFIG_DIR AND EXISTS "${CONFIG_DIR}")
     file(COPY "${CONFIG_DIR}/" DESTINATION "${_stage}/config")
 endif()
@@ -83,7 +83,7 @@ foreach(_file IN LISTS PLATFORM_FILES)
     endif()
 endforeach()
 
-# --- Archive ----------------------------------------------------------------
+# Archive
 if(FORMAT STREQUAL "zip")
     set(_archive "${OUTPUT_DIR}/${_package_name}-${VERSION}.zip")
     file(REMOVE "${_archive}")

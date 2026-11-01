@@ -22,6 +22,12 @@ add_library(engine STATIC
     "input.cpp"
     "render_backend.h"
     "render_backend.cpp"
+    "command_line.h"
+    "command_line.cpp"
+    "ini_file.h"
+    "ini_file.cpp"
+    "game_settings.h"
+    "game_settings.cpp"
     "shader_binary.h"
     "shader_binary.cpp"
     "camera.h"
@@ -170,6 +176,7 @@ endif()
 # Project settings baked into the engine (engine_configuration.h) 
 target_compile_definitions(engine PRIVATE
         "ENGINE_PROJECT_NAME=\"${KES_PROJECT_NAME}\""
+        "ENGINE_COMPANY_NAME=\"${KES_PROJECT_PUBLISHER}\""
         "ENGINE_PAK_ENCRYPTION_KEY_HEX=\"${KES_PAK_ENCRYPTION_KEY}\""
 )
 

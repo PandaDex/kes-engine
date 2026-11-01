@@ -1,7 +1,9 @@
 #pragma once
 
 #include <SDL3/SDL.h>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include "engine_types.h"
 #include <vector>
@@ -76,6 +78,14 @@ struct InputActionState
     Vector3 value3 = {};
 };
 
+// Transparent hash so action lookups by const char* / string_view don't
+// allocate a temporary std::string every call.
+struct InputStringHash
+{
+    using is_transparent = void;
+    size_t operator()(std::string_view value) const noexcept { return std::hash<std::string_view>{}(value); }
+};
+
 struct InputState
 {
     bool keys[SDL_SCANCODE_COUNT] = {};
@@ -89,7 +99,14 @@ struct InputState
     SDL_Gamepad* gamepad = nullptr;
 
     std::vector<InputAction> actions;
-    std::unordered_map<std::string, InputActionState> actionStates;
+    std::unordered_map<std::string, InputActionState, InputStringHash, std::equal_to<>> actionStates;
+
+    // Set by the engine's input mode (EngineSetInputMode):
+    //   gameInputEnabled = false -> actions read as idle (UI-only mode)
+    //   mouseLookEnabled = false -> mouse motion doesn't feed Mouse2DAxis bindings
+    //                               (the cursor is free, so its motion isn't "look")
+    bool gameInputEnabled = true;
+    bool mouseLookEnabled = true;
 };
 
 void InputInit(InputState& input);
@@ -97,6 +114,9 @@ void InputShutdown(InputState& input);
 void InputBeginFrame(InputState& input);
 void InputProcessEvent(InputState& input, const SDL_Event& e);
 void InputEndFrame(InputState& input);
+// Releases every held key/button, e.g. when the window loses focus and the
+// key-up events will never arrive.
+void InputResetState(InputState& input);
 
 bool InputLoadActionMap(InputState& input, const char* path, std::string* outError = nullptr);
 void InputEvaluateActions(InputState& input);

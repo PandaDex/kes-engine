@@ -642,6 +642,9 @@ namespace
 
     Vector3 ReadBindingValue(const InputState& input, const InputBinding& binding)
     {
+        if (!input.gameInputEnabled)
+            return {};
+
         switch (binding.keyKind)
         {
         case InputNativeKeyKind::Keyboard:
@@ -650,6 +653,8 @@ namespace
             return {};
 
         case InputNativeKeyKind::Mouse2DAxis:
+            if (!input.mouseLookEnabled)
+                return {};
             return { input.mouseDeltaX, input.mouseDeltaY, 0.0f };
 
         case InputNativeKeyKind::GamepadButton:
@@ -816,6 +821,14 @@ void InputEndFrame(InputState& input)
     InputEvaluateActions(input);
 }
 
+void InputResetState(InputState& input)
+{
+    std::fill(std::begin(input.keys), std::end(input.keys), false);
+    std::fill(std::begin(input.mouseButtons), std::end(input.mouseButtons), false);
+    input.mouseDeltaX = 0.0f;
+    input.mouseDeltaY = 0.0f;
+}
+
 bool InputLoadActionMap(InputState& input, const char* path, std::string* outError)
 {
     const std::string text = ReadTextFile(path);
@@ -888,31 +901,31 @@ void InputEvaluateActions(InputState& input)
 
 bool InputActionDown(const InputState& input, const char* actionName)
 {
-    const auto found = input.actionStates.find(actionName ? actionName : "");
+    const auto found = input.actionStates.find(std::string_view(actionName ? actionName : ""));
     return found != input.actionStates.end() && found->second.down;
 }
 
 bool InputActionPressed(const InputState& input, const char* actionName)
 {
-    const auto found = input.actionStates.find(actionName ? actionName : "");
+    const auto found = input.actionStates.find(std::string_view(actionName ? actionName : ""));
     return found != input.actionStates.end() && found->second.pressed;
 }
 
 bool InputActionReleased(const InputState& input, const char* actionName)
 {
-    const auto found = input.actionStates.find(actionName ? actionName : "");
+    const auto found = input.actionStates.find(std::string_view(actionName ? actionName : ""));
     return found != input.actionStates.end() && found->second.released;
 }
 
 Vector2 InputActionValue2D(const InputState& input, const char* actionName)
 {
-    const auto found = input.actionStates.find(actionName ? actionName : "");
+    const auto found = input.actionStates.find(std::string_view(actionName ? actionName : ""));
     return found != input.actionStates.end() ? found->second.value2 : Vector2{};
 }
 
 Vector3 InputActionValue3D(const InputState& input, const char* actionName)
 {
-    const auto found = input.actionStates.find(actionName ? actionName : "");
+    const auto found = input.actionStates.find(std::string_view(actionName ? actionName : ""));
     return found != input.actionStates.end() ? found->second.value3 : Vector3{};
 }
 

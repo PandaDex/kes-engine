@@ -44,7 +44,16 @@ int main(int argc, char* argv[])
 ```
 
 `CollectPositionalCommandLineArguments` is used here so command-line `-assetpath` overrides are applied before startup.
-`ApplyRendererCommandLine` reads `-renderer=vulkan|d3d11` the same way. A game can also set a preferred backend with `app.config.renderer = RendererBackend::D3D11;` before `EngineStart`.
+`EngineSetCommandLine(argc, argv)` stores the command line for the engine (`command_line.h`). The engine reads these options:
+
+| Option | Effect |
+| --- | --- |
+| `-renderer=vulkan\|d3d11` | renderer backend (when the platform allows choosing) |
+| `-windowed`, `-borderless`, `-fullscreen` | window mode for this run |
+| `-ResX=1280 -ResY=720` | resolution for this run |
+| `-vsync`, `-novsync` | vsync for this run |
+
+These overrides are never saved to the player's settings. A game can also set a preferred backend with `app.config.renderer = RendererBackend::D3D11;` before `EngineStart`.
 
 ## `EngineApp`
 
@@ -74,6 +83,95 @@ Typical usage:
 - call `EngineStart`
 - run `EngineTick` in a loop
 - call `EngineShutdown`
+
+## Window and Cursor
+
+The window supports three modes (`WindowMode`, same values as Unreal's `EWindowMode`):
+
+- `Fullscreen`: exclusive, changes the display mode to the closest supported resolution
+- `WindowedFullscreen`: borderless window at desktop resolution
+- `Windowed`: resizable window, centered on the selected display
+
+Behaviour handled by the engine:
+
+- **Alt+Enter** toggles between windowed and the preferred fullscreen mode (`EngineToggleFullscreen`), and saves the choice
+- the renderer follows the window's pixel size, so HiDPI displays and display changes are handled
+- **minimized:** no rendering, and the loop blocks on events instead of spinning
+- **focus loss:** held keys are released and the mouse is freed
+- **closing:** a window you resized by dragging remembers its size on exit
+
+Input modes control the mouse (`EngineSetInputMode`, like Unreal's `SetInputMode*`):
+
+| Mode | Cursor | Game input |
+| --- | --- | --- |
+| `InputMode::GameOnly` (default) | hidden, locked to the window, raw relative motion | everything |
+| `InputMode::GameAndUI` | visible, free | keys, buttons and gamepad; no mouse look |
+| `InputMode::UIOnly` | visible, free | input actions read as idle (menus) |
+
+`EngineSetShowMouseCursor(app, false)` hides the cursor in the two UI modes. In debug builds (`ENGINE_ALLOW_DEBUG_MODE`), **F4** switches between GameOnly and GameAndUI.
+
+Display helpers in `window.h`: `GetDisplayCount()`, `GetDesktopResolution(display)`, `GetSupportedFullscreenResolutions(display)`.
+
+## GameSettings
+
+`GameSettings` (`engine/game_settings.h`) holds the player-facing engine settings and works like Unreal's `UGameUserSettings`. The engine creates it at startup; get it anywhere with `GetGameSettings()`.
+
+| Setting | API |
+| --- | --- |
+| Resolution | `SetScreenResolution`, `GetScreenResolution`, `GetLastConfirmedScreenResolution`, `GetDesktopResolution`, `GetSupportedFullscreenResolutions` |
+| Window mode | `SetFullscreenMode`, `GetLastConfirmedFullscreenMode`, `SetPreferredFullscreenMode` (used by Alt+Enter) |
+| Display | `SetDisplayIndex` |
+| VSync | `SetVSyncEnabled`, `IsVSyncEnabled` |
+| Frame rate limit | `SetFrameRateLimit(fps)`, 0 = unlimited |
+| Resolution scale | `SetResolutionScaleValue(percent)` / `SetResolutionScaleNormalized(0..1)`, scales the internal render resolution (`AppConfig::renderWidth/Height`) |
+| Renderer | `SetPreferredRenderer`, takes effect on the next launch |
+
+Applying and saving follows the Unreal flow:
+
+```cpp
+GameSettings* settings = GetGameSettings();
+settings->SetScreenResolution({ 1920, 1080 });
+settings->SetFullscreenMode(WindowMode::Fullscreen);
+settings->ApplySettings(false);        // ApplyResolutionSettings + ApplyNonResolutionSettings + SaveSettings
+
+// "Keep these settings?"
+settings->ConfirmVideoMode();          // or: RevertVideoMode(); ApplySettings(false);
+settings->SaveSettings();
+```
+
+Also available: `IsDirty`, `IsScreenResolutionDirty`, `IsFullscreenModeDirty`, `IsVSyncDirty`, `ResetToCurrentSettings`, `SetToDefaults`, `ValidateSettings` and `LoadSettings(forceReload)`.
+
+Files, lowest priority first:
+
+1. `AppConfig` values set in game code
+2. `<exe>/config/DefaultGameSettings.ini`: project defaults, shipped with the game
+3. `<user config dir>/Config/GameSettings.ini`: the player's settings, from `SDL_GetPrefPath(KES_PROJECT_PUBLISHER, KES_PROJECT_NAME)` (`%APPDATA%\<publisher>\<name>\` on Windows)
+
+Bumping `GameSettings::kSettingsVersion` resets old player files to defaults.
+
+Custom settings, option 1, key/value pairs stored in `[CustomSettings]`:
+
+```cpp
+settings->SetCustomFloat("MasterVolume", 0.8f);
+float volume = settings->GetCustomFloat("MasterVolume", 1.0f);
+```
+
+Custom settings, option 2, a subclass (like overriding `UGameUserSettings`):
+
+```cpp
+class MySettings : public GameSettings
+{
+public:
+    float masterVolume = 1.0f;
+protected:
+    void SetToDefaults() override { GameSettings::SetToDefaults(); masterVolume = 1.0f; }
+    void LoadCustomSettings(const IniFile& ini) override { masterVolume = ini.GetFloat("MySettings", "MasterVolume", masterVolume); }
+    void SaveCustomSettings(IniFile& ini) const override { ini.SetFloat("MySettings", "MasterVolume", masterVolume); }
+};
+
+EngineSetGameSettingsClass<MySettings>(app);   // before EngineStart
+GetGameSettings<MySettings>()->masterVolume = 0.5f;
+```
 
 ## Entity Registration
 

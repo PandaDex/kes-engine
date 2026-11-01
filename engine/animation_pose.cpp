@@ -94,29 +94,44 @@ namespace
 
 void BuildAnimationWorldMatrices(const KModelData& model, const std::vector<AnimationTransform>& localPose, std::vector<float>& outWorldMatrices)
 {
-    outWorldMatrices.clear();
-    outWorldMatrices.resize(model.nodes.size() * 16, 0.0f);
-    if (model.nodes.empty())
+    const size_t nodeCount = model.nodes.size();
+    outWorldMatrices.resize(nodeCount * 16);
+    if (nodeCount == 0)
         return;
 
-    std::vector<Matrix4> localMatrices(model.nodes.size(), Identity());
-    std::vector<Matrix4> worldMatrices(model.nodes.size(), Identity());
+    // Scratch reused across calls (this runs per skinned model per frame).
+    thread_local std::vector<Matrix4> localMatrices;
+    thread_local std::vector<Matrix4> worldMatrices;
+    localMatrices.assign(nodeCount, Identity());
+    worldMatrices.resize(nodeCount);
 
-    for (size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex)
-    {
-        if (nodeIndex < localPose.size())
-            localMatrices[nodeIndex] = BuildLocalMatrix(localPose[nodeIndex]);
-    }
+    for (size_t nodeIndex = 0; nodeIndex < nodeCount && nodeIndex < localPose.size(); ++nodeIndex)
+        localMatrices[nodeIndex] = BuildLocalMatrix(localPose[nodeIndex]);
 
-    for (size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex)
+    for (size_t nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex)
     {
-        const KModelNode& node = model.nodes[nodeIndex];
-        Matrix4 world = localMatrices[nodeIndex];
-        int32_t parentIndex = node.parentIndex;
-        while (parentIndex >= 0 && parentIndex < (int32_t)model.nodes.size())
+        const int32_t parentIndex = model.nodes[nodeIndex].parentIndex;
+        Matrix4 world;
+        if (parentIndex < 0 || parentIndex >= static_cast<int32_t>(nodeCount))
         {
-            world = Multiply(world, localMatrices[(size_t)parentIndex]);
-            parentIndex = model.nodes[(size_t)parentIndex].parentIndex;
+            world = localMatrices[nodeIndex];
+        }
+        else if (static_cast<size_t>(parentIndex) < nodeIndex)
+        {
+            // Parent already resolved (the usual parent-before-child order): O(1).
+            world = Multiply(localMatrices[nodeIndex], worldMatrices[static_cast<size_t>(parentIndex)]);
+        }
+        else
+        {
+            // Out-of-order hierarchy: walk the chain.
+            world = localMatrices[nodeIndex];
+            int32_t ancestor = parentIndex;
+            size_t guard = 0;
+            while (ancestor >= 0 && ancestor < static_cast<int32_t>(nodeCount) && guard++ < nodeCount)
+            {
+                world = Multiply(world, localMatrices[static_cast<size_t>(ancestor)]);
+                ancestor = model.nodes[static_cast<size_t>(ancestor)].parentIndex;
+            }
         }
         worldMatrices[nodeIndex] = world;
         std::memcpy(outWorldMatrices.data() + nodeIndex * 16, world.m, sizeof(world.m));
@@ -125,14 +140,16 @@ void BuildAnimationWorldMatrices(const KModelData& model, const std::vector<Anim
 
 bool BuildAnimationSkinMatrices(const KModelData& model, const std::vector<AnimationTransform>& localPose, std::vector<float>& outSkinMatrices, std::string* outError)
 {
-    outSkinMatrices.clear();
     if (model.bones.empty())
+    {
+        outSkinMatrices.clear();
         return true;
+    }
 
-    std::vector<float> worldMatrices;
+    thread_local std::vector<float> worldMatrices;
     BuildAnimationWorldMatrices(model, localPose, worldMatrices);
 
-    outSkinMatrices.resize(model.bones.size() * 16, 0.0f);
+    outSkinMatrices.resize(model.bones.size() * 16);
     for (size_t boneIndex = 0; boneIndex < model.bones.size(); ++boneIndex)
     {
         const KModelBone& bone = model.bones[boneIndex];

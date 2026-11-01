@@ -18,6 +18,7 @@
 
 class Scene;
 class AssetSystem;
+struct SceneObject;
 
 namespace kes::vk
 {
@@ -83,6 +84,13 @@ struct GPUDynamicRingBuffer
     VkDeviceSize slotDataSize = 0; // logical (unaligned) struct size
     uint32_t slotCapacity = 0;     // number of slots currently allocated
     uint32_t cursor = 0;           // next free slot this frame
+};
+
+struct DrawItem
+{
+    const SceneObject* object = nullptr;
+    const MaterialData* material = nullptr;
+    float distanceSq = 0.0f;
 };
 
 struct Renderer
@@ -170,7 +178,7 @@ struct Renderer
     VkCommandPool transferCommandPool = VK_NULL_HANDLE;
 
     VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
-    VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
+    std::vector<VkSemaphore> renderFinishedSemaphores;   // one per swapchain image
     VkFence inFlightFence = VK_NULL_HANDLE;
 
     bool frameActive = false;       // between "start of frame" and RendererPresent
@@ -192,12 +200,19 @@ struct Renderer
     int renderHeight = 0;
     bool preservePresentationAspect = true;
     bool preferIntegerPresentationScale = true;
+    bool vsync = true;
+
+    // Per-frame scratch, kept to reuse its storage.
+    std::vector<DrawItem> opaqueDrawItems;
+    std::vector<DrawItem> transparentDrawItems;
 };
 
 bool RendererInit(Renderer& renderer, SDL_Window* window, const AppConfig& config);
 void RendererShutdown(Renderer& renderer);
 
 bool RendererResize(Renderer& renderer, int width, int height);
+bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
+void RendererSetVSync(Renderer& renderer, bool enabled);
 void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 void RendererBeginBackbufferOverlay(Renderer& renderer);
 void RendererPresent(Renderer& renderer);

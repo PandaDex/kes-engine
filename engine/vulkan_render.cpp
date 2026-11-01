@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <cstddef>
 #include <fstream>
 #include <sstream>
 #include "file_paths.h"
@@ -790,6 +791,21 @@ static VkSurfaceFormatKHR ChooseSurfaceFormat(Renderer& r)
 
 static VkPresentModeKHR ChoosePresentMode(Renderer& r)
 {
+    // FIFO is always available and is vsync. Without vsync prefer IMMEDIATE
+    // (lowest latency, may tear), then MAILBOX (uncapped, no tearing).
+    if (r.vsync)
+        return VK_PRESENT_MODE_FIFO_KHR;
+
+    uint32_t count = 0;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(r.physicalDevice, r.surface, &count, nullptr);
+    std::vector<VkPresentModeKHR> modes(count);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(r.physicalDevice, r.surface, &count, modes.data());
+
+    for (VkPresentModeKHR preferred : { VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR })
+    {
+        if (std::find(modes.begin(), modes.end(), preferred) != modes.end())
+            return preferred;
+    }
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
@@ -821,6 +837,10 @@ static VkExtent2D ChooseSwapExtent(
 
 static void DestroySwapchainObjects(Renderer& r)
 {
+    for (VkSemaphore semaphore : r.renderFinishedSemaphores)
+        vkDestroySemaphore(r.device, semaphore, nullptr);
+    r.renderFinishedSemaphores.clear();
+
     for (VkFramebuffer fb : r.backbufferFramebuffers)
         vkDestroyFramebuffer(r.device, fb, nullptr);
     r.backbufferFramebuffers.clear();
@@ -897,6 +917,14 @@ static bool CreateSwapchain(Renderer& r)
         if (!r.swapchainImageViews[i])
             return false;
     }
+
+    // One "render finished" semaphore per swapchain image: the presentation
+    // engine may still hold the semaphore of an image until that image is
+    // acquired again, so a single shared semaphore is not safe to reuse.
+    r.renderFinishedSemaphores.resize(actualImageCount, VK_NULL_HANDLE);
+    VkSemaphoreCreateInfo semaphoreInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+    for (uint32_t i = 0; i < actualImageCount; ++i)
+        VK_CHECK_RET(vkCreateSemaphore(r.device, &semaphoreInfo, nullptr, &r.renderFinishedSemaphores[i]), "vkCreateSemaphore (renderFinished)", false);
 
     return true;
 }
@@ -2050,12 +2078,6 @@ static float3 BuildLightDirection(const Transform& t)
     return { direction.x, direction.y, direction.z };
 }
 
-struct DrawItem
-{
-    const SceneObject* object = nullptr;
-    const MaterialData* material = nullptr;
-    float distanceSq = 0.0f;
-};
 
 static bool IsTransparentMaterial(const MaterialData* material)
 {
@@ -2141,7 +2163,6 @@ static bool CreateCommandObjects(Renderer& r)
 
     VkSemaphoreCreateInfo semInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
     VK_CHECK_RET(vkCreateSemaphore(r.device, &semInfo, nullptr, &r.imageAvailableSemaphore), "vkCreateSemaphore (imageAvailable)", false);
-    VK_CHECK_RET(vkCreateSemaphore(r.device, &semInfo, nullptr, &r.renderFinishedSemaphore), "vkCreateSemaphore (renderFinished)", false);
 
     VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // start signaled so the first frame doesn't block
@@ -2159,6 +2180,7 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
     r.renderHeight = config.renderHeight;
     r.preservePresentationAspect = config.preservePresentationAspect;
     r.preferIntegerPresentationScale = config.preferIntegerPresentationScale;
+    r.vsync = config.vsync;
 
     if (!CreateInstance(r, window)) { RendererShutdown(r); return false; }
     if (!SelectPhysicalDevice(r)) { RendererShutdown(r); return false; }
@@ -2197,16 +2219,61 @@ bool RendererResize(Renderer& r, int width, int height)
     vkDeviceWaitIdle(r.device);
     DestroyRenderTargets(r);
 
-    return CreateRenderTargets(r);
+    if (CreateRenderTargets(r))
+        return true;
+    r.swapchainNeedsRecreate = true;   // e.g. zero-size window; retried at frame start
+    return false;
+}
+
+bool RendererSetRenderResolution(Renderer& r, int width, int height)
+{
+    if (!r.device || width <= 0 || height <= 0)
+        return false;
+    if (width == r.renderWidth && height == r.renderHeight)
+        return true;
+
+    r.renderWidth = width;
+    r.renderHeight = height;
+
+    vkDeviceWaitIdle(r.device);
+    DestroyRenderTargets(r);
+    if (CreateRenderTargets(r))
+        return true;
+    r.swapchainNeedsRecreate = true;
+    return false;
+}
+
+void RendererSetVSync(Renderer& r, bool enabled)
+{
+    if (r.vsync == enabled)
+        return;
+    r.vsync = enabled;
+    r.swapchainNeedsRecreate = true;   // present mode is a swapchain property
 }
 
 //End Init / shutdown / resize
 
 // Per-draw dynamic constant writes
-static VkDeviceSize WriteModelConstants(Renderer& r, const ModelCBData& mcb)
+// Writes only what the shader reads: the two matrices, the skin info and the
+// skin matrices that are actually used. ModelCBData is ~8 KB because of the
+// 128-matrix skin palette; copying (and zeroing) all of it for every static
+// mesh draw was the single largest per-draw cost.
+static VkDeviceSize WriteModelConstants(Renderer& r, const float4x4& wvp, const float4x4& world, const float* skinMatrices, uint32_t skinMatrixCount)
 {
     const VkDeviceSize offset = AcquireDynamicSlot(r, r.modelCBRing, 1);
-    std::memcpy(r.modelCBRing.mapped + offset, &mcb, sizeof(mcb));
+    uint8_t* dst = r.modelCBRing.mapped + offset;
+
+    float matrix[16];
+    MatrixToArrayRowMajor(wvp, matrix);
+    std::memcpy(dst + offsetof(ModelCBData, worldViewProj), matrix, sizeof(matrix));
+    MatrixToArrayRowMajor(world, matrix);
+    std::memcpy(dst + offsetof(ModelCBData, world), matrix, sizeof(matrix));
+
+    if (skinMatrices && skinMatrixCount > 0)
+        std::memcpy(dst + offsetof(ModelCBData, skinMatrices), skinMatrices, skinMatrixCount * 16u * sizeof(float));
+
+    const float skinInfo[4] = { skinMatrixCount > 0 ? 1.0f : 0.0f, static_cast<float>(skinMatrixCount), 0.0f, 0.0f };
+    std::memcpy(dst + offsetof(ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
     return offset;
 }
 
@@ -2436,6 +2503,20 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
         r.assetGeneration = assets.GetGeneration();
     }
 
+    // Swapchain/target recreation (resize, present mode change, out-of-date)
+    // must happen before this frame's command buffer starts recording:
+    // destroying targets the buffer already references invalidates it.
+    if (r.swapchainNeedsRecreate && !r.frameActive)
+    {
+        vkWaitForFences(r.device, 1, &r.inFlightFence, VK_TRUE, UINT64_MAX);
+        vkDeviceWaitIdle(r.device);
+        DestroyRenderTargets(r);
+        if (CreateRenderTargets(r))
+            r.swapchainNeedsRecreate = false;
+    }
+    if (!r.offscreenFramebuffer || !r.swapchain)
+        return;   // targets unavailable (window minimized); retry next frame
+
     BeginFrameIfNeeded(r);
 
     float clearColor[4] = {};
@@ -2517,10 +2598,11 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
 
     std::memcpy(r.sceneCBMapped, &scb, sizeof(scb));
 
-    std::vector<DrawItem> opaqueItems;
-    std::vector<DrawItem> transparentItems;
-    opaqueItems.reserve(sceneObj.GetObjects().size());
-    transparentItems.reserve(sceneObj.GetObjects().size());
+    // Draw lists live in the renderer so their storage is reused every frame.
+    std::vector<DrawItem>& opaqueItems = r.opaqueDrawItems;
+    std::vector<DrawItem>& transparentItems = r.transparentDrawItems;
+    opaqueItems.clear();
+    transparentItems.clear();
     const Vector3 cameraPosition = { camera.x, camera.y, camera.z };
 
     for (const SceneObject& obj : sceneObj.GetObjects())
@@ -2544,11 +2626,56 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
             opaqueItems.push_back(item);
     }
 
+    // Opaque: group by material (shader, textures and material constants are
+    // per material) and draw near-to-far inside a group for early depth reject.
+    std::sort(opaqueItems.begin(), opaqueItems.end(),
+        [](const DrawItem& a, const DrawItem& b)
+        {
+            if (a.material != b.material)
+                return a.material < b.material;
+            return a.distanceSq < b.distanceSq;
+        });
+
+    // Transparent: back-to-front for correct blending.
     std::sort(transparentItems.begin(), transparentItems.end(),
         [](const DrawItem& a, const DrawItem& b)
         {
             return a.distanceSq > b.distanceSq;
         });
+
+    // Redundant state filtering across consecutive draws.
+    VkPipeline boundPipeline = VK_NULL_HANDLE;
+    VkBuffer boundVertexBuffer = VK_NULL_HANDLE;
+    VkBuffer boundIndexBuffer = VK_NULL_HANDLE;
+    const MaterialData* cachedMaterial = nullptr;
+    VkDeviceSize cachedMaterialOffset = 0;
+    VkDescriptorSet cachedTextureSet = VK_NULL_HANDLE;
+    bool haveMaterial = false;
+
+    auto drawMesh = [&](const GPUMesh& gpuMesh, VkDeviceSize modelOffset, VkDeviceSize materialOffset, VkDescriptorSet textureSet)
+    {
+        BindMeshDrawDescriptors(r, modelOffset, materialOffset, textureSet);
+
+        if (gpuMesh.vertexBuffer != boundVertexBuffer)
+        {
+            const VkDeviceSize vertexOffset = 0;
+            vkCmdBindVertexBuffers(r.commandBuffer, 0, 1, &gpuMesh.vertexBuffer, &vertexOffset);
+            boundVertexBuffer = gpuMesh.vertexBuffer;
+        }
+        if (gpuMesh.indexBuffer)
+        {
+            if (gpuMesh.indexBuffer != boundIndexBuffer)
+            {
+                vkCmdBindIndexBuffer(r.commandBuffer, gpuMesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                boundIndexBuffer = gpuMesh.indexBuffer;
+            }
+            vkCmdDrawIndexed(r.commandBuffer, gpuMesh.indexCount, 1, 0, 0, 0);
+        }
+        else
+        {
+            vkCmdDraw(r.commandBuffer, gpuMesh.indexCount, 1, 0, 0);
+        }
+    };
 
     auto drawItems = [&](const std::vector<DrawItem>& items, bool transparent)
     {
@@ -2563,15 +2690,27 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
                 customProgram = GetOrCompileShaderProgram(r, item.material->shader, assets);
 
             GPUShaderProgram& activeProgram = customProgram ? *customProgram : r.meshDefaultProgram;
-            const bool wireframe = scene.wireframe;
             const bool doubleSided = IsDoubleSidedMaterial(item.material);
-            VkPipeline pipeline = GetOrCreateMeshPipelineVariant(r, activeProgram, wireframe, doubleSided, transparent);
+            VkPipeline pipeline = GetOrCreateMeshPipelineVariant(r, activeProgram, scene.wireframe, doubleSided, transparent);
             if (!pipeline)
                 continue;
 
-            vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            if (pipeline != boundPipeline)
+            {
+                vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                boundPipeline = pipeline;
+            }
 
-            const VkDescriptorSet textureSet = GetMaterialTextureDescriptor(r, item.material);
+            // Material constants and texture are identical for every draw of a material.
+            if (!haveMaterial || item.material != cachedMaterial)
+            {
+                cachedMaterial = item.material;
+                cachedMaterialOffset = WriteMaterialConstants(r, item.material);
+                cachedTextureSet = GetMaterialTextureDescriptor(r, item.material);
+                haveMaterial = true;
+            }
+
+            const float4x4 objectWorld = TransformToMatrix(obj.transform);
 
             if (skinned)
             {
@@ -2579,42 +2718,20 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
                 if (!modelRenderCache)
                     continue;
 
+                const uint32_t matrixCount = obj.skinMatrixCount > SceneObject::MaxSkinMatrices ? SceneObject::MaxSkinMatrices : obj.skinMatrixCount;
                 for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
                 {
                     GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
                     if (!gpuMesh)
                         continue;
 
-                    float4x4 world = TransformToMatrix(obj.transform);
                     float4x4 meshLocal = {};
                     std::memcpy(&meshLocal, modelRenderCache->meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u, sizeof(meshLocal));
-                    world = Multiply(meshLocal, world);
-
+                    const float4x4 world = Multiply(meshLocal, objectWorld);
                     const float4x4 wvp = Multiply(world, viewProj);
-                    ModelCBData mcb = {};
-                    MatrixToArrayRowMajor(wvp, mcb.worldViewProj);
-                    MatrixToArrayRowMajor(world, mcb.world);
-                    mcb.skinInfo[0] = 1.0f;
-                    mcb.skinInfo[1] = static_cast<float>(obj.skinMatrixCount);
-                    const uint32_t matrixCount = obj.skinMatrixCount > SceneObject::MaxSkinMatrices ? SceneObject::MaxSkinMatrices : obj.skinMatrixCount;
-                    for (uint32_t index = 0; index < matrixCount * 16; ++index)
-                        mcb.skinMatrices[index] = obj.skinMatrices[index];
 
-                    const VkDeviceSize modelOffset = WriteModelConstants(r, mcb);
-                    const VkDeviceSize materialOffset = WriteMaterialConstants(r, item.material);
-                    BindMeshDrawDescriptors(r, modelOffset, materialOffset, textureSet);
-
-                    const VkDeviceSize vertexOffset = 0;
-                    vkCmdBindVertexBuffers(r.commandBuffer, 0, 1, &gpuMesh->vertexBuffer, &vertexOffset);
-                    if (gpuMesh->indexBuffer)
-                    {
-                        vkCmdBindIndexBuffer(r.commandBuffer, gpuMesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                        vkCmdDrawIndexed(r.commandBuffer, gpuMesh->indexCount, 1, 0, 0, 0);
-                    }
-                    else
-                    {
-                        vkCmdDraw(r.commandBuffer, gpuMesh->indexCount, 1, 0, 0);
-                    }
+                    const VkDeviceSize modelOffset = WriteModelConstants(r, wvp, world, obj.skinMatrices, matrixCount);
+                    drawMesh(*gpuMesh, modelOffset, cachedMaterialOffset, cachedTextureSet);
                 }
             }
             else
@@ -2623,28 +2740,9 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
                 if (!gpuMesh)
                     continue;
 
-                const float4x4 world = TransformToMatrix(obj.transform);
-                const float4x4 wvp = Multiply(world, viewProj);
-                ModelCBData mcb = {};
-                MatrixToArrayRowMajor(wvp, mcb.worldViewProj);
-                MatrixToArrayRowMajor(world, mcb.world);
-                mcb.skinInfo[0] = 0.0f;
-
-                const VkDeviceSize modelOffset = WriteModelConstants(r, mcb);
-                const VkDeviceSize materialOffset = WriteMaterialConstants(r, item.material);
-                BindMeshDrawDescriptors(r, modelOffset, materialOffset, textureSet);
-
-                const VkDeviceSize vertexOffset = 0;
-                vkCmdBindVertexBuffers(r.commandBuffer, 0, 1, &gpuMesh->vertexBuffer, &vertexOffset);
-                if (gpuMesh->indexBuffer)
-                {
-                    vkCmdBindIndexBuffer(r.commandBuffer, gpuMesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                    vkCmdDrawIndexed(r.commandBuffer, gpuMesh->indexCount, 1, 0, 0, 0);
-                }
-                else
-                {
-                    vkCmdDraw(r.commandBuffer, gpuMesh->indexCount, 1, 0, 0);
-                }
+                const float4x4 wvp = Multiply(objectWorld, viewProj);
+                const VkDeviceSize modelOffset = WriteModelConstants(r, wvp, objectWorld, nullptr, 0);
+                drawMesh(*gpuMesh, modelOffset, cachedMaterialOffset, cachedTextureSet);
             }
         }
     };
@@ -2657,19 +2755,12 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
 
 void RendererBeginBackbufferOverlay(Renderer& r)
 {
-    BeginFrameIfNeeded(r);
-
-    if (r.swapchainNeedsRecreate)
+    // Scene pass skipped this frame (targets missing) or recreation pending:
+    // recreation happens at the start of the next RendererRenderScene.
+    if (!r.frameActive || r.swapchainNeedsRecreate || !r.swapchain)
     {
-        vkDeviceWaitIdle(r.device);
-        DestroyRenderTargets(r);
-        if (!CreateRenderTargets(r))
-        {
-            // Window likely minimized (zero extent); try again next frame.
-            r.haveSwapchainImage = false;
-            return;
-        }
-        r.swapchainNeedsRecreate = false;
+        r.haveSwapchainImage = false;
+        return;
     }
 
     VkResult acquireResult = vkAcquireNextImageKHR(r.device, r.swapchain, UINT64_MAX, r.imageAvailableSemaphore, VK_NULL_HANDLE, &r.currentSwapchainImageIndex);
@@ -2731,7 +2822,7 @@ void RendererPresent(Renderer& r)
         submitInfo.pWaitSemaphores = &r.imageAvailableSemaphore;
         submitInfo.pWaitDstStageMask = &waitStage;
         submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = &r.renderFinishedSemaphore;
+        submitInfo.pSignalSemaphores = &r.renderFinishedSemaphores[r.currentSwapchainImageIndex];
     }
 
     vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, r.inFlightFence);
@@ -2740,7 +2831,7 @@ void RendererPresent(Renderer& r)
     {
         VkPresentInfoKHR presentInfo = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
         presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = &r.renderFinishedSemaphore;
+        presentInfo.pWaitSemaphores = &r.renderFinishedSemaphores[r.currentSwapchainImageIndex];
         presentInfo.swapchainCount = 1;
         presentInfo.pSwapchains = &r.swapchain;
         presentInfo.pImageIndices = &r.currentSwapchainImageIndex;
@@ -2773,7 +2864,6 @@ void RendererShutdown(Renderer& r)
     r.assetGeneration = 0;
 
     if (r.inFlightFence) { vkDestroyFence(r.device, r.inFlightFence, nullptr); r.inFlightFence = VK_NULL_HANDLE; }
-    if (r.renderFinishedSemaphore) { vkDestroySemaphore(r.device, r.renderFinishedSemaphore, nullptr); r.renderFinishedSemaphore = VK_NULL_HANDLE; }
     if (r.imageAvailableSemaphore) { vkDestroySemaphore(r.device, r.imageAvailableSemaphore, nullptr); r.imageAvailableSemaphore = VK_NULL_HANDLE; }
 
     if (r.transferCommandPool) { vkDestroyCommandPool(r.device, r.transferCommandPool, nullptr); r.transferCommandPool = VK_NULL_HANDLE; }
@@ -2862,6 +2952,9 @@ namespace
         }
 
         bool Resize(int width, int height) override { return kes::vk::RendererResize(m_state, width, height); }
+        bool SetRenderResolution(int width, int height) override { return kes::vk::RendererSetRenderResolution(m_state, width, height); }
+        void SetVSync(bool enabled) override { kes::vk::RendererSetVSync(m_state, enabled); }
+        bool IsVSyncEnabled() const override { return m_state.vsync; }
 
         void RenderScene(const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets) override
         {

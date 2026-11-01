@@ -5,6 +5,11 @@
 #define ENGINE_PROJECT_NAME "kes"
 #endif
 
+// Used for the per-user settings folder (SDL_GetPrefPath(company, project)).
+#ifndef ENGINE_COMPANY_NAME
+#define ENGINE_COMPANY_NAME "KES"
+#endif
+
 #ifndef ENGINE_CONTENT_DIRECTORY
 #define ENGINE_CONTENT_DIRECTORY "content"
 #endif

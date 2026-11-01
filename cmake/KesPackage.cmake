@@ -49,13 +49,13 @@ function(kes_add_game target)
     set(_engine_assets "${CMAKE_SOURCE_DIR}/engine/assets")
     set(_exe_dir "$<TARGET_FILE_DIR:${target}>")
 
-    # --- Shaders: everything under CONTENT_DIR/**.slang ---------------------
+    #  Shaders: everything under CONTENT_DIR/**.slang
     kes_add_slang_shaders(${target}_shaders
         SOURCE_DIR "${ARG_CONTENT_DIR}"
         OUTPUT_DIR "${CMAKE_BINARY_DIR}/compiled_shaders/${target}"
         INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/engine/shaders")
 
-    # --- Development layout next to the exe (POST_BUILD steps run in order) --
+    # Development layout next to the exe
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E remove_directory "${_exe_dir}/content"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ARG_CONTENT_DIR}" "${_exe_dir}/content"
@@ -72,7 +72,7 @@ function(kes_add_game target)
             VERBATIM)
     endif()
 
-    # --- Platform files copied to the package root -------------------------
+    # Platform files copied to the package root 
     set(_platform_files "")
     if(KES_PLATFORM STREQUAL "GDK")
         if(NOT ARG_GDK_DIR OR NOT EXISTS "${ARG_GDK_DIR}/MicrosoftGame.config.in")
@@ -98,7 +98,7 @@ function(kes_add_game target)
             VERBATIM)
     endif()
 
-    # --- kes_package --------------------------------------------------------
+    # kes_package 
     set(_format "${KES_PACKAGE_FORMAT_${KES_PLATFORM_ID}}")
     if(_format STREQUAL "msixvc" AND NOT KES_PLATFORM STREQUAL "GDK")
         message(FATAL_ERROR "KES: msixvc packages are only supported for KES_PLATFORM=GDK")

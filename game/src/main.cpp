@@ -8,9 +8,9 @@
 int main(int argc, char* argv[])
 {
     CollectPositionalCommandLineArguments(argc, argv);
-    // Lets players pick a backend with "-renderer=vulkan" / "-renderer=d3d11"
-    // (ignored on platforms that force a single renderer).
-    ApplyRendererCommandLine(argc, argv);
+    // Stores the command line for the engine: -renderer=vulkan|d3d11,
+    // -windowed / -fullscreen / -borderless, -ResX= -ResY=, -vsync / -novsync, ...
+    EngineSetCommandLine(argc, argv);
 
     //Initialize engine
     EngineApp app = {};

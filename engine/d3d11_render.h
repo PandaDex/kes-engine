@@ -18,9 +18,17 @@
 
 class Scene;
 class AssetSystem;
+struct SceneObject;
 
 namespace kes::d3d11
 {
+
+struct DrawItem
+{
+    const SceneObject* object = nullptr;
+    const MaterialData* material = nullptr;
+    float distanceSq = 0.0f;
+};
 
 struct GPUMesh
 {
@@ -121,12 +129,22 @@ struct Renderer
     int renderHeight = 0;
     bool preservePresentationAspect = true;
     bool preferIntegerPresentationScale = true;
+
+    bool vsync = true;
+    bool tearingSupported = false;   // DXGI_FEATURE_PRESENT_ALLOW_TEARING
+    UINT swapChainFlags = 0;         // creation flags, reused by ResizeBuffers
+
+    // Per-frame scratch, kept to reuse its storage.
+    std::vector<DrawItem> opaqueDrawItems;
+    std::vector<DrawItem> transparentDrawItems;
 };
 
 bool RendererInit(Renderer& renderer, SDL_Window* window, const AppConfig& config);
 void RendererShutdown(Renderer& renderer);
 
 bool RendererResize(Renderer& renderer, int width, int height);
+bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
+void RendererSetVSync(Renderer& renderer, bool enabled);
 void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 void RendererBeginBackbufferOverlay(Renderer& renderer);
 void RendererPresent(Renderer& renderer);

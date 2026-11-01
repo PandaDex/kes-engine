@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include "command_line.h"
 #include "engine_configuration.h"
 #include "logger.h"
 
@@ -38,7 +39,6 @@ std::unique_ptr<IRenderer> CreateD3D11Renderer();
 
 namespace
 {
-    RendererBackend gCommandLineRenderer = RendererBackend::Auto;
 
     bool EqualsIgnoreCase(std::string_view a, std::string_view b)
     {
@@ -92,6 +92,15 @@ namespace
                 list.push_back(backend);
         }
         return list;
+    }
+
+    RendererBackend ReadCommandLineRequest()
+    {
+        std::string value;
+        RendererBackend backend = RendererBackend::Auto;
+        if (CommandLineGetValue("renderer", value) && !ParseRendererBackend(value.c_str(), backend))
+            EngineLogf("Ignoring unknown renderer \"%s\" on the command line.", value.c_str());
+        return backend;
     }
 
     RendererBackend ReadEnvironmentRequest()
@@ -157,37 +166,6 @@ SDL_WindowFlags GetRendererWindowFlags(RendererBackend backend)
     }
 }
 
-void ApplyRendererCommandLine(int argc, const char* const* argv)
-{
-    if (!argv)
-        return;
-
-    constexpr std::string_view kOptions[] = { "-renderer", "--renderer" };
-    for (int i = 1; i < argc; ++i)
-    {
-        if (!argv[i])
-            continue;
-
-        const std::string_view arg(argv[i]);
-        for (std::string_view option : kOptions)
-        {
-            std::string value;
-            if (arg.size() > option.size() && arg.compare(0, option.size(), option) == 0 && arg[option.size()] == '=')
-                value = std::string(arg.substr(option.size() + 1));
-            else if (arg == option && i + 1 < argc && argv[i + 1])
-                value = argv[i + 1];
-            else
-                continue;
-
-            RendererBackend backend = RendererBackend::Auto;
-            if (ParseRendererBackend(value.c_str(), backend))
-                gCommandLineRenderer = backend;
-            else
-                std::printf("[Engine] Unknown renderer \"%s\" on command line, ignoring.\n", value.c_str());
-        }
-    }
-}
-
 std::vector<RendererBackend> BuildRendererCandidateList(RendererBackend configured)
 {
     const std::vector<RendererBackend>& available = GetAvailableRendererBackends();
@@ -198,10 +176,11 @@ std::vector<RendererBackend> BuildRendererCandidateList(RendererBackend configur
     if (IsRendererSelectionAllowed())
     {
         // Priority: command line > KES_RENDERER environment variable > AppConfig.
+        const RendererBackend fromCommandLine = ReadCommandLineRequest();
         const RendererBackend fromEnv = ReadEnvironmentRequest();
-        if (gCommandLineRenderer != RendererBackend::Auto)
+        if (fromCommandLine != RendererBackend::Auto)
         {
-            requested = gCommandLineRenderer;
+            requested = fromCommandLine;
             source = "command line";
         }
         else if (fromEnv != RendererBackend::Auto)
@@ -223,7 +202,7 @@ std::vector<RendererBackend> BuildRendererCandidateList(RendererBackend configur
             source = "platform default";
         }
     }
-    else if (configured != RendererBackend::Auto || gCommandLineRenderer != RendererBackend::Auto)
+    else if (configured != RendererBackend::Auto || ReadCommandLineRequest() != RendererBackend::Auto)
     {
         EngineLogf("Renderer selection is disabled for this platform; forcing \"%s\".",
                    available.empty() ? "none" : RendererBackendName(available.front()));

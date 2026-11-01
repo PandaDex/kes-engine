@@ -55,7 +55,7 @@ elseif(KES_PLATFORM STREQUAL "macOS")
     message(FATAL_ERROR "KES: macOS is not implemented yet.")
 endif()
 
-# --- Microsoft GDK (PC) -------------------------------------------------------
+# --- Microsoft GDK (PC) -----
 if(KES_PLATFORM STREQUAL "GDK")
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR "KES: the GDK platform only supports x64 builds.")
