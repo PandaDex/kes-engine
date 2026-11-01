@@ -5,9 +5,9 @@
 #   Windows  plain Win32 desktop build (default on Windows hosts)
 #   GDK      Microsoft GDK for PC (desktop). Win32 + Gaming Runtime (XGameRuntime),
 #            MicrosoftGame.config next to the exe, MSIXVC packaging via makepkg.
-#   GDKX     Microsoft GDK for Xbox consoles (not implemented yet)
+#   GDKX     Microsoft GDK for Xbox consoles (not implemented yet) WILL REQUIRE ADDITIONAL NDA FOR DOWNLOAD
 #   Linux    default on Linux hosts
-#   macOS    not implemented yet
+#   macOS    not implemented yet STATUS: Sure why not but i dont have a mac
 #
 # Compile definitions (PUBLIC on the engine target):
 #   Windows -> PLATFORM_WINDOWS=1
