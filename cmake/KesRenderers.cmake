@@ -9,23 +9,21 @@
 #   cmake -DKES_RENDERERS_WINDOWS="d3d11;vulkan" ..   # D3D11 default, Vulkan optional
 #   cmake -DKES_RENDERERS_WINDOWS="vulkan" ..         # force Vulkan on Windows
 #
-# Known backends: vulkan, d3d11 (Windows only).
+# Known backends: vulkan, d3d11 (Windows and GDK only).
+# The platform comes from KES_PLATFORM (cmake/KesPlatform.cmake).
 
 include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/KesPlatform.cmake")
 
 set(KES_RENDERERS_WINDOWS "vulkan;d3d11" CACHE STRING "Renderer backends built on Windows, in priority order (vulkan, d3d11). One entry forces it.")
+set(KES_RENDERERS_GDK     "d3d11;vulkan" CACHE STRING "Renderer backends built for GDK (PC), in priority order (d3d11, vulkan). One entry forces it.")
 set(KES_RENDERERS_LINUX   "vulkan"       CACHE STRING "Renderer backends built on Linux, in priority order (vulkan). One entry forces it.")
 set(KES_RENDERERS_MACOS   "vulkan"       CACHE STRING "Renderer backends built on macOS, in priority order (vulkan). One entry forces it.")
 option(KES_ALLOW_RENDERER_SELECTION "Allow choosing between compiled renderers at runtime (-renderer=, KES_RENDERER, AppConfig::renderer). OFF always uses the first one." ON)
 
-if(WIN32)
-    set(_kes_platform "WINDOWS")
-elseif(APPLE)
-    set(_kes_platform "MACOS")
-elseif(UNIX)
-    set(_kes_platform "LINUX")
-else()
-    message(FATAL_ERROR "KES: unsupported platform")
+set(_kes_platform "${KES_PLATFORM_ID}")
+if(NOT DEFINED KES_RENDERERS_${_kes_platform})
+    message(FATAL_ERROR "KES: no renderer list for platform ${KES_PLATFORM} (KES_RENDERERS_${_kes_platform}).")
 endif()
 
 set(KES_RENDERERS "")
@@ -38,8 +36,8 @@ foreach(_kes_backend IN LISTS KES_RENDERERS_${_kes_platform})
     if(NOT _kes_backend MATCHES "^(vulkan|d3d11)$")
         message(FATAL_ERROR "KES: unknown renderer '${_kes_backend}' in KES_RENDERERS_${_kes_platform}. Known: vulkan, d3d11.")
     endif()
-    if(_kes_backend STREQUAL "d3d11" AND NOT WIN32)
-        message(FATAL_ERROR "KES: the d3d11 renderer is only available on Windows (KES_RENDERERS_${_kes_platform}).")
+    if(_kes_backend STREQUAL "d3d11" AND NOT KES_PLATFORM MATCHES "^(Windows|GDK)$")
+        message(FATAL_ERROR "KES: the d3d11 renderer is only available on Windows and GDK (KES_RENDERERS_${_kes_platform}).")
     endif()
     list(APPEND KES_RENDERERS "${_kes_backend}")
 endforeach()

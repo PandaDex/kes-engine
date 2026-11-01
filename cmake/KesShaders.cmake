@@ -91,6 +91,25 @@ function(kes_add_slang_shaders name)
         list(APPEND _stamps "${_stamp}")
     endforeach()
 
+    # Remove binaries whose .slang source no longer exists, so deleted shaders
+    # are not deployed or packaged. (Runs at configure time; the CONFIGURE_DEPENDS
+    # glob above re-runs configure when files are added or removed.)
+    set(_expected_bases "")
+    foreach(_src IN LISTS _sources)
+        file(RELATIVE_PATH _rel "${ARG_SOURCE_DIR}" "${_src}")
+        string(REGEX REPLACE "\\.slang$" "" _rel_base "${_rel}")
+        list(APPEND _expected_bases "${_rel_base}")
+    endforeach()
+    file(GLOB_RECURSE _existing_outputs "${ARG_OUTPUT_DIR}/*.spv" "${ARG_OUTPUT_DIR}/*.dxbc")
+    foreach(_out IN LISTS _existing_outputs)
+        file(RELATIVE_PATH _rel "${ARG_OUTPUT_DIR}" "${_out}")
+        string(REGEX REPLACE "\\.(vs|ps)\\.(spv|dxbc)$" "" _rel_base "${_rel}")
+        if(NOT _rel_base IN_LIST _expected_bases)
+            file(REMOVE "${_out}")
+            message(STATUS "Slang: removed stale ${_rel}")
+        endif()
+    endforeach()
+
     add_custom_target(${name} ALL DEPENDS ${_stamps} SOURCES ${_sources})
     set_target_properties(${name} PROPERTIES
         KES_SHADER_OUTPUT_DIR "${ARG_OUTPUT_DIR}"

@@ -56,6 +56,102 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "gdk-x64-debug",
+            "displayName": "GDK (PC) x64 Debug",
+            "inherits": "x64-debug",
+            "cacheVariables": {
+                "KES_PLATFORM": "GDK"
+            }
+        },
+        {
+            "name": "gdk-x64-release",
+            "displayName": "GDK (PC) x64 Release",
+            "inherits": "gdk-x64-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "linux-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "linux-debug",
+            "displayName": "Linux Debug",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "linux-release",
+            "displayName": "Linux Release",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "package-windows",
+            "displayName": "Package: Windows",
+            "description": "Used by package.ps1. Visual Studio generator, so no developer prompt is needed.",
+            "generator": "Visual Studio 18 2026",
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "KES_PLATFORM": "Windows"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "package-gdk",
+            "displayName": "Package: GDK (PC)",
+            "inherits": "package-windows",
+            "cacheVariables": {
+                "KES_PLATFORM": "GDK"
+            }
+        },
+        {
+            "name": "package-linux",
+            "displayName": "Package: Linux",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "KES_PLATFORM": "Linux"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "package-windows",
+            "configurePreset": "package-windows",
+            "configuration": "Release",
+            "targets": [ "kes_package" ]
+        },
+        {
+            "name": "package-gdk",
+            "configurePreset": "package-gdk",
+            "configuration": "Release",
+            "targets": [ "kes_package" ]
+        },
+        {
+            "name": "package-linux",
+            "configurePreset": "package-linux",
+            "configuration": "Release",
+            "targets": [ "kes_package" ]
         }
     ]
 }

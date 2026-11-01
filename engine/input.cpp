@@ -8,6 +8,10 @@
 #include <sstream>
 
 #include "logger.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "file_paths.h"
 
 namespace
 {
@@ -726,8 +730,15 @@ void InputInit(InputState& input)
         SDL_free(gamepads);
     }
 
+    // config/ ships next to the executable (copied by the build and packaging).
+    // Fall back to the working directory for older setups.
     std::string error;
-    InputLoadActionMap(input, "config/default.imap", &error);
+    const std::filesystem::path exeConfig = GetExecutableDirectory() / "config" / "default.imap";
+    if (!InputLoadActionMap(input, exeConfig.string().c_str(), &error) &&
+        !InputLoadActionMap(input, "config/default.imap", &error))
+    {
+        EngineLogf("Input map not loaded (%s): %s", exeConfig.string().c_str(), error.c_str());
+    }
 }
 
 void InputShutdown(InputState& input)

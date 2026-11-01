@@ -9,7 +9,9 @@
 #include "logger.h"
 #include "pak_file_system.h"
 
-#if PLATFORM_WINDOWS
+#if PLATFORM_GDK
+#include "platform/platform_gdk.h"
+#elif PLATFORM_WINDOWS
 #include "platform/platform_win.h"
 #endif
 
@@ -59,18 +61,22 @@ bool EngineStart(EngineApp& app)
         return false;
     };
 
-#if PLATFORM_WINDOWS
+#if PLATFORM_GDK
+    app.platform = new platform_gdk();
+#elif PLATFORM_WINDOWS
     app.platform = new platform_win();
-#endif
-
-#if PLATFORM_LINUX
+#elif PLATFORM_LINUX
     app.platform = new platform_linux();
 #endif
 
     if (!LoggerInitialize(app.platform->get_executable_path()))
         std::printf("[Engine] Logger initialization failed. Continuing with console-only logging.\n");
 
-    EngineLog("Engine startup begin.");
+    EngineLogf("Engine startup begin (platform: %s).", app.platform->get_name());
+
+    if (!app.platform->initialize())
+        return failStartup();
+    app.platformInitialized = true;
     EngineLogf(
         "Startup configuration: window=%dx%d render=%dx%d preserveAspect=%s integerScale=%s.",
         app.config.windowWidth,
@@ -204,6 +210,16 @@ void EngineShutdown(EngineApp& app)
         SDL_Quit();
         app.sdlInitialized = false;
         EngineLog("SDL shut down.");
+    }
+    if (app.platform)
+    {
+        if (app.platformInitialized)
+        {
+            app.platform->shutdown();
+            app.platformInitialized = false;
+        }
+        delete app.platform;
+        app.platform = nullptr;
     }
     EngineLog("Engine shutdown complete.");
     LoggerShutdown();

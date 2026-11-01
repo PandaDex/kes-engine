@@ -18,23 +18,13 @@ if (CMAKE_VERSION VERSION_GREATER 3.21)
 endif()
 
 
-add_custom_command(TARGET game POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:game>/content"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/content"
-        "$<TARGET_FILE_DIR:game>/content"
-)
-
-# Shaders: every *.slang under content/ is compiled at build time for all enabled
-# renderers. Game shaders can #include the engine's kes_common.slang.
-# Deployed after the content copy above (POST_BUILD steps run in order).
-kes_add_slang_shaders(game_shaders
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content"
-    OUTPUT_DIR "${CMAKE_BINARY_DIR}/compiled_shaders/game"
-    INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/engine/shaders")
-
-kes_deploy_shaders(game engine_shaders "content/engine/shaders")
-kes_deploy_shaders(game game_shaders "content")
+# Content, config, shaders, platform files and the kes_package target
+# (cmake/KesPackage.cmake). Every *.slang under content/ is compiled for all
+# enabled renderers and can #include the engine's kes_common.slang.
+kes_add_game(game
+    CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content"
+    CONFIG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/config"
+    GDK_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/platform/gdk")
 
 
 add_compile_definitions("K_STRUCT(...)=" "K_ENUM(...)=")

@@ -3,10 +3,6 @@
 ``` ⚠️ This engine isn't ready for any use. Very early work in progress. Things can and will be broken! ``` <br/>
 Lightweight game engine focused on psx style graphics with vertex lighting and performance build with modern C++ 20, SDL3 and Vulkan or DirectX 11 (selectable on Windows). Shaders are written once in Slang and compiled at build time for every renderer.
 <br /> 
-
-
-``⚠️ Documentation is currently AI generated. 
-THERE IS NONE AI GENERATED CODE IN ENGINE`` <br/>
 Documentation is located in ```docs``` directory.
 
 
@@ -48,6 +44,11 @@ Prebuilt tools (Slang shader compiler, FBX2glTF) are not stored in git. Download
 Windows: ```powershell -ExecutionPolicy Bypass -File external/download_external.ps1``` <br/>
 Linux: ```./external/download_external.sh``` <br/>
 To publish new binaries, upload `external.zip` to a release tagged `external-v<N>` and put `<N>` in `external/external_version`.
+
+## Packaging
+Windows: ```./package.ps1 all``` (zip + GDK msixvc) <br/>
+Linux: ```./package.sh``` (tar.gz) <br/>
+Packages are written to `out/package/`. Platforms (Windows, GDK for PC, Linux), formats and pak encryption are described in `docs/tools-and-pipeline.md`.
 
 ## Visual Studio 
 1. Open the project root in Visual Studio, thanks to CmakePresets it should figure everything out by itself 

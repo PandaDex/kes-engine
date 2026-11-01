@@ -86,19 +86,43 @@ The default placement convention for new/imported files is:
 
 These defaults are conventions, not discovery requirements.
 
+## Platforms
+
+The target platform is chosen at configure time with `KES_PLATFORM`:
+
+| `KES_PLATFORM` | What it builds | Defines |
+| --- | --- | --- |
+| `Windows` (default on Windows) | plain Win32 desktop | `PLATFORM_WINDOWS` |
+| `GDK` | Microsoft GDK for PC (desktop) | `PLATFORM_WINDOWS`, `PLATFORM_GDK`, `_GAMING_DESKTOP` |
+| `GDKX` | Microsoft GDK for Xbox consoles | not implemented yet |
+| `Linux` (default on Linux) | Linux desktop | `PLATFORM_LINUX` |
+
+The defines are public on the engine target, so game code and tools can use them too.
+
+### GDK (PC)
+
+- needs the Microsoft GDK installed. It is found through the `GameDKCoreLatest`/`GameDK` environment variables; override with `-DKES_GDK_ROOT=".../Microsoft GDK/<edition>"`
+- x64 only
+- the engine calls `XGameRuntimeInitialize()` at startup (`engine/platform/platform_gdk.cpp`). If Gaming Services are missing or out of date, the player gets a message box and the game exits
+- `game/platform/gdk/MicrosoftGame.config.in` is filled in by CMake and copied next to the exe together with the logos, because the Gaming Runtime needs them even for loose development builds
+- identity settings: `KES_GDK_IDENTITY_NAME`, `KES_GDK_PUBLISHER`, `KES_GDK_MSA_APP_ID`, `KES_GDK_TITLE_ID` (placeholders work locally; set the Partner Center values before submission), plus `KES_PROJECT_NAME`, `KES_PROJECT_VERSION` and `KES_PROJECT_PUBLISHER`
+- default renderers: `KES_RENDERERS_GDK = "d3d11;vulkan"`
+- Visual Studio presets: `gdk-x64-debug`, `gdk-x64-release`
+
 ## Renderer Backends
 
 The engine has two renderer backends behind one interface (`IRenderer`, `engine/render_backend.h`):
 
 | Backend | Platforms |
 | --- | --- |
-| `vulkan` | Windows, Linux |
-| `d3d11` | Windows |
+| `vulkan` | Windows, GDK, Linux |
+| `d3d11` | Windows, GDK |
 
 Which backends are compiled in is set per platform at configure time, in priority order:
 
 ```txt
 KES_RENDERERS_WINDOWS = "vulkan;d3d11"   (default)
+KES_RENDERERS_GDK     = "d3d11;vulkan"
 KES_RENDERERS_LINUX   = "vulkan"
 KES_RENDERERS_MACOS   = "vulkan"
 KES_ALLOW_RENDERER_SELECTION = ON
@@ -213,6 +237,50 @@ Behavior:
 - preserves the runtime folder layout inside the archive
 - can create encrypted or unencrypted pak files
 
+## Packaging
+
+One command builds a shippable package:
+
+```txt
+Windows:  ./package.ps1 [windows] [gdk] [all]
+Linux:    ./package.sh [linux]
+```
+
+Each target configures the `package-<target>` CMake preset, builds it in Release and runs the `kes_package` target. In an existing build directory you can run that target directly:
+
+```txt
+cmake --build <build-dir> --config Release --target kes_package
+```
+
+Output goes to `out/package/` (`KES_PACKAGE_DIR`):
+
+| Target | Staged folder | Package (`KES_PACKAGE_FORMAT_<PLATFORM>`) |
+| --- | --- | --- |
+| windows | `<name>-windows/` | `<name>-windows-<version>.zip` |
+| gdk | `<name>-gdk/` | `<name>-gdk-msixvc/*.msixvc` (makepkg, plus the submission validator log) |
+| linux | `<name>-linux/` | `<name>-linux-<version>.tar.gz` |
+
+Formats can be changed per platform: `zip`, `tar.gz`, `msixvc` (GDK only) or `folder`.
+
+The staged folder contains:
+
+- the executable and its runtime libraries
+- `config/` (loose, so players can edit input maps)
+- `content/game.pak`: game content plus compiled game shaders (no `.slang` sources)
+- `content/engine.pak`: engine assets plus compiled engine shaders
+- platform files (GDK: `MicrosoftGame.config` and logos)
+
+Packs are encrypted when `KES_PAK_ENCRYPTION_KEY` is set (64 hex characters). The same key is compiled into the engine, so packaged builds can read them.
+
+Development builds don't use paks: content, engine assets, shaders and `config/` are copied loose next to the exe on every build. Games set this up with one call (see `game/CMakeLists.txt`):
+
+```cmake
+kes_add_game(game
+    CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content"
+    CONFIG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/config"
+    GDK_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/platform/gdk")
+```
+
 ## Pak Encryption
 
 Pak encryption is optional.
@@ -221,7 +289,7 @@ Rules:
 
 - unencrypted pak files load without any key
 - encrypted pak files require a 64-hex-character key
-- the runtime key comes from `ENGINE_PAK_ENCRYPTION_KEY_HEX`
+- the runtime key comes from `ENGINE_PAK_ENCRYPTION_KEY_HEX`, set from the `KES_PAK_ENCRYPTION_KEY` CMake variable
 - `pak-tool --generate-key` prints a generated key after packing
 - the runtime accepts mixed encrypted and unencrypted pak files as long as encrypted ones have the correct key available
 

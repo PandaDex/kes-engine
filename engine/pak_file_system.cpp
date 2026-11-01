@@ -697,7 +697,11 @@ bool MountPakFile(const char* pakPath, std::string* outError)
 bool MountContentPakFiles(std::string* outError, String executablePath)
 {
     ClearMountedPakFiles();
-    const fs::path pakRoot = executablePath.value.append(ENGINE_CONTENT_DIRECTORY);
+    // <exe dir>/<content dir>. (Was a plain string append, which produced
+    // "...\\Releasecontent" and never found any pak.)
+    const fs::path pakRoot = executablePath.value.empty()
+        ? fs::path(ENGINE_CONTENT_DIRECTORY)
+        : fs::path(executablePath.value) / ENGINE_CONTENT_DIRECTORY;
 
     if (pakRoot.empty())
         return true;

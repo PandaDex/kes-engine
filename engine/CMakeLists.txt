@@ -109,7 +109,7 @@ target_include_directories(engine PUBLIC
 )
 target_link_libraries(engine PUBLIC SDL3::SDL3)
 
-# --- Renderer backends ------------------------------------------------------
+# Renderer backends
 if(KES_RENDERER_VULKAN)
     target_sources(engine PRIVATE "vulkan_render.h" "vulkan_render.cpp")
     target_link_libraries(engine PRIVATE Vulkan::Vulkan)
@@ -129,7 +129,7 @@ string(REPLACE ";" "," _kes_renderer_priority "${KES_RENDERERS}")
 set_source_files_properties("render_backend.cpp" PROPERTIES COMPILE_DEFINITIONS
     "KES_HAS_RENDERER_VULKAN=$<BOOL:${KES_RENDERER_VULKAN}>;KES_HAS_RENDERER_D3D11=$<BOOL:${KES_RENDERER_D3D11}>;KES_RENDERER_PRIORITY=\"${_kes_renderer_priority}\";KES_RENDERER_ALLOW_SELECTION=${_kes_allow_selection}")
 
-# --- Built-in shaders (Slang, compiled at build time) -----------------------
+# Built-in shaders (Slang, compiled at build time)
 # Deployed by games to <exe>/content/engine/shaders via kes_deploy_shaders().
 kes_add_slang_shaders(engine_shaders
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
@@ -138,35 +138,43 @@ add_dependencies(engine engine_shaders)
 
 set_property(TARGET engine PROPERTY CXX_STANDARD 20)
 
-if(WIN32)
+# Platform (KES_PLATFORM, cmake/KesPlatform.cmake)
+# Definitions are PUBLIC: headers such as file_paths.h branch on them, so tools
+# and games linking the engine must see the same values.
+target_compile_definitions(engine PUBLIC ${KES_PLATFORM_DEFINITIONS})
+
+if(KES_PLATFORM STREQUAL "Windows" OR KES_PLATFORM STREQUAL "GDK")
     target_sources(engine PRIVATE
             "platform/platform_win.cpp"
             "platform/platform_win.h"
     )
+endif()
 
-    target_compile_definitions(engine PRIVATE
-            PLATFORM_WINDOWS
+if(KES_PLATFORM STREQUAL "GDK")
+    # Gaming Runtime (XGameRuntimeInitialize etc.). xgameruntime.lib loads the
+    # runtime dynamically and reports E_GAMERUNTIME_NOT_INSTALLED if missing.
+    target_sources(engine PRIVATE
+            "platform/platform_gdk.cpp"
+            "platform/platform_gdk.h"
     )
+    target_link_libraries(engine PUBLIC Kes::GDK)
+endif()
 
-elseif(UNIX AND NOT APPLE)
+if(KES_PLATFORM STREQUAL "Linux")
     target_sources(engine PRIVATE
             "platform/platform_linux.cpp"
             "platform/platform_linux.h"
     )
-
-    target_compile_definitions(engine PRIVATE
-            PLATFORM_LINUX
-    )
-
-elseif(APPLE)
-    target_compile_definitions(engine PRIVATE
-            PLATFORM_MAC
-    )
-    
-    message(FATAL_ERROR "Platform MAC not implemented yet")
 endif()
 
+# Project settings baked into the engine (engine_configuration.h) 
+target_compile_definitions(engine PRIVATE
+        "ENGINE_PROJECT_NAME=\"${KES_PROJECT_NAME}\""
+        "ENGINE_PAK_ENCRYPTION_KEY_HEX=\"${KES_PAK_ENCRYPTION_KEY}\""
+)
+
+# Tools 
+add_subdirectory ("tools/pak-tool")
 if(WIN32)
 add_subdirectory ("tools/model-importer")
-add_subdirectory ("tools/pak-tool")
 endif()

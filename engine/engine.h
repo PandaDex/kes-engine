@@ -20,7 +20,8 @@ struct EngineApp
     std::unique_ptr<IRenderer> renderer;   // active backend, created in EngineStart
     Camera camera = {};
     SceneState sceneState = {};
-    Platform* platform;
+    Platform* platform = nullptr;
+    bool platformInitialized = false;
     World world = {};
     bool running = false;
     unsigned long long prevProcessCpu = 0;
