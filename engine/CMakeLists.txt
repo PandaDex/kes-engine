@@ -1,0 +1,172 @@
+﻿# CMakeList.txt : CMake project for engine, include source and define
+# project specific logic here.
+project(engine)
+if(WIN32)
+    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/external/SDL3")
+endif()
+find_package(SDL3 REQUIRED CONFIG)
+
+# Renderer backends come from KES_RENDERERS_<PLATFORM> (cmake/KesRenderers.cmake).
+if(KES_RENDERER_VULKAN)
+    find_package(Vulkan REQUIRED)
+endif()
+
+add_library(engine STATIC
+    "engine.h"
+    "engine.cpp"
+    "engine_configuration.h"
+    "shared.h"
+    "window.h"
+    "window.cpp"
+    "input.h"
+    "input.cpp"
+    "render_backend.h"
+    "render_backend.cpp"
+    "shader_binary.h"
+    "shader_binary.cpp"
+    "camera.h"
+    "camera.cpp"
+    "ent_camera.h"
+    "ent_camera.cpp"
+    "animation_clip.h"
+    "animation_clip.cpp"
+    "animation_graph.h"
+    "animation_graph.cpp"
+    "animation_pose.h"
+    "animation_pose.cpp"
+    "animator.h"
+    "animator.cpp"
+    "ent_audio_source.h"
+    "ent_audio_source.cpp"
+    "ent_player.h"
+    "ent_player.cpp"
+    "ent_player_start.h"
+    "ent_player_start.cpp"
+    "ent_skinned_model.h"
+    "ent_skinned_model.cpp"
+    "ent_trigger.h"
+    "ent_trigger.cpp"
+    "ent_light.h"
+    "ent_light.cpp"
+    "ent_skybox.h"
+    "ent_skybox.cpp"
+    "ent_fog_volume.h"
+    "ent_fog_volume.cpp"
+    "entity_property_utils.h"
+    "text_parse_utils.h"
+    "entity.h"
+    "entity.cpp"
+    "entity_manager.h"
+    "entity_manager.cpp"
+    "entity_factory_registry.h"
+    "entity_factory_registry.cpp"
+    "world.h"
+    "world.cpp"
+    "scene.h"
+    "scene.cpp"
+    "mesh.h"
+    "mesh_file.h"
+    "mesh_file.cpp"
+    "kmodel.h"
+    "kmodel.cpp"
+    "material.h"
+    "material_file.h"
+    "material_file.cpp"
+    "texture_file.h"
+    "texture_file.cpp"
+    "sound_file.h"
+    "sound_file.cpp"
+    "asset_system.h"
+    "asset_system.cpp"
+    "shader.h"
+    "shader.cpp"
+    "text_block_file.h"
+    "text_block_file.cpp"
+    "engine_types.h"
+    "game_context.h"
+    "game_context.cpp"
+    "logger.h"
+    "logger.cpp"
+    "file_paths.h"
+    "file_paths.cpp"
+    "pak_file_system.h"
+    "pak_file_system.cpp"
+    "level_file.h"
+    "level_file.cpp"
+    "prefab_system.h"
+    "prefab_system.cpp"
+    "project_file.h"
+    "project_file.cpp"
+    "collision_world.h"
+    "collision_world.cpp"
+    "audio_system.h"
+    "audio_system.cpp"
+    "platform/platform.h"
+        reflection.h
+)
+target_include_directories(engine PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+target_link_libraries(engine PUBLIC SDL3::SDL3)
+
+# --- Renderer backends ------------------------------------------------------
+if(KES_RENDERER_VULKAN)
+    target_sources(engine PRIVATE "vulkan_render.h" "vulkan_render.cpp")
+    target_link_libraries(engine PRIVATE Vulkan::Vulkan)
+endif()
+
+if(KES_RENDERER_D3D11)
+    target_sources(engine PRIVATE "d3d11_render.h" "d3d11_render.cpp")
+    target_link_libraries(engine PRIVATE d3d11 dxgi)
+endif()
+
+if(KES_ALLOW_RENDERER_SELECTION)
+    set(_kes_allow_selection 1)
+else()
+    set(_kes_allow_selection 0)
+endif()
+string(REPLACE ";" "," _kes_renderer_priority "${KES_RENDERERS}")
+set_source_files_properties("render_backend.cpp" PROPERTIES COMPILE_DEFINITIONS
+    "KES_HAS_RENDERER_VULKAN=$<BOOL:${KES_RENDERER_VULKAN}>;KES_HAS_RENDERER_D3D11=$<BOOL:${KES_RENDERER_D3D11}>;KES_RENDERER_PRIORITY=\"${_kes_renderer_priority}\";KES_RENDERER_ALLOW_SELECTION=${_kes_allow_selection}")
+
+# --- Built-in shaders (Slang, compiled at build time) -----------------------
+# Deployed by games to <exe>/content/engine/shaders via kes_deploy_shaders().
+kes_add_slang_shaders(engine_shaders
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+    OUTPUT_DIR "${CMAKE_BINARY_DIR}/compiled_shaders/engine/shaders")
+add_dependencies(engine engine_shaders)
+
+set_property(TARGET engine PROPERTY CXX_STANDARD 20)
+
+if(WIN32)
+    target_sources(engine PRIVATE
+            "platform/platform_win.cpp"
+            "platform/platform_win.h"
+    )
+
+    target_compile_definitions(engine PRIVATE
+            PLATFORM_WINDOWS
+    )
+
+elseif(UNIX AND NOT APPLE)
+    target_sources(engine PRIVATE
+            "platform/platform_linux.cpp"
+            "platform/platform_linux.h"
+    )
+
+    target_compile_definitions(engine PRIVATE
+            PLATFORM_LINUX
+    )
+
+elseif(APPLE)
+    target_compile_definitions(engine PRIVATE
+            PLATFORM_MAC
+    )
+    
+    message(FATAL_ERROR "Platform MAC not implemented yet")
+endif()
+
+if(WIN32)
+add_subdirectory ("tools/model-importer")
+add_subdirectory ("tools/pak-tool")
+endif()

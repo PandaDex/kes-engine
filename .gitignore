@@ -1,0 +1,72 @@
+# IDE
+.idea/
+.vs/
+*.sln
+*.suo
+*.user
+*.userosscache
+*.VC.db
+*.VC.opendb
+# notes
+file types.txt
+
+# CMake
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+install_manifest.txt
+
+# Build directories
+out/
+build/
+cmake-build-*/
+
+# Visual Studio / MSBuild outputs
+*.obj
+*.o
+*.lo
+*.la
+*.al
+*.idb
+*.ilk
+.pdb
+*.pch
+*.ipch
+.lib
+*.exp
+.dll
+.exe
+*.appx
+*.recipe
+*.tlog
+*.lastbuildstate
+*.unsuccessfulbuild
+*.cache
+
+# Generated project files
+*.vcxproj
+*.vcxproj.filters
+*.dir/
+*.stamp
+*.depend
+*.ninja
+*.ninja_deps
+*.ninja_log
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+Desktop.ini
+
+generated/
+external/slang
+external/FBX2glTF
+external/external.zip
+external/.external_installed
+TODO.txt

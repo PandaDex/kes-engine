@@ -1,0 +1,4 @@
+* text=auto
+*.kmodel binary
+*.ksound binary
+*.sh text eol=lf

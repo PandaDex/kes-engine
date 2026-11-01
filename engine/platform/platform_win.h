@@ -1,0 +1,9 @@
+#pragma once
+#include "platform.h"
+
+class platform_win : public Platform
+{
+public:
+    virtual Vector2 get_display_resolution(int displayIndex) override;
+    virtual String get_executable_path() override;
+};

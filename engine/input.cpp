@@ -1,0 +1,921 @@
+#include "input.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
+#include "logger.h"
+
+namespace
+{
+    constexpr float kGamepadAxisScale = 1.0f / 32767.0f;
+
+    struct TextCursor
+    {
+        std::string text;
+        size_t pos = 0;
+    };
+
+    std::string ReadTextFile(const char* path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open())
+            return {};
+
+        std::ostringstream stream;
+        stream << file.rdbuf();
+        return stream.str();
+    }
+
+    void SkipWhitespaceAndCommas(TextCursor& cursor)
+    {
+        while (cursor.pos < cursor.text.size())
+        {
+            const char ch = cursor.text[cursor.pos];
+            if (!std::isspace(static_cast<unsigned char>(ch)) && ch != ',')
+                break;
+            ++cursor.pos;
+        }
+    }
+
+    bool Match(TextCursor& cursor, char expected)
+    {
+        SkipWhitespaceAndCommas(cursor);
+        if (cursor.pos >= cursor.text.size() || cursor.text[cursor.pos] != expected)
+            return false;
+
+        ++cursor.pos;
+        return true;
+    }
+
+    bool ReadQuotedString(TextCursor& cursor, std::string& out)
+    {
+        SkipWhitespaceAndCommas(cursor);
+        if (cursor.pos >= cursor.text.size() || cursor.text[cursor.pos] != '"')
+            return false;
+
+        ++cursor.pos;
+        out.clear();
+
+        while (cursor.pos < cursor.text.size())
+        {
+            const char ch = cursor.text[cursor.pos++];
+            if (ch == '"')
+                return true;
+
+            out.push_back(ch);
+        }
+
+        return false;
+    }
+
+    bool SkipValue(TextCursor& cursor);
+
+    bool SkipObject(TextCursor& cursor)
+    {
+        if (!Match(cursor, '{'))
+            return false;
+
+        int depth = 1;
+        bool inString = false;
+
+        while (cursor.pos < cursor.text.size() && depth > 0)
+        {
+            const char ch = cursor.text[cursor.pos++];
+
+            if (ch == '"')
+                inString = !inString;
+
+            if (inString)
+                continue;
+
+            if (ch == '{')
+                ++depth;
+            else if (ch == '}')
+                --depth;
+        }
+
+        return depth == 0;
+    }
+
+    bool SkipArray(TextCursor& cursor)
+    {
+        if (!Match(cursor, '['))
+            return false;
+
+        int depth = 1;
+        bool inString = false;
+
+        while (cursor.pos < cursor.text.size() && depth > 0)
+        {
+            const char ch = cursor.text[cursor.pos++];
+
+            if (ch == '"')
+                inString = !inString;
+
+            if (inString)
+                continue;
+
+            if (ch == '[')
+                ++depth;
+            else if (ch == ']')
+                --depth;
+        }
+
+        return depth == 0;
+    }
+
+    bool SkipValue(TextCursor& cursor)
+    {
+        SkipWhitespaceAndCommas(cursor);
+        if (cursor.pos >= cursor.text.size())
+            return false;
+
+        if (cursor.text[cursor.pos] == '{')
+            return SkipObject(cursor);
+
+        if (cursor.text[cursor.pos] == '[')
+            return SkipArray(cursor);
+
+        if (cursor.text[cursor.pos] == '"')
+        {
+            std::string ignored;
+            return ReadQuotedString(cursor, ignored);
+        }
+
+        while (cursor.pos < cursor.text.size())
+        {
+            const char ch = cursor.text[cursor.pos];
+            if (ch == ',' || ch == '}' || ch == ']')
+                break;
+            ++cursor.pos;
+        }
+
+        return true;
+    }
+
+    bool ReadFieldName(TextCursor& cursor, std::string& name)
+    {
+        if (!ReadQuotedString(cursor, name))
+            return false;
+
+        return Match(cursor, ':');
+    }
+
+    bool ReadBoolString(const std::string& value)
+    {
+        return value == "true" || value == "1";
+    }
+
+    float ReadFloatString(const std::string& value)
+    {
+        return value.empty() ? 0.0f : std::strtof(value.c_str(), nullptr);
+    }
+
+    SDL_Scancode KeyboardNameToScancode(const std::string& key)
+    {
+        auto pos = key.find('_');
+        std::string clean = (pos != std::string::npos)
+            ? key.substr(pos + 1)
+            : key;
+
+        auto res = SDL_GetScancodeFromName(clean.c_str());
+        if (res != SDL_SCANCODE_UNKNOWN) return res;
+
+        EngineLogf("Unknown Key %s", clean.c_str());
+        return SDL_SCANCODE_UNKNOWN;
+    }
+
+    struct GamepadKeyDef
+    {
+        const char* name;
+        InputNativeKeyKind kind;
+        SDL_GamepadButton button;
+        SDL_GamepadAxis axis;
+    };
+
+    constexpr SDL_GamepadButton kNoButton = SDL_GAMEPAD_BUTTON_INVALID;
+    constexpr SDL_GamepadAxis kNoAxis = SDL_GAMEPAD_AXIS_INVALID;
+
+    constexpr GamepadKeyDef kGamepadKeys[] =
+    {
+        // Thumbsticks
+        { "Gamepad_LeftAxis_2D",    InputNativeKeyKind::GamepadLeftAxis2D,  kNoButton, kNoAxis },
+        { "Gamepad_RightAxis_2D",   InputNativeKeyKind::GamepadRightAxis2D, kNoButton, kNoAxis },
+        { "Gamepad_LeftAxis_X",     InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_LEFTX },
+        { "Gamepad_LeftAxis_Y",     InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_LEFTY },
+        { "Gamepad_RightAxis_X",    InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_RIGHTX },
+        { "Gamepad_RightAxis_Y",    InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_RIGHTY },
+
+        // Triggers
+        { "Gamepad_LeftTrigger",    InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_LEFT_TRIGGER },
+        { "Gamepad_RightTrigger",   InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER },
+
+        // Face buttons
+        { "Gamepad_Face_Top",       InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_NORTH, kNoAxis },
+        { "Gamepad_Face_Left",      InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_WEST,  kNoAxis },
+        { "Gamepad_Face_Bottom",    InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_SOUTH, kNoAxis },
+        { "Gamepad_Face_Right",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_EAST,  kNoAxis },
+
+        // Special buttons
+        { "Gamepad_Special_Left",   InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_BACK,  kNoAxis },
+        { "Gamepad_Special_Right",  InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_START, kNoAxis },
+
+        // Stick buttons
+        { "Gamepad_LeftStick",      InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_LEFT_STICK,  kNoAxis },
+        { "Gamepad_RightStick",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_RIGHT_STICK, kNoAxis },
+
+        // Bumpers
+        { "Gamepad_LeftBumper",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,  kNoAxis },
+        { "Gamepad_RightBumper",    InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, kNoAxis },
+
+        // D-Pad
+        { "Gamepad_DPad_Up",        InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_UP,    kNoAxis },
+        { "Gamepad_DPad_Down",      InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_DOWN,  kNoAxis },
+        { "Gamepad_DPad_Left",      InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_LEFT,  kNoAxis },
+        { "Gamepad_DPad_Right",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_RIGHT, kNoAxis },
+    };
+
+    bool NativeKeyFromName(const std::string& key, InputBinding& binding)
+    {
+        if (key.rfind("Keyboard_", 0) == 0)
+        {
+            binding.keyKind = InputNativeKeyKind::Keyboard;
+            binding.keyboardKey = KeyboardNameToScancode(key);
+            return binding.keyboardKey != SDL_SCANCODE_UNKNOWN;
+        }
+
+        // if (key.rfind("Mouse_", 0) == 0)
+        // {
+        //
+        // }
+
+        if (key.rfind("Gamepad_", 0) == 0)
+        {
+            for (const GamepadKeyDef& def : kGamepadKeys)
+            {
+                if (key != def.name)
+                    continue;
+
+                binding.keyKind = def.kind;
+                binding.gamepadButton = def.button;
+                binding.gamepadAxis = def.axis;
+                return true;
+            }
+
+            EngineLogf("Unknown gamepad key %s", key.c_str());
+            return false;
+        }
+
+        if (key == "Mouse_2D_Axis")
+        {
+            binding.keyKind = InputNativeKeyKind::Mouse2DAxis;
+            return true;
+        }
+
+        return false;
+    }
+
+    InputActionValueType ValueTypeFromString(const std::string& value)
+    {
+        if (value == "boolean")
+            return InputActionValueType::Boolean;
+        if (value == "vector3")
+            return InputActionValueType::Vector3;
+        return InputActionValueType::Vector2;
+    }
+
+    bool ParseNegateValue(TextCursor& cursor, InputModifier& modifier)
+    {
+        if (!Match(cursor, '{'))
+            return false;
+
+        while (cursor.pos < cursor.text.size())
+        {
+            SkipWhitespaceAndCommas(cursor);
+            if (cursor.pos < cursor.text.size() && cursor.text[cursor.pos] == '}')
+            {
+                ++cursor.pos;
+                return true;
+            }
+
+            std::string field;
+            if (!ReadFieldName(cursor, field))
+                return false;
+
+            std::string value;
+            if (!ReadQuotedString(cursor, value))
+                return false;
+
+            if (field == "x")
+                modifier.negateX = ReadBoolString(value);
+            else if (field == "y")
+                modifier.negateY = ReadBoolString(value);
+            else if (field == "z")
+                modifier.negateZ = ReadBoolString(value);
+        }
+
+        return false;
+    }
+
+    bool ParseSwizzleString(const std::string& text, int out[3])
+    {
+        if (text.size() != 3)
+            return false;
+
+        bool used[3] = {};
+        for (int i = 0; i < 3; ++i)
+        {
+            const char ch = static_cast<char>(std::toupper(static_cast<unsigned char>(text[i])));
+            if (ch < 'X' || ch > 'Z')
+                return false;
+
+            const int index = ch - 'X';
+            if (used[index])
+                return false;
+
+            used[index] = true;
+            out[i] = index;
+        }
+
+        return true;
+    }
+
+    bool ParseModifier(TextCursor& cursor, InputModifier& modifier, bool& recognized)
+    {
+        if (!Match(cursor, '{'))
+            return false;
+
+        std::string modifierName;
+        std::string stringValue;
+        recognized = false;
+
+        while (cursor.pos < cursor.text.size())
+        {
+            SkipWhitespaceAndCommas(cursor);
+            if (cursor.pos < cursor.text.size() && cursor.text[cursor.pos] == '}')
+            {
+                ++cursor.pos;
+
+                if (modifierName == "InputMod_deadzone")
+                {
+                    modifier.kind = InputModifierKind::Deadzone;
+                    recognized = true;
+                }
+                else if (modifierName == "InputMod_negate")
+                {
+                    modifier.kind = InputModifierKind::Negate;
+                    recognized = true;
+                }
+                else if (modifierName == "InputMod_swizzle")
+                {
+                    if (ParseSwizzleString(stringValue, modifier.swizzle))
+                    {
+                        modifier.kind = InputModifierKind::Swizzle;
+                        recognized = true;
+                    }
+                    else
+                    {
+                        EngineLogf("InputMod_swizzle needs a value like \"YXZ\", got \"%s\"", stringValue.c_str());
+                    }
+                }
+                else if (modifierName == "InputMod_toWorldSpace")
+                {
+                    // Removed: movement is rotated into world space by the player.
+                    EngineLogf("Input modifier %s is no longer supported and was ignored", modifierName.c_str());
+                }
+                else if (!modifierName.empty())
+                {
+                    EngineLogf("Unknown input modifier %s was ignored", modifierName.c_str());
+                }
+
+                return !modifierName.empty();
+            }
+
+            std::string field;
+            if (!ReadFieldName(cursor, field))
+                return false;
+
+            if (field == "name")
+            {
+                if (!ReadQuotedString(cursor, modifierName))
+                    return false;
+            }
+            else if (field == "value")
+            {
+                SkipWhitespaceAndCommas(cursor);
+                if (cursor.pos < cursor.text.size() && cursor.text[cursor.pos] == '{')
+                {
+                    if (!ParseNegateValue(cursor, modifier))
+                        return false;
+                }
+                else
+                {
+                    std::string value;
+                    if (!ReadQuotedString(cursor, value))
+                        return false;
+                    modifier.scalarValue = ReadFloatString(value);
+                    stringValue = value;
+                }
+            }
+            else if (!SkipValue(cursor))
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    bool ParseModifiers(TextCursor& cursor, std::vector<InputModifier>& modifiers)
+    {
+        if (!Match(cursor, '['))
+            return false;
+
+        while (cursor.pos < cursor.text.size())
+        {
+            SkipWhitespaceAndCommas(cursor);
+            if (cursor.pos < cursor.text.size() && cursor.text[cursor.pos] == ']')
+            {
+                ++cursor.pos;
+                return true;
+            }
+
+            InputModifier modifier = {};
+            bool recognized = false;
+            if (!ParseModifier(cursor, modifier, recognized))
+                return false;
+
+            if (recognized)
+                modifiers.push_back(modifier);
+        }
+
+        return false;
+    }
+
+    bool ParseBinding(TextCursor& cursor, InputBinding& binding)
+    {
+        if (!Match(cursor, '{'))
+            return false;
+
+        while (cursor.pos < cursor.text.size())
+        {
+            SkipWhitespaceAndCommas(cursor);
+            if (cursor.pos < cursor.text.size() && cursor.text[cursor.pos] == '}')
+            {
+                ++cursor.pos;
+                return binding.keyKind != InputNativeKeyKind::Unknown;
+            }
+
+            std::string field;
+            if (!ReadFieldName(cursor, field))
+                return false;
+
+            if (field == "key")
+            {
+                std::string key;
+                if (!ReadQuotedString(cursor, key))
+                    return false;
+                NativeKeyFromName(key, binding);
+            }
+            else if (field == "modifiers")
+            {
+                if (!ParseModifiers(cursor, binding.modifiers))
+                    return false;
+            }
+            else if (field == "bPlayerAssignable")
+            {
+                std::string value;
+                if (!ReadQuotedString(cursor, value))
+                    return false;
+                binding.playerAssignable = ReadBoolString(value);
+            }
+            else if (field == "AssignableKey")
+            {
+                if (!ReadQuotedString(cursor, binding.assignableKey))
+                    return false;
+            }
+            else if (!SkipValue(cursor))
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    bool ParseNativeKeys(TextCursor& cursor, std::vector<InputBinding>& bindings)
+    {
+        if (!Match(cursor, '['))
+            return false;
+
+        while (cursor.pos < cursor.text.size())
+        {
+            SkipWhitespaceAndCommas(cursor);
+            if (cursor.pos < cursor.text.size() && cursor.text[cursor.pos] == ']')
+            {
+                ++cursor.pos;
+                return true;
+            }
+
+            InputBinding binding = {};
+            if (!ParseBinding(cursor, binding))
+                return false;
+
+            bindings.push_back(binding);
+        }
+
+        return false;
+    }
+
+    bool ParseAction(TextCursor& cursor, const std::string& name, InputAction& action)
+    {
+        if (!Match(cursor, '{'))
+            return false;
+
+        action.name = name;
+
+        while (cursor.pos < cursor.text.size())
+        {
+            SkipWhitespaceAndCommas(cursor);
+            if (cursor.pos < cursor.text.size() && cursor.text[cursor.pos] == '}')
+            {
+                ++cursor.pos;
+                return true;
+            }
+
+            std::string field;
+            if (!ReadFieldName(cursor, field))
+                return false;
+
+            if (field == "NativeKeys")
+            {
+                if (!ParseNativeKeys(cursor, action.bindings))
+                    return false;
+            }
+            else if (field == "ValueType")
+            {
+                std::string valueType;
+                if (!ReadQuotedString(cursor, valueType))
+                    return false;
+                action.valueType = ValueTypeFromString(valueType);
+            }
+            else if (!SkipValue(cursor))
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    Vector3 Add(const Vector3& a, const Vector3& b)
+    {
+        return { a.x + b.x, a.y + b.y, a.z + b.z };
+    }
+
+    Vector3 Scale(const Vector3& value, float scalar)
+    {
+        return { value.x * scalar, value.y * scalar, value.z * scalar };
+    }
+
+    float Length2D(float x, float y)
+    {
+        return std::sqrt(x * x + y * y);
+    }
+
+    Vector3 ApplyDeadzone(const Vector3& value, float deadzone)
+    {
+        const float length = Length2D(value.x, value.y);
+        if (length <= deadzone)
+            return {};
+
+        return value;
+    }
+
+    Vector3 ApplyNegate(const Vector3& value, const InputModifier& modifier)
+    {
+        return {
+            modifier.negateX ? -value.x : value.x,
+            modifier.negateY ? -value.y : value.y,
+            modifier.negateZ ? -value.z : value.z
+        };
+    }
+
+    Vector3 ApplySwizzle(const Vector3& value, const InputModifier& modifier)
+    {
+        const float components[3] = { value.x, value.y, value.z };
+        return {
+            components[modifier.swizzle[0]],
+            components[modifier.swizzle[1]],
+            components[modifier.swizzle[2]]
+        };
+    }
+
+    Vector3 ApplyModifiers(Vector3 value, const std::vector<InputModifier>& modifiers)
+    {
+        for (const InputModifier& modifier : modifiers)
+        {
+            switch (modifier.kind)
+            {
+            case InputModifierKind::Deadzone:
+                value = ApplyDeadzone(value, modifier.scalarValue);
+                break;
+            case InputModifierKind::Negate:
+                value = ApplyNegate(value, modifier);
+                break;
+            case InputModifierKind::Swizzle:
+                value = ApplySwizzle(value, modifier);
+                break;
+            }
+        }
+
+        return value;
+    }
+
+    Vector3 ReadBindingValue(const InputState& input, const InputBinding& binding)
+    {
+        switch (binding.keyKind)
+        {
+        case InputNativeKeyKind::Keyboard:
+            if (binding.keyboardKey >= 0 && binding.keyboardKey < SDL_SCANCODE_COUNT && input.keys[binding.keyboardKey])
+                return { 0.0f, 1.0f, 0.0f };
+            return {};
+
+        case InputNativeKeyKind::Mouse2DAxis:
+            return { input.mouseDeltaX, input.mouseDeltaY, 0.0f };
+
+        case InputNativeKeyKind::GamepadButton:
+            if (input.gamepad && SDL_GetGamepadButton(input.gamepad, binding.gamepadButton))
+                return { 0.0f, 1.0f, 0.0f };
+            return {};
+
+        case InputNativeKeyKind::GamepadAxis:
+        {
+            if (!input.gamepad)
+                return {};
+
+            const float axis = SDL_GetGamepadAxis(input.gamepad, binding.gamepadAxis) * kGamepadAxisScale;
+
+            switch (binding.gamepadAxis)
+            {
+            case SDL_GAMEPAD_AXIS_LEFTX:
+            case SDL_GAMEPAD_AXIS_RIGHTX:
+                return { axis, 0.0f, 0.0f };
+
+            // Stick Y axes and triggers go in Y, same as buttons/keys, so they combine with them.
+            case SDL_GAMEPAD_AXIS_LEFTY:
+            case SDL_GAMEPAD_AXIS_RIGHTY:
+            case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
+            case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
+                return { 0.0f, axis, 0.0f };
+
+            default:
+                return {};
+            }
+        }
+
+        case InputNativeKeyKind::GamepadLeftAxis2D:
+            if (input.gamepad)
+            {
+                return {
+                    SDL_GetGamepadAxis(input.gamepad, SDL_GAMEPAD_AXIS_LEFTX) * kGamepadAxisScale,
+                    SDL_GetGamepadAxis(input.gamepad, SDL_GAMEPAD_AXIS_LEFTY) * kGamepadAxisScale,
+                    0.0f
+                };
+            }
+            return {};
+
+        case InputNativeKeyKind::GamepadRightAxis2D:
+            if (input.gamepad)
+            {
+                return {
+                    SDL_GetGamepadAxis(input.gamepad, SDL_GAMEPAD_AXIS_RIGHTX) * kGamepadAxisScale,
+                    SDL_GetGamepadAxis(input.gamepad, SDL_GAMEPAD_AXIS_RIGHTY) * kGamepadAxisScale,
+                    0.0f
+                };
+            }
+            return {};
+
+        default:
+            return {};
+        }
+    }
+
+    bool IsNonZero(const Vector3& value)
+    {
+        return std::fabs(value.x) > 0.0001f || std::fabs(value.y) > 0.0001f || std::fabs(value.z) > 0.0001f;
+    }
+}
+
+void InputInit(InputState& input)
+{
+    input = {};
+
+    const int joystickCount = 0;
+    (void)joystickCount;
+
+    SDL_JoystickID* gamepads = SDL_GetGamepads(nullptr);
+    if (gamepads)
+    {
+        if (gamepads[0])
+            input.gamepad = SDL_OpenGamepad(gamepads[0]);
+        SDL_free(gamepads);
+    }
+
+    std::string error;
+    InputLoadActionMap(input, "config/default.imap", &error);
+}
+
+void InputShutdown(InputState& input)
+{
+    if (input.gamepad)
+    {
+        SDL_CloseGamepad(input.gamepad);
+        input.gamepad = nullptr;
+    }
+}
+
+void InputBeginFrame(InputState& input)
+{
+    std::copy(std::begin(input.keys), std::end(input.keys), std::begin(input.previousKeys));
+    std::copy(std::begin(input.mouseButtons), std::end(input.mouseButtons), std::begin(input.previousMouseButtons));
+
+    input.mouseDeltaX = 0.0f;
+    input.mouseDeltaY = 0.0f;
+
+    for (auto& pair : input.actionStates)
+    {
+        pair.second.pressed = false;
+        pair.second.released = false;
+        pair.second.value2 = {};
+        pair.second.value3 = {};
+    }
+}
+
+void InputProcessEvent(InputState& input, const SDL_Event& e)
+{
+    switch (e.type)
+    {
+    case SDL_EVENT_KEY_DOWN:
+        if (!e.key.repeat && e.key.scancode >= 0 && e.key.scancode < SDL_SCANCODE_COUNT)
+            input.keys[e.key.scancode] = true;
+        break;
+
+    case SDL_EVENT_KEY_UP:
+        if (e.key.scancode >= 0 && e.key.scancode < SDL_SCANCODE_COUNT)
+            input.keys[e.key.scancode] = false;
+        break;
+
+    case SDL_EVENT_MOUSE_MOTION:
+        input.mouseDeltaX += static_cast<float>(e.motion.xrel);
+        input.mouseDeltaY += static_cast<float>(e.motion.yrel);
+        break;
+
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (e.button.button < 8)
+            input.mouseButtons[e.button.button] = true;
+        break;
+
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (e.button.button < 8)
+            input.mouseButtons[e.button.button] = false;
+        break;
+
+    case SDL_EVENT_GAMEPAD_ADDED:
+        if (!input.gamepad)
+            input.gamepad = SDL_OpenGamepad(e.gdevice.which);
+        break;
+
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        if (input.gamepad && SDL_GetGamepadID(input.gamepad) == e.gdevice.which)
+        {
+            SDL_CloseGamepad(input.gamepad);
+            input.gamepad = nullptr;
+        }
+        break;
+    }
+}
+
+void InputEndFrame(InputState& input)
+{
+    InputEvaluateActions(input);
+}
+
+bool InputLoadActionMap(InputState& input, const char* path, std::string* outError)
+{
+    const std::string text = ReadTextFile(path);
+    if (text.empty())
+    {
+        if (outError)
+            *outError = "Could not read input map.";
+        return false;
+    }
+
+    TextCursor cursor = {};
+    cursor.text = text;
+
+    input.actions.clear();
+    input.actionStates.clear();
+
+    while (cursor.pos < cursor.text.size())
+    {
+        SkipWhitespaceAndCommas(cursor);
+        if (cursor.pos >= cursor.text.size())
+            break;
+
+        std::string actionName;
+        if (!ReadFieldName(cursor, actionName))
+        {
+            if (outError)
+                *outError = "Failed to read input action name.";
+            return false;
+        }
+
+        InputAction action = {};
+        if (!ParseAction(cursor, actionName, action))
+        {
+            if (outError)
+                *outError = "Failed to parse input action: " + actionName;
+            return false;
+        }
+
+        input.actionStates[action.name] = {};
+        input.actions.push_back(std::move(action));
+    }
+
+    return true;
+}
+
+void InputEvaluateActions(InputState& input)
+{
+    for (const InputAction& action : input.actions)
+    {
+        InputActionState& state = input.actionStates[action.name];
+        const bool wasDown = state.down;
+
+        Vector3 accumulated = {};
+
+        for (const InputBinding& binding : action.bindings)
+        {
+            Vector3 value = ReadBindingValue(input, binding);
+            value = ApplyModifiers(value, binding.modifiers);
+            accumulated = Add(accumulated, value);
+        }
+
+        state.value3 = accumulated;
+        state.value2 = { accumulated.x, accumulated.y };
+
+        state.down = IsNonZero(accumulated);
+        state.pressed = state.down && !wasDown;
+        state.released = !state.down && wasDown;
+    }
+}
+
+bool InputActionDown(const InputState& input, const char* actionName)
+{
+    const auto found = input.actionStates.find(actionName ? actionName : "");
+    return found != input.actionStates.end() && found->second.down;
+}
+
+bool InputActionPressed(const InputState& input, const char* actionName)
+{
+    const auto found = input.actionStates.find(actionName ? actionName : "");
+    return found != input.actionStates.end() && found->second.pressed;
+}
+
+bool InputActionReleased(const InputState& input, const char* actionName)
+{
+    const auto found = input.actionStates.find(actionName ? actionName : "");
+    return found != input.actionStates.end() && found->second.released;
+}
+
+Vector2 InputActionValue2D(const InputState& input, const char* actionName)
+{
+    const auto found = input.actionStates.find(actionName ? actionName : "");
+    return found != input.actionStates.end() ? found->second.value2 : Vector2{};
+}
+
+Vector3 InputActionValue3D(const InputState& input, const char* actionName)
+{
+    const auto found = input.actionStates.find(actionName ? actionName : "");
+    return found != input.actionStates.end() ? found->second.value3 : Vector3{};
+}
+
+bool InputKeyDown(const InputState& input, SDL_Scancode key)
+{
+    return key >= 0 && key < SDL_SCANCODE_COUNT && input.keys[key];
+}
+
+bool InputKeyPressed(const InputState& input, SDL_Scancode key)
+{
+    return key >= 0 && key < SDL_SCANCODE_COUNT && input.keys[key] && !input.previousKeys[key];
+}
+
+bool InputKeyReleased(const InputState& input, SDL_Scancode key)
+{
+    return key >= 0 && key < SDL_SCANCODE_COUNT && !input.keys[key] && input.previousKeys[key];
+}

@@ -1,0 +1,30 @@
+Material {
+    Shader = "shaders/psx_default.shader"
+    BaseColor = "0.85,0.35,0.25,1"
+    Emissive = "0,0,0"
+    AlphaCutoff = 0
+    Lit = true
+    Transparent = false
+    DoubleSided = false
+}
+
+Node {
+    Id = 1
+    Type = "Color"
+    Position = "40,40"
+    Value = "0.85,0.35,0.25,1"
+}
+
+Node {
+    Id = 2
+    Type = "Output"
+    Position = "320,120"
+    Value = "0,0,0,0"
+}
+
+Link {
+    FromNode = 1
+    FromSlot = 0
+    ToNode = 2
+    ToSlot = 0
+}

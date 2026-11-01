@@ -1,0 +1,6 @@
+Project
+{
+    Name="KES"
+    AssetRoot="content"
+    StartupMap="startup.map"
+}
