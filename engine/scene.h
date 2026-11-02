@@ -36,9 +36,12 @@ struct Light
     float color[3] = { 1.0f, 1.0f, 1.0f };
     float intensity = 1.0f;
     float range = 10.0f;
-    float spotAngle = 45.0f;
+    float spotAngle = 45.0f;   // full cone angle, degrees
     Transform transform;
     bool active = true;
+    // The first shadowed directional light gets the sun cascades; spot and
+    // point lights share the local shadow slices (nearest to the camera first).
+    bool castShadows = false;
 };
 
 struct SkySettings
@@ -51,6 +54,7 @@ struct SkySettings
     float sunSize = 2.5f;
     float sunIntensity = 1.15f;
     float horizonExponent = 1.6f;
+    float ambientIntensity = 1.0f;   // scales the sky's ambient light and reflections
     bool active = false;
     uint64_t ownerEntityId = 0;
 };

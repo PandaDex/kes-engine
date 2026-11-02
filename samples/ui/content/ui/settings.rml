@@ -123,6 +123,16 @@
                     <tr><td>Fullscreen</td><td class="k"><span class="key">Alt</span><span class="key">Enter</span></td></tr>
                     <tr><td>Reload UI / inspector (debug builds)</td><td class="k"><span class="key">F7</span><span class="key">F8</span></td></tr>
                 </table>
+                <h2 class="bindings-title">Gamepad</h2>
+                <table class="bindings">
+                    <tr><td>Move / look</td><td class="k"><span class="key">L stick</span><span class="key">R stick</span></td></tr>
+                    <tr><td>Fire / reload</td><td class="k"><span class="key">RT</span><span class="key">X</span></td></tr>
+                    <tr><td>Take damage (demo)</td><td class="k"><span class="key">Y</span></td></tr>
+                    <tr><td>Talk / inventory</td><td class="k"><span class="key">A</span><span class="key">View</span></td></tr>
+                    <tr><td>Pause</td><td class="k"><span class="key">Menu</span></td></tr>
+                    <tr><td>Menus: move / select / back</td><td class="k"><span class="key">D-pad</span><span class="key">L stick</span><span class="key">A</span><span class="key">B</span></td></tr>
+                    <tr><td>Menus: switch tab / scroll</td><td class="k"><span class="key">LB</span><span class="key">RB</span><span class="key">R stick</span></td></tr>
+                </table>
             </panel>
         </tabset>
         <div class="settings-footer">

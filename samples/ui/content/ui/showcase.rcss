@@ -49,6 +49,13 @@ body
     font-size: 12dp;
 }
 
+/* Prompts per input device: the UI system sets input-mouse, input-keyboard
+   or input-gamepad on <body> for the device used last. */
+.pad-only { display: none; }
+body.input-gamepad .pad-only { display: inline; }
+body.input-gamepad .kbm-only { display: none; }
+.bindings-title { font-size: 14dp; letter-spacing: 2dp; color: #4ef2ff; margin: 18dp 0 6dp 0; }
+
 /* Neon button: accent bar slides in from the left on hover */
 button.neon
 {
@@ -91,10 +98,10 @@ button.small
     border-radius: 3dp;
     transition: background-color border-color 0.15s cubic-out;
 }
-button.small:hover { background-color: #22325a; border-color: #4ef2ff; }
+button.small:hover, button.small:focus-visible { background-color: #22325a; border-color: #4ef2ff; }
 button.primary { background-color: #0f5f6c; border-color: #4ef2ff; color: #ffffff; }
-button.primary:hover { background-color: #158394; }
-button.danger:hover { background-color: #5a1a28; border-color: #ff4d5e; }
+button.primary:hover, button.primary:focus-visible { background-color: #158394; }
+button.danger:hover, button.danger:focus-visible { background-color: #5a1a28; border-color: #ff4d5e; }
 
 /* Generic progress bar: .bar > .fill (width set with data-style-width) */
 .bar
@@ -653,6 +660,7 @@ body.overlay
     transition: background-color border-color color 0.15s cubic-out;
 }
 .filters button.active { background-color: #4ef2ff; color: #0b1220; border-color: #4ef2ff; }
+.filters button:focus-visible { border-color: #ffffff; }
 .credits { display: flex; align-items: center; font-weight: bold; color: #ffd23f; }
 .credits img { width: 24dp; height: 24dp; margin-right: 4dp; }
 
@@ -678,11 +686,14 @@ body.overlay
     border-radius: 4dp;
     cursor: move;
     drag: clone;
+    tab-index: auto;   /* gamepad / keyboard focus */
+    nav: auto;
     transition: background-color border-color opacity 0.15s cubic-out;
 }
 .slot img { width: 62dp; height: 62dp; }
 .slot.empty { cursor: default; drag: none; background-color: #0b1220; border-color: #1a2438; }
 .slot:hover { background-color: #18284a; }
+.slot:focus-visible { background-color: #18284a; border-color: #ffffff; }
 .slot.empty:hover { background-color: #0b1220; }
 .slot.common    { border-color: #6f8098; }
 .slot.rare      { border-color: #2a7fff; }
@@ -780,7 +791,7 @@ button.choice
     border-radius: 0;
     transition: background-color border-color padding-left 0.15s cubic-out;
 }
-button.choice:hover { background-color: #ff4fd825; border-color: #ff4fd8; padding-left: 18dp; }
+button.choice:hover, button.choice:focus-visible { background-color: #ff4fd825; border-color: #ff4fd8; padding-left: 18dp; }
 button.choice .num { color: #ff4fd8; margin-right: 6dp; }
 .skip-hint { margin-top: 6dp; font-size: 11dp; color: #6f8098; text-align: right; }
 
@@ -824,6 +835,8 @@ tabset panel { display: block; padding: 10dp 4dp; }
 .row input.text { width: 170dp; }
 input.range sliderbar { background-color: #4ef2ff; }
 input.range slidertrack { background-color: #4ef2ff40; }
+input.range:focus-visible sliderbar { background-color: #ffffff; }
+input.range:focus-visible slidertrack { background-color: #4ef2ffa0; }
 .meter { width: 60dp; height: 4dp; margin-left: 10dp; }
 .meter .fill { background-color: #4dff9a; }
 

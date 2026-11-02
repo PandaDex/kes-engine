@@ -17,7 +17,7 @@
         <button class="neon" onclick="open_settings"><span class="idx">02</span>Settings</button>
         <button class="neon" onclick="to_main_menu"><span class="idx">03</span>Main menu</button>
         <button class="neon" onclick="quit"><span class="idx">04</span>Quit to desktop</button>
-        <div class="window-footer">Esc to resume</div>
+        <div class="window-footer"><span class="kbm-only">Esc to resume</span><span class="pad-only">B or Menu to resume</span></div>
     </div>
 </body>
 </rml>

@@ -117,7 +117,8 @@
             "architecture": "x64",
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "cacheVariables": {
-                "KES_PLATFORM": "Windows"
+                "KES_PLATFORM": "Windows",
+                "KES_DEBUG_TOOLS": "OFF"
             },
             "condition": {
                 "type": "equals",
@@ -139,7 +140,8 @@
             "inherits": "linux-base",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "KES_PLATFORM": "Linux"
+                "KES_PLATFORM": "Linux",
+                "KES_DEBUG_TOOLS": "OFF"
             }
         }
     ],

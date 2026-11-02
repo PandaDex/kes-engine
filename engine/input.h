@@ -61,10 +61,21 @@ struct InputBinding
     std::string assignableKey;
 };
 
+// Which input mode an action is read in. Game actions read as idle while game
+// input is off (InputMode::UIOnly); UI actions (menu navigation, see
+// ui_system.h) only read while UI navigation is on. Set with "Context": "UI"
+// in the input map; actions named UI_* default to UI.
+enum class InputActionContext
+{
+    Game,
+    UI
+};
+
 struct InputAction
 {
     std::string name;
     InputActionValueType valueType = InputActionValueType::Boolean;
+    InputActionContext context = InputActionContext::Game;
     std::vector<InputBinding> bindings;
 };
 
@@ -96,7 +107,10 @@ struct InputState
     float mouseDeltaX = 0.0f;
     float mouseDeltaY = 0.0f;
 
+    // Every connected gamepad is opened; `gamepad` is the one used last (the
+    // one bindings read), so any controller can take over at any time.
     SDL_Gamepad* gamepad = nullptr;
+    std::vector<SDL_Gamepad*> gamepads;
 
     std::vector<InputAction> actions;
     std::unordered_map<std::string, InputActionState, InputStringHash, std::equal_to<>> actionStates;
@@ -108,6 +122,14 @@ struct InputState
     bool gameInputEnabled = true;
     bool gameInputWasEnabled = true;   // last InputEvaluateActions: suppresses "pressed" for keys held while re-enabling
     bool mouseLookEnabled = true;
+
+    // Set by the engine / UI system for InputActionContext::UI actions:
+    //   uiActionsEnabled = false -> UI actions read as idle
+    //   uiTextInput      = true  -> their keyboard bindings read as idle (typing
+    //                               into a text field must not navigate)
+    bool uiActionsEnabled = false;
+    bool uiActionsWasEnabled = false;
+    bool uiTextInput = false;
 };
 
 void InputInit(InputState& input);
@@ -120,6 +142,11 @@ void InputEndFrame(InputState& input);
 void InputResetState(InputState& input);
 
 bool InputLoadActionMap(InputState& input, const char* path, std::string* outError = nullptr);
+// Parses input map text and adds the actions the loaded map doesn't define,
+// e.g. engine defaults that projects may override in their own map.
+bool InputAddDefaultActions(InputState& input, std::string_view mapText, std::string* outError = nullptr);
+// True when a keyboard binding of an action in `context` uses `key`.
+bool InputIsKeyBound(const InputState& input, SDL_Scancode key, InputActionContext context);
 void InputEvaluateActions(InputState& input);
 
 bool InputActionDown(const InputState& input, const char* actionName);

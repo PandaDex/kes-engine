@@ -117,6 +117,8 @@ void World::Shutdown()
     KES_ZONE_FN(WORLD);
     EngineLog("World shutdown begin.");
     pendingMapLoad.clear();
+    currentMapName.clear();
+    paused = false;
     ClearLevelState();
     audio.Shutdown();
     assets.Clear();
@@ -129,9 +131,14 @@ void World::Shutdown()
 void World::Update(float dt)
 {
     KES_ZONE_FN(WORLD);
-    scene.GetFog() = {};
-    entities.Update(dt);
-    entities.DestroyPending();
+    // While paused, per-frame scene state that entities set (fog) is kept
+    // as it was, so the paused frame looks the same.
+    if (!paused)
+    {
+        scene.GetFog() = {};
+        entities.Update(dt);
+        entities.DestroyPending();
+    }
     audio.Update(dt);
 
     if (pendingMapLoad.empty())
@@ -145,7 +152,17 @@ void World::Update(float dt)
 void World::FixedUpdate(float fixedDt)
 {
     KES_ZONE_FN(WORLD);
-    entities.FixedUpdate(fixedDt);
+    if (!paused)
+        entities.FixedUpdate(fixedDt);
+}
+
+void World::SetPaused(bool pause)
+{
+    if (paused == pause)
+        return;
+    paused = pause;
+    audio.SetPaused(pause);
+    EngineLogf("World %s.", pause ? "paused" : "resumed");
 }
 
 bool World::LoadMap(const char* mapName)
@@ -156,19 +173,22 @@ bool World::LoadMap(const char* mapName)
 
     CompiledMap map;
     std::string error;
-    if (!LoadCompiledMap(mapName, map, &error))
+    if (!mapName || !mapName[0] || !LoadCompiledMap(mapName, map, &error))
     {
-        EngineLogf("LoadMap failed for %s: %s", mapName ? mapName : "<null>", error.c_str());
-        ClearLevelState();
-        assets.Clear();
+        // The file is read before anything is torn down, so a bad map name
+        // (typo in a trigger, missing pak) leaves the current level playable.
+        EngineLogf("LoadMap failed for %s: %s%s", mapName ? mapName : "<null>", error.c_str(),
+                   currentMapName.empty() ? "" : " Keeping the current level.");
         return false;
     }
 
     ClearLevelState();
     assets.Clear();
     InstantiateMap(map);
+    currentMapName = mapName;
 
-    (void)CreatePlayerEntity();
+    if (!CreatePlayerEntity())
+        EngineLogf("No player entity was created for %s (player class \"%s\").", mapName, playerClassName.c_str());
     entities.StartPending();
     EngineLogf("Map loaded successfully: %s (%zu meshes, %zu brushes, %zu entities, %zu materials).",
                mapName ? mapName : "<null>", map.meshes.size(), map.brushes.size(), map.entities.size(), map.materials.size());
@@ -226,6 +246,11 @@ const Scene& World::GetScene() const
     return scene;
 }
 
+AudioSystem& World::GetAudio()
+{
+    return audio;
+}
+
 AssetSystem& World::GetAssets()
 {
     return assets;
@@ -262,6 +287,7 @@ void World::ClearLevelState()
     entities.DestroyAll();
     collision.Clear();
     scene.Clear();
+    gameContext.activeCameraEntityId = 0;   // the camera entity is gone
     SyncContext();
 }
 

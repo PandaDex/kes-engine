@@ -531,12 +531,14 @@ namespace
         return false;
     }
 
-    bool ParseAction(TextCursor& cursor, const std::string& name, InputAction& action)
+    // `explicitContext` is set when the action has a "Context" field.
+    bool ParseAction(TextCursor& cursor, const std::string& name, InputAction& action, bool& explicitContext)
     {
         if (!Match(cursor, '{'))
             return false;
 
         action.name = name;
+        explicitContext = false;
 
         while (cursor.pos < cursor.text.size())
         {
@@ -562,6 +564,14 @@ namespace
                 if (!ReadQuotedString(cursor, valueType))
                     return false;
                 action.valueType = ValueTypeFromString(valueType);
+            }
+            else if (field == "Context")
+            {
+                std::string context;
+                if (!ReadQuotedString(cursor, context))
+                    return false;
+                action.context = (context == "UI" || context == "ui") ? InputActionContext::UI : InputActionContext::Game;
+                explicitContext = true;
             }
             else if (!SkipValue(cursor))
             {
@@ -636,9 +646,11 @@ namespace
         return value;
     }
 
-    Vector3 ReadBindingValue(const InputState& input, const InputBinding& binding)
+    Vector3 ReadBindingValue(const InputState& input, const InputBinding& binding, InputActionContext context)
     {
-        if (!input.gameInputEnabled)
+        if (context == InputActionContext::Game ? !input.gameInputEnabled : !input.uiActionsEnabled)
+            return {};
+        if (context == InputActionContext::UI && input.uiTextInput && binding.keyKind == InputNativeKeyKind::Keyboard)
             return {};
 
         switch (binding.keyKind)
@@ -716,20 +728,53 @@ namespace
     }
 }
 
+namespace
+{
+    constexpr Sint16 kGamepadActivateAxis = 16000;   // about half tilt
+
+    void OpenGamepad(InputState& input, SDL_JoystickID id)
+    {
+        for (SDL_Gamepad* gamepad : input.gamepads)
+        {
+            if (SDL_GetGamepadID(gamepad) == id)
+                return;
+        }
+        SDL_Gamepad* gamepad = SDL_OpenGamepad(id);
+        if (!gamepad)
+            return;
+        input.gamepads.push_back(gamepad);
+        if (!input.gamepad)
+            input.gamepad = gamepad;
+        const char* name = SDL_GetGamepadName(gamepad);
+        EngineLogf("Gamepad connected: %s", name ? name : "unknown");
+    }
+
+    void MakeGamepadActive(InputState& input, SDL_JoystickID id)
+    {
+        if (input.gamepad && SDL_GetGamepadID(input.gamepad) == id)
+            return;
+        for (SDL_Gamepad* gamepad : input.gamepads)
+        {
+            if (SDL_GetGamepadID(gamepad) == id)
+            {
+                input.gamepad = gamepad;
+                return;
+            }
+        }
+    }
+}
+
 void InputInit(InputState& input)
 {
     KES_ZONE_FN(INPUT);
     input = {};
 
-    const int joystickCount = 0;
-    (void)joystickCount;
-
-    SDL_JoystickID* gamepads = SDL_GetGamepads(nullptr);
-    if (gamepads)
+    int gamepadCount = 0;
+    if (SDL_JoystickID* ids = SDL_GetGamepads(&gamepadCount))
     {
-        if (gamepads[0])
-            input.gamepad = SDL_OpenGamepad(gamepads[0]);
-        SDL_free(gamepads);
+        for (int i = 0; i < gamepadCount; ++i)
+            OpenGamepad(input, ids[i]);
+        SDL_free(ids);
     }
 
     // config/ ships next to the executable (copied by the build and packaging).
@@ -745,11 +790,10 @@ void InputInit(InputState& input)
 
 void InputShutdown(InputState& input)
 {
-    if (input.gamepad)
-    {
-        SDL_CloseGamepad(input.gamepad);
-        input.gamepad = nullptr;
-    }
+    for (SDL_Gamepad* gamepad : input.gamepads)
+        SDL_CloseGamepad(gamepad);
+    input.gamepads.clear();
+    input.gamepad = nullptr;
 }
 
 void InputBeginFrame(InputState& input)
@@ -800,16 +844,32 @@ void InputProcessEvent(InputState& input, const SDL_Event& e)
         break;
 
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!input.gamepad)
-            input.gamepad = SDL_OpenGamepad(e.gdevice.which);
+        OpenGamepad(input, e.gdevice.which);
         break;
 
     case SDL_EVENT_GAMEPAD_REMOVED:
-        if (input.gamepad && SDL_GetGamepadID(input.gamepad) == e.gdevice.which)
+        for (auto it = input.gamepads.begin(); it != input.gamepads.end(); ++it)
         {
-            SDL_CloseGamepad(input.gamepad);
-            input.gamepad = nullptr;
+            if (SDL_GetGamepadID(*it) != e.gdevice.which)
+                continue;
+            if (input.gamepad == *it)
+                input.gamepad = nullptr;
+            SDL_CloseGamepad(*it);
+            input.gamepads.erase(it);
+            break;
         }
+        if (!input.gamepad && !input.gamepads.empty())
+            input.gamepad = input.gamepads.front();
+        break;
+
+    // The controller used last becomes the active one.
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        MakeGamepadActive(input, e.gbutton.which);
+        break;
+
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        if (e.gaxis.value > kGamepadActivateAxis || e.gaxis.value < -kGamepadActivateAxis)
+            MakeGamepadActive(input, e.gaxis.which);
         break;
     }
 }
@@ -829,6 +889,46 @@ void InputResetState(InputState& input)
     input.mouseDeltaY = 0.0f;
 }
 
+namespace
+{
+    bool ParseActionMap(std::string_view text, std::vector<InputAction>& outActions, std::string* outError)
+    {
+        TextCursor cursor = {};
+        cursor.text = std::string(text);
+
+        while (cursor.pos < cursor.text.size())
+        {
+            SkipWhitespaceAndCommas(cursor);
+            if (cursor.pos >= cursor.text.size())
+                break;
+
+            std::string actionName;
+            if (!ReadFieldName(cursor, actionName))
+            {
+                if (outError)
+                    *outError = "Failed to read input action name.";
+                return false;
+            }
+
+            InputAction action = {};
+            bool explicitContext = false;
+            if (!ParseAction(cursor, actionName, action, explicitContext))
+            {
+                if (outError)
+                    *outError = "Failed to parse input action: " + actionName;
+                return false;
+            }
+            // Actions named UI_* are UI actions unless "Context" says otherwise.
+            if (!explicitContext && action.name.rfind("UI_", 0) == 0)
+                action.context = InputActionContext::UI;
+
+            outActions.push_back(std::move(action));
+        }
+
+        return true;
+    }
+}
+
 bool InputLoadActionMap(InputState& input, const char* path, std::string* outError)
 {
     KES_ZONE_FN(INPUT);
@@ -841,39 +941,45 @@ bool InputLoadActionMap(InputState& input, const char* path, std::string* outErr
         return false;
     }
 
-    TextCursor cursor = {};
-    cursor.text = text;
+    std::vector<InputAction> actions;
+    if (!ParseActionMap(text, actions, outError))
+        return false;
 
-    input.actions.clear();
+    input.actions = std::move(actions);
     input.actionStates.clear();
+    for (const InputAction& action : input.actions)
+        input.actionStates[action.name] = {};
+    return true;
+}
 
-    while (cursor.pos < cursor.text.size())
+bool InputAddDefaultActions(InputState& input, std::string_view mapText, std::string* outError)
+{
+    std::vector<InputAction> actions;
+    if (!ParseActionMap(mapText, actions, outError))
+        return false;
+    for (InputAction& action : actions)
     {
-        SkipWhitespaceAndCommas(cursor);
-        if (cursor.pos >= cursor.text.size())
-            break;
-
-        std::string actionName;
-        if (!ReadFieldName(cursor, actionName))
-        {
-            if (outError)
-                *outError = "Failed to read input action name.";
-            return false;
-        }
-
-        InputAction action = {};
-        if (!ParseAction(cursor, actionName, action))
-        {
-            if (outError)
-                *outError = "Failed to parse input action: " + actionName;
-            return false;
-        }
-
+        if (input.actionStates.find(std::string_view(action.name)) != input.actionStates.end())
+            continue;   // the project's map defines it
         input.actionStates[action.name] = {};
         input.actions.push_back(std::move(action));
     }
-
     return true;
+}
+
+bool InputIsKeyBound(const InputState& input, SDL_Scancode key, InputActionContext context)
+{
+    for (const InputAction& action : input.actions)
+    {
+        if (action.context != context)
+            continue;
+        for (const InputBinding& binding : action.bindings)
+        {
+            if (binding.keyKind == InputNativeKeyKind::Keyboard && binding.keyboardKey == key)
+                return true;
+        }
+    }
+    return false;
 }
 
 void InputEvaluateActions(InputState& input)
@@ -881,10 +987,13 @@ void InputEvaluateActions(InputState& input)
     KES_ZONE_FN(INPUT);
     // Keys held while game input was off (e.g. the Escape that closed a menu)
     // read as down when it comes back on, but not as a fresh press.
-    const bool justEnabled = input.gameInputEnabled && !input.gameInputWasEnabled;
+    const bool gameJustEnabled = input.gameInputEnabled && !input.gameInputWasEnabled;
+    const bool uiJustEnabled = input.uiActionsEnabled && !input.uiActionsWasEnabled;
     input.gameInputWasEnabled = input.gameInputEnabled;
+    input.uiActionsWasEnabled = input.uiActionsEnabled;
     for (const InputAction& action : input.actions)
     {
+        const bool justEnabled = action.context == InputActionContext::Game ? gameJustEnabled : uiJustEnabled;
         InputActionState& state = input.actionStates[action.name];
         const bool wasDown = state.down;
 
@@ -892,7 +1001,7 @@ void InputEvaluateActions(InputState& input)
 
         for (const InputBinding& binding : action.bindings)
         {
-            Vector3 value = ReadBindingValue(input, binding);
+            Vector3 value = ReadBindingValue(input, binding, action.context);
             value = ApplyModifiers(value, binding.modifiers);
             accumulated = Add(accumulated, value);
         }

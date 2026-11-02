@@ -1,7 +1,8 @@
 Material {
-    Shader = "shaders/psx_default.shader"
     BaseColor = "0.35,0.45,0.6,1"
     Emissive = "0,0,0"
+    Metallic = 0.8
+    Roughness = 0.35
     AlphaCutoff = 0
     Lit = true
     Transparent = false

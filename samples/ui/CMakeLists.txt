@@ -19,9 +19,10 @@ bundle_runtime_libs(ui_showcase)
 
 # The game's content (startup map, meshes, materials) is copied first so the
 # menus and HUD are drawn over a live 3D scene; the sample's own content/ui
-# goes on top. Input map and default settings come from the game as well.
+# goes on top. config/ is the sample's own: input map (gameplay + UI
+# actions), game settings and DefaultUi.ini.
 kes_add_game(ui_showcase
     CONTENT_DIR        "${CMAKE_CURRENT_SOURCE_DIR}/content"
-    CONFIG_DIR         "${CMAKE_SOURCE_DIR}/game/config"
+    CONFIG_DIR         "${CMAKE_CURRENT_SOURCE_DIR}/config"
     GDK_DIR            "${CMAKE_CURRENT_SOURCE_DIR}/platform/gdk"
     NO_PACKAGE)

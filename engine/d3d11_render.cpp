@@ -5,8 +5,6 @@
 #include <cstddef>
 #include <cstring>
 #include <dxgi1_5.h>
-#include <fstream>
-#include <sstream>
 #include "file_paths.h"
 #include "animation_pose.h"
 #include "scene.h"
@@ -28,144 +26,9 @@
 namespace kes::d3d11
 {
 
-static float Clamp01(float v)
-{
-    if (v < 0.0f) return 0.0f;
-    if (v > 1.0f) return 1.0f;
-    return v;
-}
+using render::Matrix4;
 
-struct float3
-{
-    float x, y, z;
-};
-
-struct float4x4
-{
-    float m[4][4];
-};
-
-static constexpr float kCameraFovYRadians = 70.0f * 3.14159265f / 180.0f;
-
-static float3 Normalize(const float3& v)
-{
-    const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-    if (len <= 0.00001f)
-        return { 0.0f, 0.0f, 1.0f };
-    return { v.x / len, v.y / len, v.z / len };
-}
-
-static float4x4 Identity()
-{
-    float4x4 r = {};
-    r.m[0][0] = 1.0f;
-    r.m[1][1] = 1.0f;
-    r.m[2][2] = 1.0f;
-    r.m[3][3] = 1.0f;
-    return r;
-}
-
-static float4x4 Multiply(const float4x4& a, const float4x4& b)
-{
-    float4x4 r = {};
-    for (int row = 0; row < 4; ++row)
-    {
-        for (int col = 0; col < 4; ++col)
-        {
-            r.m[row][col] =
-                a.m[row][0] * b.m[0][col] +
-                a.m[row][1] * b.m[1][col] +
-                a.m[row][2] * b.m[2][col] +
-                a.m[row][3] * b.m[3][col];
-        }
-    }
-    return r;
-}
-
-static float4x4 RotationX(float a)
-{
-    float4x4 r = Identity();
-    const float c = std::cos(a);
-    const float s = std::sin(a);
-
-    r.m[1][1] = c;
-    r.m[1][2] = s;
-    r.m[2][1] = -s;
-    r.m[2][2] = c;
-    return r;
-}
-
-static float4x4 RotationY(float a)
-{
-    float4x4 r = Identity();
-    const float c = std::cos(a);
-    const float s = std::sin(a);
-
-    r.m[0][0] = c;
-    r.m[0][2] = -s;
-    r.m[2][0] = s;
-    r.m[2][2] = c;
-    return r;
-}
-
-static float4x4 RotationZ(float a)
-{
-    float4x4 r = Identity();
-    const float c = std::cos(a);
-    const float s = std::sin(a);
-    r.m[0][0] = c;
-    r.m[0][1] = s;
-    r.m[1][0] = -s;
-    r.m[1][1] = c;
-    return r;
-}
-
-static float4x4 Scale(float x, float y, float z)
-{
-    float4x4 r = Identity();
-    r.m[0][0] = x;
-    r.m[1][1] = y;
-    r.m[2][2] = z;
-    return r;
-}
-
-static float4x4 Translation(float x, float y, float z)
-{
-    float4x4 r = Identity();
-    r.m[3][0] = x;
-    r.m[3][1] = y;
-    r.m[3][2] = z;
-    return r;
-}
-
-static float4x4 PerspectiveFovLH(float fovY, float aspect, float zn, float zf)
-{
-    float4x4 r = {};
-    const float yScale = 1.0f / std::tan(fovY * 0.5f);
-    const float xScale = yScale / aspect;
-
-    r.m[0][0] = xScale;
-    r.m[1][1] = yScale;
-    r.m[2][2] = zf / (zf - zn);
-    r.m[2][3] = 1.0f;
-    r.m[3][2] = (-zn * zf) / (zf - zn);
-    return r;
-}
-
-struct MaterialCBData
-{
-    float baseColor[4];
-    float emissiveColorAndCutoff[4];
-    uint32_t flags[4];
-};
-
-struct ModelCBData
-{
-    float worldViewProj[16];
-    float world[16];
-    float skinMatrices[SceneObject::MaxSkinMatrices * 16];
-    float skinInfo[4];
-};
+static constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 struct RenderVertex
 {
@@ -176,66 +39,6 @@ struct RenderVertex
     uint16_t boneIndices[4];
     float boneWeights[4];
 };
-
-struct GPULight
-{
-    float position[4];  // w = range
-    float color[4];     // w = intensity
-    float direction[4]; // w = spotCosAngle
-    uint32_t type;      // 0=Dir, 1=Point, 2=Spot
-    uint32_t active;
-    float padding[2];
-};
-
-struct SceneCBData
-{
-    float viewProj[16];
-    float ambient[4];
-    float snapParams[4];
-    GPULight lights[8];
-    float fogColor[4];
-    float fogParams[4];
-};
-
-struct SkyCBData
-{
-    float topColor[4];
-    float horizonColor[4];
-    float bottomColor[4];
-    float sunColor[4];
-    float sunDirection[4];
-    float cameraForward[4];
-    float cameraRight[4];
-    float cameraUp[4];
-    float projectionParams[4];
-    float skyParams[4];
-};
-
-static void MatrixToArrayRowMajor(const float4x4& m, float out[16])
-{
-    int i = 0;
-    for (int row = 0; row < 4; ++row)
-    {
-        for (int col = 0; col < 4; ++col)
-        {
-            out[i++] = m.m[row][col];
-        }
-    }
-}
-
-static float4x4 ArrayToMatrix(const float in[16])
-{
-    float4x4 m = {};
-    int i = 0;
-    for (int row = 0; row < 4; ++row)
-    {
-        for (int col = 0; col < 4; ++col)
-        {
-            m.m[row][col] = in[i++];
-        }
-    }
-    return m;
-}
 
 template<typename T>
 static void SafeRelease(T*& p)
@@ -253,9 +56,16 @@ static void DestroyGPUTexture(GPUTexture& texture)
     SafeRelease(texture.texture);
 }
 
-static bool CreateWhiteTexture(Renderer& r);
-static bool CreateTextureFromFile(Renderer& r, const char* path, GPUTexture& outTexture);
-static ID3D11ShaderResourceView* GetMaterialTextureSRV(Renderer& r, const MaterialData* material);
+static void DestroyShadowArray(GPUShadowArray& shadows)
+{
+    for (ID3D11DepthStencilView*& view : shadows.sliceViews)
+        SafeRelease(view);
+    shadows.sliceViews.clear();
+    SafeRelease(shadows.srv);
+    SafeRelease(shadows.texture);
+    shadows.resolution = 0;
+}
+
 static void DestroyRendererAssetCaches(Renderer& r);
 static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelHandle handle, const AssetSystem& assets);
 
@@ -331,18 +141,96 @@ static bool CreateShaderPairFromBinaries(
     return true;
 }
 
-static void DestroyRenderTargets(Renderer& r)
+// Render targets
+
+static void DestroySceneTargets(Renderer& r)
 {
-    SafeRelease(r.offscreenSRV);
-    SafeRelease(r.offscreenRTV);
-    SafeRelease(r.offscreenColor);
+    SafeRelease(r.sceneColorSRV);
+    SafeRelease(r.sceneColorRTV);
+    SafeRelease(r.sceneColor);
+    SafeRelease(r.sceneColorMSRTV);
+    SafeRelease(r.sceneColorMS);
     SafeRelease(r.dsv);
     SafeRelease(r.depthTexture);
+}
+
+static void DestroySwapchainTargets(Renderer& r)
+{
     SafeRelease(r.rtv);
     SafeRelease(r.backBuffer);
 }
 
-static bool CreateRenderTargets(Renderer& r)
+// Largest supported sample count <= requested (1, 2, 4, 8).
+static int ChooseMsaaSamples(Renderer& r, int requested)
+{
+    for (int samples = std::clamp(requested, 1, 8); samples > 1; samples /= 2)
+    {
+        UINT colorQuality = 0, depthQuality = 0;
+        if (SUCCEEDED(r.device->CheckMultisampleQualityLevels(kSceneColorFormat, samples, &colorQuality)) &&
+            SUCCEEDED(r.device->CheckMultisampleQualityLevels(DXGI_FORMAT_D24_UNORM_S8_UINT, samples, &depthQuality)) &&
+            colorQuality > 0 && depthQuality > 0)
+            return samples;
+    }
+    return 1;
+}
+
+static bool CreateSceneTargets(Renderer& r)
+{
+    r.msaaSamples = ChooseMsaaSamples(r, r.options.msaaSamples);
+    const UINT width = static_cast<UINT>(std::max(r.renderWidth, 1));
+    const UINT height = static_cast<UINT>(std::max(r.renderHeight, 1));
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = kSceneColorFormat;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    HRESULT hr = r.device->CreateTexture2D(&desc, nullptr, &r.sceneColor);
+    if (SUCCEEDED(hr))
+        hr = r.device->CreateRenderTargetView(r.sceneColor, nullptr, &r.sceneColorRTV);
+    if (SUCCEEDED(hr))
+        hr = r.device->CreateShaderResourceView(r.sceneColor, nullptr, &r.sceneColorSRV);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create HDR scene target failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+
+    if (r.msaaSamples > 1)
+    {
+        D3D11_TEXTURE2D_DESC msDesc = desc;
+        msDesc.SampleDesc.Count = static_cast<UINT>(r.msaaSamples);
+        msDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        hr = r.device->CreateTexture2D(&msDesc, nullptr, &r.sceneColorMS);
+        if (SUCCEEDED(hr))
+            hr = r.device->CreateRenderTargetView(r.sceneColorMS, nullptr, &r.sceneColorMSRTV);
+        if (FAILED(hr))
+        {
+            EngineLogf("Create MSAA scene target failed: 0x%08X", static_cast<unsigned>(hr));
+            return false;
+        }
+    }
+
+    D3D11_TEXTURE2D_DESC depthDesc = desc;
+    depthDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    depthDesc.SampleDesc.Count = static_cast<UINT>(r.msaaSamples);
+    depthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    hr = r.device->CreateTexture2D(&depthDesc, nullptr, &r.depthTexture);
+    if (SUCCEEDED(hr))
+        hr = r.device->CreateDepthStencilView(r.depthTexture, nullptr, &r.dsv);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create depth target failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+    return true;
+}
+
+static bool CreateSwapchainTargets(Renderer& r)
 {
     HRESULT hr = r.swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&r.backBuffer);
     if (FAILED(hr))
@@ -357,62 +245,67 @@ static bool CreateRenderTargets(Renderer& r)
         EngineLogf("CreateRenderTargetView failed: 0x%08X", static_cast<unsigned>(hr));
         return false;
     }
-
-    D3D11_TEXTURE2D_DESC depthDesc = {};
-    depthDesc.Width = static_cast<UINT>(r.renderWidth);
-    depthDesc.Height = static_cast<UINT>(r.renderHeight);
-    depthDesc.MipLevels = 1;
-    depthDesc.ArraySize = 1;
-    depthDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-    depthDesc.SampleDesc.Count = 1;
-    depthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-
-    hr = r.device->CreateTexture2D(&depthDesc, nullptr, &r.depthTexture);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create depth texture failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    hr = r.device->CreateDepthStencilView(r.depthTexture, nullptr, &r.dsv);
-    if (FAILED(hr))
-    {
-        EngineLogf("CreateDepthStencilView failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    D3D11_TEXTURE2D_DESC offDesc = {};
-    offDesc.Width = static_cast<UINT>(r.renderWidth);
-    offDesc.Height = static_cast<UINT>(r.renderHeight);
-    offDesc.MipLevels = 1;
-    offDesc.ArraySize = 1;
-    offDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    offDesc.SampleDesc.Count = 1;
-    offDesc.Usage = D3D11_USAGE_DEFAULT;
-    offDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-
-    hr = r.device->CreateTexture2D(&offDesc, nullptr, &r.offscreenColor);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create offscreen texture failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    hr = r.device->CreateRenderTargetView(r.offscreenColor, nullptr, &r.offscreenRTV);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create offscreen RTV failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    hr = r.device->CreateShaderResourceView(r.offscreenColor, nullptr, &r.offscreenSRV);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create offscreen SRV failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
     return true;
+}
+
+static bool CreateShadowArray(Renderer& r, GPUShadowArray& shadows, int slices, int resolution, const char* name)
+{
+    DestroyShadowArray(shadows);
+    if (slices <= 0 || resolution <= 0)
+        return true;
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = static_cast<UINT>(resolution);
+    desc.Height = static_cast<UINT>(resolution);
+    desc.MipLevels = 1;
+    desc.ArraySize = static_cast<UINT>(slices);
+    desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+    HRESULT hr = r.device->CreateTexture2D(&desc, nullptr, &shadows.texture);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create %s shadow maps failed (%d x %d): 0x%08X", name, slices, resolution, static_cast<unsigned>(hr));
+        return false;
+    }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Texture2DArray.MipLevels = 1;
+    srvDesc.Texture2DArray.ArraySize = static_cast<UINT>(slices);
+    hr = r.device->CreateShaderResourceView(shadows.texture, &srvDesc, &shadows.srv);
+    if (FAILED(hr))
+    {
+        DestroyShadowArray(shadows);
+        return false;
+    }
+
+    shadows.sliceViews.resize(static_cast<size_t>(slices), nullptr);
+    for (int slice = 0; slice < slices; ++slice)
+    {
+        D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+        dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+        dsvDesc.Texture2DArray.FirstArraySlice = static_cast<UINT>(slice);
+        dsvDesc.Texture2DArray.ArraySize = 1;
+        hr = r.device->CreateDepthStencilView(shadows.texture, &dsvDesc, &shadows.sliceViews[slice]);
+        if (FAILED(hr))
+        {
+            DestroyShadowArray(shadows);
+            return false;
+        }
+    }
+    shadows.resolution = resolution;
+    return true;
+}
+
+static bool CreateShadowTargets(Renderer& r)
+{
+    const render::ShadowConfig config = render::GetShadowConfig(r.options.shadowQuality);
+    return CreateShadowArray(r, r.cascadeShadows, config.cascadeCount, config.cascadeResolution, "cascade") &&
+           CreateShadowArray(r, r.localShadows, config.localSlices, config.localResolution, "local");
 }
 
 static bool CreateDeviceAndSwapChain(Renderer& r, SDL_Window* window)
@@ -542,85 +435,45 @@ static bool CreateDeviceAndSwapChain(Renderer& r, SDL_Window* window)
     return true;
 }
 
+// Fixed state objects
+
 static bool CreateRasterizerStates(Renderer& r)
 {
     D3D11_RASTERIZER_DESC solid = {};
     solid.FillMode = D3D11_FILL_SOLID;
     solid.CullMode = D3D11_CULL_BACK;
     solid.DepthClipEnable = TRUE;
-
-    HRESULT hr = r.device->CreateRasterizerState(&solid, &r.solidRS);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create solid rasterizer failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
+    solid.MultisampleEnable = TRUE;
 
     D3D11_RASTERIZER_DESC solidNoCull = solid;
     solidNoCull.CullMode = D3D11_CULL_NONE;
-
-    hr = r.device->CreateRasterizerState(&solidNoCull, &r.solidNoCullRS);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create solid no-cull rasterizer failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
     D3D11_RASTERIZER_DESC wire = solid;
     wire.FillMode = D3D11_FILL_WIREFRAME;
-
-    hr = r.device->CreateRasterizerState(&wire, &r.wireRS);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create wire rasterizer failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
     D3D11_RASTERIZER_DESC wireNoCull = wire;
     wireNoCull.CullMode = D3D11_CULL_NONE;
 
-    hr = r.device->CreateRasterizerState(&wireNoCull, &r.wireNoCullRS);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create wire no-cull rasterizer failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
+    // Shadows: both faces (open brushes, foliage), slope-scaled bias against acne.
+    D3D11_RASTERIZER_DESC shadow = {};
+    shadow.FillMode = D3D11_FILL_SOLID;
+    shadow.CullMode = D3D11_CULL_NONE;
+    shadow.DepthClipEnable = TRUE;
+    shadow.DepthBias = 1000;
+    shadow.SlopeScaledDepthBias = 2.0f;
+    shadow.DepthBiasClamp = 0.01f;
 
+    const struct { const D3D11_RASTERIZER_DESC* desc; ID3D11RasterizerState** state; } states[] = {
+        { &solid, &r.solidRS }, { &solidNoCull, &r.solidNoCullRS }, { &wire, &r.wireRS },
+        { &wireNoCull, &r.wireNoCullRS }, { &shadow, &r.shadowRS } };
+    for (const auto& entry : states)
+    {
+        const HRESULT hr = r.device->CreateRasterizerState(entry.desc, entry.state);
+        if (FAILED(hr))
+        {
+            EngineLogf("Create rasterizer state failed: 0x%08X", static_cast<unsigned>(hr));
+            return false;
+        }
+    }
     return true;
-}
-
-static bool CreateSkyPipeline(Renderer& r)
-{
-    return CreateShaderPairFromBinaries(r, kEngineShaderSky, kEngineShaderSky, &r.skyVS, &r.skyPS, nullptr);
-}
-
-static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle handle, const AssetSystem& assets)
-{
-    if (handle == 0)
-        return nullptr;
-
-    auto it = r.gpuShaders.find(handle);
-    if (it != r.gpuShaders.end())
-        return &it->second;
-
-    KES_ZONE(RENDER, "Compile shader program (cache miss)");
-    const ShaderData* shader = assets.GetShader(handle);
-    if (!shader)
-        return nullptr;
-
-    // Stages a .shader asset doesn't provide fall back to the engine's fog-capable mesh program.
-    const std::string vs = shader->vertexShaderFile.empty() ? std::string(kEngineShaderMeshFallback) : shader->vertexShaderFile;
-    const std::string ps = shader->pixelShaderFile.empty() ? std::string(kEngineShaderMeshFallback) : shader->pixelShaderFile;
-
-    GPUShaderProgram program = {};
-    if (!CreateShaderPairFromBinaries(r, vs, ps, &program.vertexShader, &program.pixelShader, &program.inputLayout))
-    {
-        EngineLogf("Failed to create shader program for \"%s\".", shader->name.c_str());
-        return nullptr;
-    }
-
-    auto inserted = r.gpuShaders.emplace(handle, program);
-    return &inserted.first->second;
 }
 
 static bool CreateBlendStates(Renderer& r)
@@ -683,33 +536,97 @@ static bool CreateDepthStates(Renderer& r)
     return true;
 }
 
-static bool CreateSampler(Renderer& r)
+static bool CreateMaterialSampler(Renderer& r)
 {
+    SafeRelease(r.materialSampler);
+    const int anisotropy = std::clamp(r.options.anisotropy, 1, 16);
     D3D11_SAMPLER_DESC samp = {};
-    samp.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-    samp.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samp.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samp.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samp.Filter = anisotropy > 1 ? D3D11_FILTER_ANISOTROPIC : D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    samp.MaxAnisotropy = static_cast<UINT>(anisotropy);
+    samp.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    samp.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    samp.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
     samp.MaxLOD = D3D11_FLOAT32_MAX;
-
-    HRESULT hr = r.device->CreateSamplerState(&samp, &r.pointSampler);
+    const HRESULT hr = r.device->CreateSamplerState(&samp, &r.materialSampler);
     if (FAILED(hr))
     {
-        EngineLogf("CreateSamplerState failed: 0x%08X", static_cast<unsigned>(hr));
+        EngineLogf("Create material sampler failed: 0x%08X", static_cast<unsigned>(hr));
         return false;
     }
-
     return true;
 }
 
-static bool CreateMeshPipeline(Renderer& r)
+static bool CreateSamplers(Renderer& r)
 {
-    return CreateShaderPairFromBinaries(r, kEngineShaderMeshDefault, kEngineShaderMeshDefault, &r.meshVS, &r.meshPS, &r.meshLayout);
+    if (!CreateMaterialSampler(r))
+        return false;
+
+    D3D11_SAMPLER_DESC linear = {};
+    linear.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    linear.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    linear.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    linear.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    linear.MaxLOD = D3D11_FLOAT32_MAX;
+    HRESULT hr = r.device->CreateSamplerState(&linear, &r.linearClampSampler);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create linear sampler failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+
+    // PCF: bilinear depth comparison; outside the map counts as lit.
+    D3D11_SAMPLER_DESC shadow = {};
+    shadow.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    shadow.AddressU = D3D11_TEXTURE_ADDRESS_BORDER;
+    shadow.AddressV = D3D11_TEXTURE_ADDRESS_BORDER;
+    shadow.AddressW = D3D11_TEXTURE_ADDRESS_BORDER;
+    shadow.BorderColor[0] = shadow.BorderColor[1] = shadow.BorderColor[2] = shadow.BorderColor[3] = 1.0f;
+    shadow.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+    shadow.MaxLOD = D3D11_FLOAT32_MAX;
+    hr = r.device->CreateSamplerState(&shadow, &r.shadowSampler);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create shadow sampler failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+    return true;
 }
 
-static bool CreateBlitPipeline(Renderer& r)
+static bool CreatePipelines(Renderer& r)
 {
-    return CreateShaderPairFromBinaries(r, kEngineShaderBlit, kEngineShaderBlit, &r.blitVS, &r.blitPS, nullptr);
+    return CreateShaderPairFromBinaries(r, kEngineShaderMeshDefault, kEngineShaderMeshDefault, &r.meshVS, &r.meshPS, &r.meshLayout) &&
+           CreateShaderPairFromBinaries(r, kEngineShaderShadow, kEngineShaderShadow, &r.shadowVS, &r.shadowPS, nullptr) &&
+           CreateShaderPairFromBinaries(r, kEngineShaderSky, kEngineShaderSky, &r.skyVS, &r.skyPS, nullptr) &&
+           CreateShaderPairFromBinaries(r, kEngineShaderBlit, kEngineShaderBlit, &r.tonemapVS, &r.tonemapPS, nullptr);
+}
+
+static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle handle, const AssetSystem& assets)
+{
+    if (handle == 0)
+        return nullptr;
+
+    auto it = r.gpuShaders.find(handle);
+    if (it != r.gpuShaders.end())
+        return &it->second;
+
+    KES_ZONE(RENDER, "Compile shader program (cache miss)");
+    const ShaderData* shader = assets.GetShader(handle);
+    if (!shader)
+        return nullptr;
+
+    // Stages a .shader asset doesn't provide fall back to the engine's template program.
+    const std::string vs = shader->vertexShaderFile.empty() ? std::string(kEngineShaderMeshFallback) : shader->vertexShaderFile;
+    const std::string ps = shader->pixelShaderFile.empty() ? std::string(kEngineShaderMeshFallback) : shader->pixelShaderFile;
+
+    GPUShaderProgram program = {};
+    if (!CreateShaderPairFromBinaries(r, vs, ps, &program.vertexShader, &program.pixelShader, &program.inputLayout))
+    {
+        EngineLogf("Failed to create shader program for \"%s\".", shader->name.c_str());
+        return nullptr;
+    }
+
+    auto inserted = r.gpuShaders.emplace(handle, program);
+    return &inserted.first->second;
 }
 
 static bool CreateUiPipeline(Renderer& r)
@@ -757,19 +674,6 @@ static bool CreateUiPipeline(Renderer& r)
         EngineLogf("Create UI rasterizer state failed: 0x%08X", static_cast<unsigned>(hr));
         return false;
     }
-
-    D3D11_SAMPLER_DESC samp = {};
-    samp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    samp.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samp.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samp.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samp.MaxLOD = D3D11_FLOAT32_MAX;
-    hr = r.device->CreateSamplerState(&samp, &r.linearSampler);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create UI sampler failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
     return true;
 }
 
@@ -812,48 +716,29 @@ static bool UploadDynamic(Renderer& r, ID3D11Buffer* buffer, const void* data, s
 
 static bool CreateConstantBuffers(Renderer& r)
 {
-    D3D11_BUFFER_DESC cb = {};
-    cb.Usage = D3D11_USAGE_DEFAULT;
-    cb.ByteWidth = sizeof(SceneCBData);
-    cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-
-    HRESULT hr = r.device->CreateBuffer(&cb, nullptr, &r.sceneCB);
-    if (FAILED(hr))
+    const struct { UINT size; ID3D11Buffer** buffer; bool dynamic; } buffers[] = {
+        { sizeof(render::SceneCBData), &r.sceneCB, false },
+        { sizeof(render::SkyCBData), &r.skyCB, false },
+        // Model constants change every draw: dynamic, written with
+        // MAP_WRITE_DISCARD so only the used part of the 8 KB block is touched.
+        { sizeof(render::ModelCBData), &r.modelCB, true },
+        { sizeof(render::MaterialCBData), &r.materialCB, false },
+        { sizeof(render::TonemapCBData), &r.tonemapCB, true },
+    };
+    for (const auto& entry : buffers)
     {
-        EngineLogf("Create scene constant buffer failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
+        D3D11_BUFFER_DESC cb = {};
+        cb.ByteWidth = entry.size;
+        cb.Usage = entry.dynamic ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_DEFAULT;
+        cb.CPUAccessFlags = entry.dynamic ? D3D11_CPU_ACCESS_WRITE : 0;
+        cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        const HRESULT hr = r.device->CreateBuffer(&cb, nullptr, entry.buffer);
+        if (FAILED(hr))
+        {
+            EngineLogf("Create constant buffer (%u bytes) failed: 0x%08X", entry.size, static_cast<unsigned>(hr));
+            return false;
+        }
     }
-
-    cb.ByteWidth = sizeof(SkyCBData);
-    hr = r.device->CreateBuffer(&cb, nullptr, &r.skyCB);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create sky constant buffer failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    // Model constants change every draw: dynamic buffer written with
-    // MAP_WRITE_DISCARD so only the used part of the 8 KB block is touched.
-    cb.ByteWidth = sizeof(ModelCBData);
-    cb.Usage = D3D11_USAGE_DYNAMIC;
-    cb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    hr = r.device->CreateBuffer(&cb, nullptr, &r.modelCB);
-    cb.Usage = D3D11_USAGE_DEFAULT;
-    cb.CPUAccessFlags = 0;
-    if (FAILED(hr))
-    {
-        EngineLogf("Create model constant buffer failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    cb.ByteWidth = sizeof(MaterialCBData);
-    hr = r.device->CreateBuffer(&cb, nullptr, &r.materialCB);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create material constant buffer failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
     return true;
 }
 
@@ -891,242 +776,176 @@ static D3D11_VIEWPORT BuildPresentationViewport(const Renderer& r)
     return vp;
 }
 
-bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
+// Textures
+
+static bool CreateTexture2D(Renderer& r, const std::vector<render::MipLevel>& levels, DXGI_FORMAT format, GPUTexture& out)
 {
-    r.windowWidth = config.windowWidth;
-    r.windowHeight = config.windowHeight;
-    r.renderWidth = config.renderWidth;
-    r.renderHeight = config.renderHeight;
-    r.preservePresentationAspect = config.preservePresentationAspect;
-    r.preferIntegerPresentationScale = config.preferIntegerPresentationScale;
-    r.vsync = config.vsync;
+    if (levels.empty())
+        return false;
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = levels[0].width;
+    desc.Height = levels[0].height;
+    desc.MipLevels = static_cast<UINT>(levels.size());
+    desc.ArraySize = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-    if (!CreateDeviceAndSwapChain(r, window))
+    std::vector<D3D11_SUBRESOURCE_DATA> init(levels.size());
+    for (size_t i = 0; i < levels.size(); ++i)
     {
-        RendererShutdown(r);
+        init[i].pSysMem = levels[i].pixels.data();
+        init[i].SysMemPitch = levels[i].width * 4u;
+    }
+    HRESULT hr = r.device->CreateTexture2D(&desc, init.data(), &out.texture);
+    if (SUCCEEDED(hr))
+        hr = r.device->CreateShaderResourceView(out.texture, nullptr, &out.srv);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create texture failed (%ux%u): 0x%08X", desc.Width, desc.Height, static_cast<unsigned>(hr));
+        DestroyGPUTexture(out);
         return false;
     }
-
-#if KES_PROFILE_GPU
-    r.gpuProfiler = TracyD3D11Context(r.device, r.context);
-    TracyD3D11ContextName(r.gpuProfiler, "D3D11", 5);
-#endif
-
-    if (!CreateRenderTargets(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateMeshPipeline(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateSkyPipeline(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateUiPipeline(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-    if (!CreateBlitPipeline(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateConstantBuffers(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateRasterizerStates(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateBlendStates(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateDepthStates(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateSampler(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    if (!CreateWhiteTexture(r))
-    {
-        RendererShutdown(r);
-        return false;
-    }
-
-    EngineLogf("Renderer initialized successfully. window=%dx%d render=%dx%d.", r.windowWidth, r.windowHeight, r.renderWidth, r.renderHeight);
     return true;
 }
 
 static bool CreateWhiteTexture(Renderer& r)
 {
     const uint32_t pixel = 0xFFFFFFFFu;
-
-    D3D11_TEXTURE2D_DESC desc = {};
-    desc.Width = 1;
-    desc.Height = 1;
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_IMMUTABLE;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-    D3D11_SUBRESOURCE_DATA init = {};
-    init.pSysMem = &pixel;
-    init.SysMemPitch = sizeof(pixel);
-
-    HRESULT hr = r.device->CreateTexture2D(&desc, &init, &r.whiteTexture.texture);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create white texture failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    hr = r.device->CreateShaderResourceView(r.whiteTexture.texture, nullptr, &r.whiteTexture.srv);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create white texture SRV failed: 0x%08X", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    return true;
+    std::vector<render::MipLevel> levels(1);
+    levels[0].width = levels[0].height = 1;
+    levels[0].pixels.assign(reinterpret_cast<const uint8_t*>(&pixel), reinterpret_cast<const uint8_t*>(&pixel) + 4);
+    return CreateTexture2D(r, levels, DXGI_FORMAT_R8G8B8A8_UNORM, r.whiteTexture);
 }
 
-static bool CreateTextureFromFile(Renderer& r, const char* path, GPUTexture& outTexture)
+// Material texture with mips, in the color space its slot needs. Failed loads
+// are cached as empty so they aren't retried every frame.
+static ID3D11ShaderResourceView* GetMaterialTexture(Renderer& r, const std::string& path, render::TextureUsage usage)
 {
-    KES_ZONE_FN(RENDER);
-    KES_ZONE_TEXTF(RENDER, "%s", path ? path : "<null>");
-    TextureFileData textureFile = {};
-    std::string error;
-    if (!LoadTextureFile(path, textureFile, &error))
-    {
-        EngineLogf("LoadTextureFile failed for %s: %s", path ? path : "<null>", error.c_str());
-        return false;
-    }
-
-    D3D11_TEXTURE2D_DESC desc = {};
-    desc.Width = textureFile.width;
-    desc.Height = textureFile.height;
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = (textureFile.flags & TextureFileFlag_Srgb) != 0 ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_IMMUTABLE;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-    D3D11_SUBRESOURCE_DATA init = {};
-    init.pSysMem = textureFile.pixels.data();
-    init.SysMemPitch = textureFile.width * 4u;
-
-    HRESULT hr = r.device->CreateTexture2D(&desc, &init, &outTexture.texture);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create texture failed for %s: 0x%08X", path ? path : "<null>", static_cast<unsigned>(hr));
-        return false;
-    }
-
-    hr = r.device->CreateShaderResourceView(outTexture.texture, nullptr, &outTexture.srv);
-    if (FAILED(hr))
-    {
-        EngineLogf("Create texture SRV failed for %s: 0x%08X", path ? path : "<null>", static_cast<unsigned>(hr));
-        DestroyGPUTexture(outTexture);
-        return false;
-    }
-
-    return true;
-}
-
-static ID3D11ShaderResourceView* GetMaterialTextureSRV(Renderer& r, const MaterialData* material)
-{
-    if (!material || material->baseTexturePath.empty())
-        return r.whiteTexture.srv;
-
-    const std::string resolvedPath = ResolveAssetPath(material->baseTexturePath.c_str());
-    auto it = r.gpuTextures.find(resolvedPath);
+    if (path.empty())
+        return nullptr;
+    const std::string key = std::to_string(static_cast<int>(usage)) + "|" + path;
+    auto it = r.gpuTextures.find(key);
     if (it != r.gpuTextures.end())
-        return it->second.srv ? it->second.srv : r.whiteTexture.srv;
+        return it->second.srv;
 
+    KES_ZONE(RENDER, "Load material texture (cache miss)");
+    KES_ZONE_TEXTF(RENDER, "%s", path.c_str());
     GPUTexture texture = {};
-    if (!CreateTextureFromFile(r, resolvedPath.c_str(), texture))
+    TextureFileData file = {};
+    std::string error;
+    if (LoadTextureFile(path.c_str(), file, &error) && file.pixels.size() >= static_cast<size_t>(file.width) * file.height * 4u)
     {
-        r.gpuTextures.emplace(resolvedPath, GPUTexture{});
-        return r.whiteTexture.srv;
+        std::vector<render::MipLevel> levels;
+        render::GenerateMips(file.pixels.data(), file.width, file.height, usage, levels);
+        const DXGI_FORMAT format = usage == render::TextureUsage::Color ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+        CreateTexture2D(r, levels, format, texture);
     }
-
-    auto inserted = r.gpuTextures.emplace(resolvedPath, texture);
-    return inserted.first->second.srv ? inserted.first->second.srv : r.whiteTexture.srv;
+    else
+    {
+        EngineLogf("LoadTextureFile failed for %s: %s", path.c_str(), error.c_str());
+    }
+    return r.gpuTextures.emplace(key, texture).first->second.srv;
 }
 
-bool RendererResize(Renderer& r, int width, int height)
+// Binds the material's five textures (white where missing) and returns the
+// Has*Texture flags for the shader.
+static uint32_t BindMaterialTextures(Renderer& r, const MaterialData* material)
 {
-    KES_ZONE_FN(RENDER);
-    if (!r.swapChain || width <= 0 || height <= 0)
-        return false;
+    ID3D11ShaderResourceView* views[render::kMaterialTextureCount] = {};
+    uint32_t flags = 0;
+    if (material)
+    {
+        const struct { const std::string* path; render::TextureUsage usage; uint32_t flag; } slots[render::kMaterialTextureCount] = {
+            { &material->baseTexturePath, render::TextureUsage::Color, MaterialFlag_HasBaseTexture },
+            { &material->normalTexturePath, render::TextureUsage::Normal, MaterialFlag_HasNormalTexture },
+            { &material->metallicRoughnessTexturePath, render::TextureUsage::Linear, MaterialFlag_HasMetallicRoughnessTexture },
+            { &material->occlusionTexturePath, render::TextureUsage::Linear, MaterialFlag_HasOcclusionTexture },
+            { &material->emissiveTexturePath, render::TextureUsage::Color, MaterialFlag_HasEmissiveTexture },
+        };
+        for (int i = 0; i < render::kMaterialTextureCount; ++i)
+        {
+            views[i] = GetMaterialTexture(r, *slots[i].path, slots[i].usage);
+            if (views[i])
+                flags |= slots[i].flag;
+        }
+    }
+    for (ID3D11ShaderResourceView*& view : views)
+    {
+        if (!view)
+            view = r.whiteTexture.srv;
+    }
+    r.context->PSSetShaderResources(0, render::kMaterialTextureCount, views);
+    return flags;
+}
 
-    r.windowWidth = width;
-    r.windowHeight = height;
+static bool UploadEnvironment(Renderer& r)
+{
+    DestroyGPUTexture(r.environmentMap);
+    const render::EnvironmentMaps& env = r.environment;
 
-    r.context->OMSetRenderTargets(0, nullptr, nullptr);
-    DestroyRenderTargets(r);
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = static_cast<UINT>(env.faceSize);
+    desc.Height = static_cast<UINT>(env.faceSize);
+    desc.MipLevels = static_cast<UINT>(env.mipCount);
+    desc.ArraySize = 6;
+    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
 
-    HRESULT hr = r.swapChain->ResizeBuffers(
-        0,
-        static_cast<UINT>(width),
-        static_cast<UINT>(height),
-        DXGI_FORMAT_UNKNOWN,
-        r.swapChainFlags);   // must match the creation flags (ALLOW_TEARING)
-
+    std::vector<D3D11_SUBRESOURCE_DATA> init(static_cast<size_t>(6 * env.mipCount));
+    for (int face = 0; face < 6; ++face)
+    {
+        for (int mip = 0; mip < env.mipCount; ++mip)
+        {
+            D3D11_SUBRESOURCE_DATA& data = init[static_cast<size_t>(face * env.mipCount + mip)];
+            data.pSysMem = env.faces[mip][face].data();
+            data.SysMemPitch = static_cast<UINT>(std::max(env.faceSize >> mip, 1)) * 8u;
+        }
+    }
+    HRESULT hr = r.device->CreateTexture2D(&desc, init.data(), &r.environmentMap.texture);
+    if (SUCCEEDED(hr))
+        hr = r.device->CreateShaderResourceView(r.environmentMap.texture, nullptr, &r.environmentMap.srv);
     if (FAILED(hr))
     {
-        EngineLogf("ResizeBuffers failed: 0x%08X", static_cast<unsigned>(hr));
+        EngineLogf("Create environment cube failed: 0x%08X", static_cast<unsigned>(hr));
+        DestroyGPUTexture(r.environmentMap);
         return false;
     }
-
-    return CreateRenderTargets(r);
+    return true;
 }
 
-bool RendererSetRenderResolution(Renderer& r, int width, int height)
+// Meshes
+
+static bool UploadMeshBuffers(Renderer& r, const std::vector<RenderVertex>& vertices, const std::vector<uint32_t>& indices, GPUMesh& gpu)
 {
-    KES_ZONE_FN(RENDER);
-    if (!r.swapChain || width <= 0 || height <= 0)
+    gpu.indexCount = static_cast<UINT>(indices.empty() ? vertices.size() : indices.size());
+    render::ComputeBoundingSphere(vertices.data(), vertices.size(), sizeof(RenderVertex), gpu.boundsCenter, gpu.boundsRadius);
+
+    D3D11_BUFFER_DESC bd = {};
+    bd.Usage = D3D11_USAGE_IMMUTABLE;
+    bd.ByteWidth = static_cast<UINT>(vertices.size() * sizeof(RenderVertex));
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA init = {};
+    init.pSysMem = vertices.data();
+    if (FAILED(r.device->CreateBuffer(&bd, &init, &gpu.vertexBuffer)))
         return false;
-    if (width == r.renderWidth && height == r.renderHeight)
-        return true;
 
-    r.renderWidth = width;
-    r.renderHeight = height;
-    r.context->OMSetRenderTargets(0, nullptr, nullptr);
-    DestroyRenderTargets(r);
-    return CreateRenderTargets(r);
-}
-
-void RendererSetVSync(Renderer& r, bool enabled)
-{
-    r.vsync = enabled;
+    if (!indices.empty())
+    {
+        bd.ByteWidth = static_cast<UINT>(indices.size() * sizeof(uint32_t));
+        bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+        init.pSysMem = indices.data();
+        if (FAILED(r.device->CreateBuffer(&bd, &init, &gpu.indexBuffer)))
+        {
+            SafeRelease(gpu.vertexBuffer);
+            return false;
+        }
+    }
+    return true;
 }
 
 static GPUMesh* GetOrUploadMesh(Renderer& r, MeshHandle handle, const AssetSystem& assets)
@@ -1165,34 +984,9 @@ static GPUMesh* GetOrUploadMesh(Renderer& r, MeshHandle handle, const AssetSyste
     }
 
     GPUMesh gpu = {};
-    gpu.indexCount = static_cast<UINT>(data->indices.size());
-
-    D3D11_BUFFER_DESC bd = {};
-    bd.Usage = D3D11_USAGE_IMMUTABLE;
-    bd.ByteWidth = static_cast<UINT>(vertices.size() * sizeof(RenderVertex));
-    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-
-    D3D11_SUBRESOURCE_DATA init = {};
-    init.pSysMem = vertices.data();
-
-    HRESULT hr = r.device->CreateBuffer(&bd, &init, &gpu.vertexBuffer);
-    if (FAILED(hr)) return nullptr;
-
-    if (!data->indices.empty())
-    {
-        bd.ByteWidth = static_cast<UINT>(data->indices.size() * sizeof(uint32_t));
-        bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
-        init.pSysMem = data->indices.data();
-        hr = r.device->CreateBuffer(&bd, &init, &gpu.indexBuffer);
-        if (FAILED(hr))
-        {
-            gpu.vertexBuffer->Release();
-            return nullptr;
-        }
-    }
-
-    r.gpuMeshes[handle] = gpu;
-    return &r.gpuMeshes[handle];
+    if (!UploadMeshBuffers(r, vertices, data->indices, gpu))
+        return nullptr;
+    return &(r.gpuMeshes[handle] = gpu);
 }
 
 static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t meshIndex, const AssetSystem& assets)
@@ -1237,45 +1031,9 @@ static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t m
     }
 
     GPUMesh gpu = {};
-    gpu.indexCount = static_cast<UINT>(source.indices.size());
-
-    D3D11_BUFFER_DESC bd = {};
-    bd.Usage = D3D11_USAGE_IMMUTABLE;
-    bd.ByteWidth = static_cast<UINT>(vertices.size() * sizeof(RenderVertex));
-    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-
-    D3D11_SUBRESOURCE_DATA init = {};
-    init.pSysMem = vertices.data();
-
-    HRESULT hr = r.device->CreateBuffer(&bd, &init, &gpu.vertexBuffer);
-    if (FAILED(hr))
+    if (!UploadMeshBuffers(r, vertices, source.indices, gpu))
         return nullptr;
-
-    if (!source.indices.empty())
-    {
-        bd.ByteWidth = static_cast<UINT>(source.indices.size() * sizeof(uint32_t));
-        bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
-        init.pSysMem = source.indices.data();
-        hr = r.device->CreateBuffer(&bd, &init, &gpu.indexBuffer);
-        if (FAILED(hr))
-        {
-            gpu.vertexBuffer->Release();
-            return nullptr;
-        }
-    }
-
-    r.gpuModelMeshes[key] = gpu;
-    return &r.gpuModelMeshes[key];
-}
-
-static float4x4 TransformToMatrix(const Transform& t)
-{
-    float4x4 r = Scale(t.scale.x, t.scale.y, t.scale.z);
-    r = Multiply(r, RotationX(t.rotation.x));
-    r = Multiply(r, RotationY(t.rotation.y));
-    r = Multiply(r, RotationZ(t.rotation.z));
-    r = Multiply(r, Translation(t.position.x, t.position.y, t.position.z));
-    return r;
+    return &(r.gpuModelMeshes[key] = gpu);
 }
 
 static int32_t FindModelNodeForMesh(const KModelData& model, uint32_t meshIndex)
@@ -1360,12 +1118,134 @@ static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelH
     return &inserted.first->second;
 }
 
-static float3 BuildLightDirection(const Transform& t)
+// Init / resize / options
+
+bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
 {
-    const Vector3 direction = Vector3DirectionFromRotation(t.rotation);
-    return { direction.x, direction.y, direction.z };
+    r.windowWidth = config.windowWidth;
+    r.windowHeight = config.windowHeight;
+    r.renderWidth = config.renderWidth;
+    r.renderHeight = config.renderHeight;
+    r.preservePresentationAspect = config.preservePresentationAspect;
+    r.preferIntegerPresentationScale = config.preferIntegerPresentationScale;
+    r.vsync = config.vsync;
+
+    if (!CreateDeviceAndSwapChain(r, window))
+    {
+        RendererShutdown(r);
+        return false;
+    }
+
+#if KES_PROFILE_GPU
+    r.gpuProfiler = TracyD3D11Context(r.device, r.context);
+    TracyD3D11ContextName(r.gpuProfiler, "D3D11", 5);
+#endif
+
+    const bool ok = CreateSwapchainTargets(r) && CreateSceneTargets(r) && CreateShadowTargets(r) &&
+                    CreatePipelines(r) && CreateUiPipeline(r) && CreateConstantBuffers(r) &&
+                    CreateRasterizerStates(r) && CreateBlendStates(r) && CreateDepthStates(r) &&
+                    CreateSamplers(r) && CreateWhiteTexture(r);
+    if (!ok)
+    {
+        RendererShutdown(r);
+        return false;
+    }
+
+    EngineLogf("Renderer initialized successfully. window=%dx%d render=%dx%d, MSAA %dx.", r.windowWidth, r.windowHeight,
+               r.renderWidth, r.renderHeight, r.msaaSamples);
+    return true;
 }
 
+bool RendererResize(Renderer& r, int width, int height)
+{
+    KES_ZONE_FN(RENDER);
+    if (!r.swapChain || width <= 0 || height <= 0)
+        return false;
+
+    r.windowWidth = width;
+    r.windowHeight = height;
+
+    r.context->OMSetRenderTargets(0, nullptr, nullptr);
+    DestroySwapchainTargets(r);
+
+    HRESULT hr = r.swapChain->ResizeBuffers(
+        0,
+        static_cast<UINT>(width),
+        static_cast<UINT>(height),
+        DXGI_FORMAT_UNKNOWN,
+        r.swapChainFlags);   // must match the creation flags (ALLOW_TEARING)
+
+    if (FAILED(hr))
+    {
+        EngineLogf("ResizeBuffers failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+
+    return CreateSwapchainTargets(r);
+}
+
+bool RendererSetRenderResolution(Renderer& r, int width, int height)
+{
+    KES_ZONE_FN(RENDER);
+    if (!r.swapChain || width <= 0 || height <= 0)
+        return false;
+    if (width == r.renderWidth && height == r.renderHeight)
+        return true;
+
+    r.renderWidth = width;
+    r.renderHeight = height;
+    r.context->OMSetRenderTargets(0, nullptr, nullptr);
+    DestroySceneTargets(r);
+    return CreateSceneTargets(r);
+}
+
+void RendererSetVSync(Renderer& r, bool enabled)
+{
+    r.vsync = enabled;
+}
+
+void RendererSetGraphicsOptions(Renderer& r, const GraphicsOptions& options)
+{
+    const GraphicsOptions previous = r.options;
+    r.options = options;
+    if (!r.device || previous == options)
+        return;
+
+    r.context->OMSetRenderTargets(0, nullptr, nullptr);
+    ID3D11ShaderResourceView* nullViews[8] = {};
+    r.context->PSSetShaderResources(0, 8, nullViews);
+    if (previous.msaaSamples != options.msaaSamples)
+    {
+        DestroySceneTargets(r);
+        CreateSceneTargets(r);
+    }
+    if (previous.shadowQuality != options.shadowQuality)
+        CreateShadowTargets(r);
+    if (previous.anisotropy != options.anisotropy)
+        CreateMaterialSampler(r);
+    EngineLogf("Graphics options: MSAA %dx, shadows %d, anisotropy %dx.", r.msaaSamples, static_cast<int>(options.shadowQuality),
+               std::clamp(options.anisotropy, 1, 16));
+}
+
+// Per-draw constants
+
+// Writes the model constants the shader reads (matrices, skin info, used skin
+// matrices) instead of the whole 8 KB block. The rest of the discarded buffer
+// is undefined, which is fine: the shader only reads skin matrices < count.
+static void UpdateModelConstants(Renderer& r, const Matrix4& wvp, const Matrix4& world, const float* skinMatrices, uint32_t skinMatrixCount)
+{
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    if (FAILED(r.context->Map(r.modelCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+        return;
+    uint8_t* dst = static_cast<uint8_t*>(mapped.pData);
+    std::memcpy(dst + offsetof(render::ModelCBData, worldViewProj), wvp.m, sizeof(wvp.m));
+    std::memcpy(dst + offsetof(render::ModelCBData, world), world.m, sizeof(world.m));
+    if (skinMatrices && skinMatrixCount > 0)
+        std::memcpy(dst + offsetof(render::ModelCBData, skinMatrices), skinMatrices, skinMatrixCount * 16u * sizeof(float));
+    const float skinInfo[4] = { skinMatrixCount > 0 ? 1.0f : 0.0f, static_cast<float>(skinMatrixCount), 0.0f, 0.0f };
+    std::memcpy(dst + offsetof(render::ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
+    r.context->Unmap(r.modelCB, 0);
+}
 
 static bool IsTransparentMaterial(const MaterialData* material)
 {
@@ -1377,62 +1257,12 @@ static bool IsDoubleSidedMaterial(const MaterialData* material)
     return material && (material->flags & MaterialFlag_DoubleSided) != 0;
 }
 
-static ID3D11RasterizerState* SelectRasterizerState(Renderer& r, bool wireframe, bool doubleSided)
+static bool CastsShadows(const MaterialData* material)
 {
-    if (wireframe)
-        return doubleSided ? r.wireNoCullRS : r.wireRS;
-    return doubleSided ? r.solidNoCullRS : r.solidRS;
+    return !material || ((material->flags & MaterialFlag_CastShadows) != 0 && (material->flags & MaterialFlag_Transparent) == 0);
 }
 
-// Writes the model constants the shader reads (matrices, skin info, used skin
-// matrices) instead of the whole 8 KB block. The rest of the discarded buffer
-// is undefined, which is fine: the shader only reads skin matrices < count.
-static void UpdateModelConstants(Renderer& r, const float4x4& wvp, const float4x4& world, const float* skinMatrices, uint32_t skinMatrixCount)
-{
-    D3D11_MAPPED_SUBRESOURCE mapped = {};
-    if (FAILED(r.context->Map(r.modelCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
-        return;
-    uint8_t* dst = static_cast<uint8_t*>(mapped.pData);
-
-    float matrix[16];
-    MatrixToArrayRowMajor(wvp, matrix);
-    std::memcpy(dst + offsetof(ModelCBData, worldViewProj), matrix, sizeof(matrix));
-    MatrixToArrayRowMajor(world, matrix);
-    std::memcpy(dst + offsetof(ModelCBData, world), matrix, sizeof(matrix));
-    if (skinMatrices && skinMatrixCount > 0)
-        std::memcpy(dst + offsetof(ModelCBData, skinMatrices), skinMatrices, skinMatrixCount * 16u * sizeof(float));
-    const float skinInfo[4] = { skinMatrixCount > 0 ? 1.0f : 0.0f, static_cast<float>(skinMatrixCount), 0.0f, 0.0f };
-    std::memcpy(dst + offsetof(ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
-
-    r.context->Unmap(r.modelCB, 0);
-}
-
-static void UpdateMaterialConstants(Renderer& r, const MaterialData* material)
-{
-    MaterialCBData matcb = {};
-    matcb.baseColor[0] = 1.0f;
-    matcb.baseColor[1] = 1.0f;
-    matcb.baseColor[2] = 1.0f;
-    matcb.baseColor[3] = 1.0f;
-    matcb.flags[0] = MaterialFlag_Lit;
-
-    if (material)
-    {
-        matcb.baseColor[0] = material->baseColor[0];
-        matcb.baseColor[1] = material->baseColor[1];
-        matcb.baseColor[2] = material->baseColor[2];
-        matcb.baseColor[3] = material->baseColor[3];
-        matcb.emissiveColorAndCutoff[0] = material->emissiveColor[0];
-        matcb.emissiveColorAndCutoff[1] = material->emissiveColor[1];
-        matcb.emissiveColorAndCutoff[2] = material->emissiveColor[2];
-        matcb.emissiveColorAndCutoff[3] = material->alphaCutoff;
-        matcb.flags[0] = material->flags;
-    }
-
-    r.context->UpdateSubresource(r.materialCB, 0, nullptr, &matcb, 0, 0);
-}
-
-static void BuildSkyClearColor(const Scene& sceneObj, float outColor[4])
+static void BuildClearColor(const Scene& sceneObj, float outColor[4])
 {
     outColor[0] = 0.07f;
     outColor[1] = 0.06f;
@@ -1442,9 +1272,9 @@ static void BuildSkyClearColor(const Scene& sceneObj, float outColor[4])
     const FogSettings& fog = sceneObj.GetFog();
     if (fog.active)
     {
-        outColor[0] = Clamp01(fog.color[0]);
-        outColor[1] = Clamp01(fog.color[1]);
-        outColor[2] = Clamp01(fog.color[2]);
+        outColor[0] = fog.color[0];
+        outColor[1] = fog.color[1];
+        outColor[2] = fog.color[2];
         return;
     }
 
@@ -1452,78 +1282,30 @@ static void BuildSkyClearColor(const Scene& sceneObj, float outColor[4])
     if (!sky.active)
         return;
 
-    outColor[0] = Clamp01(sky.horizonColor[0] * 0.65f + sky.bottomColor[0] * 0.35f);
-    outColor[1] = Clamp01(sky.horizonColor[1] * 0.65f + sky.bottomColor[1] * 0.35f);
-    outColor[2] = Clamp01(sky.horizonColor[2] * 0.65f + sky.bottomColor[2] * 0.35f);
+    for (int i = 0; i < 3; ++i)
+        outColor[i] = sky.horizonColor[i] * 0.65f + sky.bottomColor[i] * 0.35f;
+}
+
+static void BindFullscreenTriangle(Renderer& r)
+{
+    ID3D11Buffer* noVB = nullptr;
+    UINT zero = 0;
+    r.context->IASetInputLayout(nullptr);
+    r.context->IASetVertexBuffers(0, 1, &noVB, &zero, &zero);
+    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 }
 
 static void RenderSkyBackground(Renderer& r, const Camera& camera, const Scene& sceneObj)
 {
-    if (sceneObj.GetFog().active)
-        return;
-
-    const SkySettings& sky = sceneObj.GetSky();
-    if (!sky.active)
+    if (sceneObj.GetFog().active || !sceneObj.GetSky().active)
         return;
 
     const float aspect = static_cast<float>(r.renderWidth) / static_cast<float>(r.renderHeight);
-    const float tanHalfFov = std::tan(kCameraFovYRadians * 0.5f);
-    const float sunAngleRadians = sky.sunSize * 3.14159265f / 180.0f;
-    const float sunOuterCos = std::cos(sunAngleRadians);
-    const float sunInnerCos = std::cos(sunAngleRadians * 0.35f);
-    const Vector3 cameraForward = CameraGetForward(camera);
-    const Vector3 cameraRight = CameraGetRight(camera);
-    const Vector3 cameraUp = CameraGetUp(camera);
-
-    SkyCBData skyCB = {};
-    skyCB.topColor[0] = sky.topColor[0];
-    skyCB.topColor[1] = sky.topColor[1];
-    skyCB.topColor[2] = sky.topColor[2];
-    skyCB.topColor[3] = 1.0f;
-    skyCB.horizonColor[0] = sky.horizonColor[0];
-    skyCB.horizonColor[1] = sky.horizonColor[1];
-    skyCB.horizonColor[2] = sky.horizonColor[2];
-    skyCB.horizonColor[3] = 1.0f;
-    skyCB.bottomColor[0] = sky.bottomColor[0];
-    skyCB.bottomColor[1] = sky.bottomColor[1];
-    skyCB.bottomColor[2] = sky.bottomColor[2];
-    skyCB.bottomColor[3] = 1.0f;
-    skyCB.sunColor[0] = sky.sunColor[0];
-    skyCB.sunColor[1] = sky.sunColor[1];
-    skyCB.sunColor[2] = sky.sunColor[2];
-    skyCB.sunColor[3] = 1.0f;
-    skyCB.sunDirection[0] = sky.sunDirection[0];
-    skyCB.sunDirection[1] = sky.sunDirection[1];
-    skyCB.sunDirection[2] = sky.sunDirection[2];
-    skyCB.sunDirection[3] = 0.0f;
-    skyCB.cameraForward[0] = cameraForward.x;
-    skyCB.cameraForward[1] = cameraForward.y;
-    skyCB.cameraForward[2] = cameraForward.z;
-    skyCB.cameraForward[3] = 0.0f;
-    skyCB.cameraRight[0] = cameraRight.x;
-    skyCB.cameraRight[1] = cameraRight.y;
-    skyCB.cameraRight[2] = cameraRight.z;
-    skyCB.cameraRight[3] = 0.0f;
-    skyCB.cameraUp[0] = cameraUp.x;
-    skyCB.cameraUp[1] = cameraUp.y;
-    skyCB.cameraUp[2] = cameraUp.z;
-    skyCB.cameraUp[3] = 0.0f;
-    skyCB.projectionParams[0] = tanHalfFov * aspect;
-    skyCB.projectionParams[1] = tanHalfFov;
-    skyCB.projectionParams[2] = sunOuterCos;
-    skyCB.projectionParams[3] = sunInnerCos;
-    skyCB.skyParams[0] = sky.sunIntensity;
-    skyCB.skyParams[1] = sky.horizonExponent;
-    skyCB.skyParams[2] = 1.0f;
-    skyCB.skyParams[3] = 0.0f;
+    const render::SkyCBData skyCB = render::BuildSkyConstants(sceneObj.GetSky(), camera, aspect);
     r.context->UpdateSubresource(r.skyCB, 0, nullptr, &skyCB, 0, 0);
 
-    ID3D11Buffer* noVB = nullptr;
-    UINT zero = 0;
     const float blendFactor[4] = { 0, 0, 0, 0 };
-    r.context->IASetInputLayout(nullptr);
-    r.context->IASetVertexBuffers(0, 1, &noVB, &zero, &zero);
-    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    BindFullscreenTriangle(r);
     r.context->VSSetShader(r.skyVS, nullptr, 0);
     r.context->PSSetShader(r.skyPS, nullptr, 0);
     r.context->PSSetConstantBuffers(0, 1, &r.skyCB);
@@ -1533,301 +1315,314 @@ static void RenderSkyBackground(Renderer& r, const Camera& camera, const Scene& 
     r.context->Draw(3, 0);
 }
 
+// Redundant-state filter for consecutive draws.
+struct DrawState
+{
+    ID3D11RasterizerState* rs = nullptr;
+    ID3D11InputLayout* layout = nullptr;
+    ID3D11VertexShader* vs = nullptr;
+    ID3D11PixelShader* ps = nullptr;
+    ID3D11Buffer* vb = nullptr;
+    ID3D11Buffer* ib = nullptr;
+    const MaterialData* material = nullptr;
+    bool haveMaterial = false;
+};
+
+static void DrawGPUMesh(Renderer& r, DrawState& state, const GPUMesh& gpuMesh)
+{
+    if (gpuMesh.vertexBuffer != state.vb)
+    {
+        UINT stride = sizeof(RenderVertex);
+        UINT offset = 0;
+        r.context->IASetVertexBuffers(0, 1, &gpuMesh.vertexBuffer, &stride, &offset);
+        state.vb = gpuMesh.vertexBuffer;
+    }
+    if (gpuMesh.indexBuffer)
+    {
+        if (gpuMesh.indexBuffer != state.ib)
+        {
+            r.context->IASetIndexBuffer(gpuMesh.indexBuffer, DXGI_FORMAT_R32_UINT, 0);
+            state.ib = gpuMesh.indexBuffer;
+        }
+        r.context->DrawIndexed(gpuMesh.indexCount, 0, 0);
+    }
+    else
+    {
+        r.context->Draw(gpuMesh.indexCount, 0);
+    }
+}
+
+// Draws one scene object with `viewProj` (camera or shadow view), culled
+// against `frustum`. Shadow passes use the shadow program.
+static void DrawSceneObject(Renderer& r, DrawState& state, const DrawItem& item, const Matrix4& viewProj,
+                            const render::Frustum& frustum, const AssetSystem& assets, bool shadowPass, bool wireframe)
+{
+    const SceneObject& obj = *item.object;
+    const KModelData* model = assets.GetModel(obj.model);
+    const bool skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
+
+    const bool doubleSided = IsDoubleSidedMaterial(item.material);
+    ID3D11RasterizerState* rs = shadowPass ? r.shadowRS
+                                           : (wireframe ? (doubleSided ? r.wireNoCullRS : r.wireRS)
+                                                        : (doubleSided ? r.solidNoCullRS : r.solidRS));
+    ID3D11InputLayout* layout = r.meshLayout;
+    ID3D11VertexShader* vs = shadowPass ? r.shadowVS : r.meshVS;
+    ID3D11PixelShader* ps = shadowPass ? r.shadowPS : r.meshPS;
+    if (!shadowPass && item.material && item.material->shader != 0)
+    {
+        if (GPUShaderProgram* custom = GetOrCompileShaderProgram(r, item.material->shader, assets))
+        {
+            layout = custom->inputLayout;
+            vs = custom->vertexShader;
+            ps = custom->pixelShader;
+        }
+    }
+    if (rs != state.rs) { r.context->RSSetState(rs); state.rs = rs; }
+    if (layout != state.layout) { r.context->IASetInputLayout(layout); state.layout = layout; }
+    if (vs != state.vs) { r.context->VSSetShader(vs, nullptr, 0); state.vs = vs; }
+    if (ps != state.ps) { r.context->PSSetShader(ps, nullptr, 0); state.ps = ps; }
+
+    if (!state.haveMaterial || item.material != state.material)
+    {
+        const uint32_t textureFlags = BindMaterialTextures(r, item.material);
+        const render::MaterialCBData cb = render::BuildMaterialConstants(item.material, textureFlags);
+        r.context->UpdateSubresource(r.materialCB, 0, nullptr, &cb, 0, 0);
+        state.material = item.material;
+        state.haveMaterial = true;
+    }
+
+    const Matrix4 objectWorld = render::TransformToMatrix(obj.transform);
+    if (skinned)
+    {
+        const GPUModelRenderCache* modelRenderCache = GetOrBuildModelRenderCache(r, obj.model, assets);
+        if (!modelRenderCache)
+            return;
+
+        // Animated: no culling (the bind-pose bounds don't cover the animation).
+        const uint32_t matrixCount = std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices);
+        for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
+        {
+            GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
+            if (!gpuMesh)
+                continue;
+            Matrix4 meshLocal;
+            std::memcpy(meshLocal.m, modelRenderCache->meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u, sizeof(meshLocal.m));
+            const Matrix4 world = render::MatrixMultiply(meshLocal, objectWorld);
+            UpdateModelConstants(r, render::MatrixMultiply(world, viewProj), world, obj.skinMatrices, matrixCount);
+            DrawGPUMesh(r, state, *gpuMesh);
+        }
+        return;
+    }
+
+    GPUMesh* gpuMesh = GetOrUploadMesh(r, obj.mesh, assets);
+    if (!gpuMesh)
+        return;
+    Vector3 center;
+    float radius = 0.0f;
+    render::TransformSphere(obj.transform, gpuMesh->boundsCenter, gpuMesh->boundsRadius, center, radius);
+    if (!render::SphereInFrustum(frustum, center, radius))
+        return;
+    UpdateModelConstants(r, render::MatrixMultiply(objectWorld, viewProj), objectWorld, nullptr, 0);
+    DrawGPUMesh(r, state, *gpuMesh);
+}
+
+static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
+{
+    if (r.frame.shadowViews.empty())
+        return;
+    KES_ZONE(RENDER, "Shadow maps");
+    KES_D3D11_GPU_ZONE(r, "Shadows");
+
+    // The arrays are written now and sampled by the scene pass.
+    ID3D11ShaderResourceView* nullViews[3] = {};
+    r.context->PSSetShaderResources(5, 3, nullViews);
+
+    const float blendFactor[4] = { 0, 0, 0, 0 };
+    r.context->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
+    r.context->OMSetDepthStencilState(r.depthWriteState, 0);
+    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    r.context->VSSetConstantBuffers(0, 1, &r.sceneCB);
+    r.context->VSSetConstantBuffers(1, 1, &r.modelCB);
+    r.context->VSSetConstantBuffers(2, 1, &r.materialCB);
+    r.context->PSSetConstantBuffers(2, 1, &r.materialCB);
+    ID3D11SamplerState* materialSamplers[render::kMaterialTextureCount] = { r.materialSampler, r.materialSampler, r.materialSampler, r.materialSampler, r.materialSampler };
+    r.context->PSSetSamplers(0, render::kMaterialTextureCount, materialSamplers);
+
+    for (const render::ShadowView& view : r.frame.shadowViews)
+    {
+        GPUShadowArray& target = view.cascade ? r.cascadeShadows : r.localShadows;
+        if (view.slice >= static_cast<int>(target.sliceViews.size()))
+            continue;
+        ID3D11DepthStencilView* dsv = target.sliceViews[static_cast<size_t>(view.slice)];
+        r.context->OMSetRenderTargets(0, nullptr, dsv);
+        r.context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH, 1.0f, 0);
+        D3D11_VIEWPORT vp = {};
+        vp.Width = vp.Height = static_cast<float>(target.resolution);
+        vp.MaxDepth = 1.0f;
+        r.context->RSSetViewports(1, &vp);
+
+        // The light's frustum (far plane = range for local lights) culls casters.
+        const render::Frustum frustum = render::ExtractFrustum(view.viewProj);
+        DrawState state;
+        for (const DrawItem& item : r.opaqueDrawItems)
+        {
+            if (CastsShadows(item.material))
+                DrawSceneObject(r, state, item, view.viewProj, frustum, assets, true, false);
+        }
+    }
+}
+
 void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
 {
+    if (!r.sceneColor || !r.dsv)
+        return;
     if (r.assetGeneration != assets.GetGeneration())
     {
         DestroyRendererAssetCaches(r);
         r.assetGeneration = assets.GetGeneration();
     }
 
-    KES_D3D11_GPU_ZONE(r, "Scene pass");
+    KES_D3D11_GPU_ZONE(r, "Scene");
+    const float aspect = static_cast<float>(r.renderWidth) / static_cast<float>(r.renderHeight);
 
-    float clearColor[4] = {};
-    BuildSkyClearColor(sceneObj, clearColor);
+    // Ambient environment, rebuilt when the sky (or flat ambient) changes.
+    const uint64_t environmentKey = render::EnvironmentKey(scene, sceneObj);
+    if (environmentKey != r.environment.key || !r.environmentMap.srv)
+    {
+        KES_ZONE(RENDER, "Build environment");
+        render::BuildEnvironment(scene, sceneObj, r.environment);
+        UploadEnvironment(r);
+    }
 
-    r.context->OMSetRenderTargets(1, &r.offscreenRTV, r.dsv);
+    render::BuildFrameSetup(r.frame, scene, camera, sceneObj, aspect, r.options);
+    render::ApplyEnvironment(r.environment, r.frame.scene);
+    if (!r.cascadeShadows.srv)
+    {
+        r.frame.scene.shadowParams[3] = 0.0f;
+        r.frame.shadowViews.clear();
+    }
+    r.exposure = std::max(scene.exposure, 0.0f);
+    r.context->UpdateSubresource(r.sceneCB, 0, nullptr, &r.frame.scene, 0, 0);
 
+    // Draw lists (shared by shadow and scene passes).
+    std::vector<DrawItem>& opaqueItems = r.opaqueDrawItems;
+    std::vector<DrawItem>& transparentItems = r.transparentDrawItems;
+    opaqueItems.clear();
+    transparentItems.clear();
+    const Vector3 cameraPosition = CameraGetPosition(camera);
+    {
+        KES_ZONE(RENDER, "Build draw lists");
+        for (const SceneObject& obj : sceneObj.GetObjects())
+        {
+            if (!obj.active)
+                continue;
+            DrawItem item = {};
+            item.object = &obj;
+            item.material = assets.GetMaterial(obj.material);
+            item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
+            (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);
+        }
+        // Opaque: group by material, near-to-far inside a group (early depth reject).
+        std::sort(opaqueItems.begin(), opaqueItems.end(), [](const DrawItem& a, const DrawItem& b)
+                  { return a.material != b.material ? a.material < b.material : a.distanceSq < b.distanceSq; });
+        // Transparent: back-to-front for correct blending.
+        std::sort(transparentItems.begin(), transparentItems.end(), [](const DrawItem& a, const DrawItem& b)
+                  { return a.distanceSq > b.distanceSq; });
+        KES_PROFILE_PLOT("Opaque draw items", static_cast<int64_t>(opaqueItems.size()));
+        KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
+    }
+
+    RenderShadowMaps(r, assets);
+
+    // HDR scene pass
+    ID3D11RenderTargetView* sceneRTV = r.msaaSamples > 1 ? r.sceneColorMSRTV : r.sceneColorRTV;
+    r.context->OMSetRenderTargets(1, &sceneRTV, r.dsv);
     D3D11_VIEWPORT vp = {};
     vp.Width = static_cast<FLOAT>(r.renderWidth);
     vp.Height = static_cast<FLOAT>(r.renderHeight);
-    vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
     r.context->RSSetViewports(1, &vp);
 
-    r.context->ClearRenderTargetView(r.offscreenRTV, clearColor);
+    float clearColor[4] = {};
+    BuildClearColor(sceneObj, clearColor);
+    r.context->ClearRenderTargetView(sceneRTV, clearColor);
     r.context->ClearDepthStencilView(r.dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
-
-    const float blendFactor[4] = { 0, 0, 0, 0 };
-    r.context->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
-    r.context->OMSetDepthStencilState(r.depthWriteState, 0);
 
     RenderSkyBackground(r, camera, sceneObj);
 
-    CameraViewData camData = {};
-    const float aspect = static_cast<float>(r.renderWidth) / static_cast<float>(r.renderHeight);
-    CameraBuildMatrices(camera, aspect, camData);
-
-    const float4x4 viewProj = ArrayToMatrix(camData.viewProjection);
-
-    SceneCBData scb = {};
-    MatrixToArrayRowMajor(viewProj, scb.viewProj);
-    scb.ambient[0] = scene.ambient[0];
-    scb.ambient[1] = scene.ambient[1];
-    scb.ambient[2] = scene.ambient[2];
-    scb.ambient[3] = 1.0f;
-    scb.snapParams[0] = static_cast<float>(r.renderWidth);
-    scb.snapParams[1] = static_cast<float>(r.renderHeight);
-    scb.snapParams[2] = scene.vertexSnap ? 1.0f : 0.0f;
-    scb.snapParams[3] = 0.0f;
-
-    const auto& sceneLights = sceneObj.GetLights();
-    for (size_t i = 0; i < sceneLights.size() && i < 8; ++i)
-    {
-        const Light& light = sceneLights[i];
-        if (!light.active) continue;
-
-        const float3 lightDirection = BuildLightDirection(light.transform);
-
-        scb.lights[i].position[0] = light.transform.position.x;
-        scb.lights[i].position[1] = light.transform.position.y;
-        scb.lights[i].position[2] = light.transform.position.z;
-        scb.lights[i].position[3] = light.range;
-
-        scb.lights[i].color[0] = light.color[0];
-        scb.lights[i].color[1] = light.color[1];
-        scb.lights[i].color[2] = light.color[2];
-        scb.lights[i].color[3] = light.intensity;
-
-        scb.lights[i].direction[0] = lightDirection.x;
-        scb.lights[i].direction[1] = lightDirection.y;
-        scb.lights[i].direction[2] = lightDirection.z;
-        scb.lights[i].direction[3] = std::cos(light.spotAngle * 0.5f * 3.14159265f / 180.0f);
-
-        scb.lights[i].type = static_cast<uint32_t>(light.type);
-        scb.lights[i].active = 1;
-    }
-
-    const FogSettings& fog = sceneObj.GetFog();
-    scb.fogColor[0] = fog.color[0];
-    scb.fogColor[1] = fog.color[1];
-    scb.fogColor[2] = fog.color[2];
-    scb.fogColor[3] = 1.0f;
-    scb.fogParams[0] = fog.nearDistance;
-    scb.fogParams[1] = fog.farDistance;
-    scb.fogParams[2] = fog.active ? 1.0f : 0.0f;
-    scb.fogParams[3] = fog.stepCount;
-
-    r.context->UpdateSubresource(r.sceneCB, 0, nullptr, &scb, 0, 0);
-
-    r.context->IASetInputLayout(r.meshLayout);
-    r.context->VSSetShader(r.meshVS, nullptr, 0);
-    r.context->PSSetShader(r.meshPS, nullptr, 0);
+    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     r.context->VSSetConstantBuffers(0, 1, &r.sceneCB);
     r.context->VSSetConstantBuffers(1, 1, &r.modelCB);
     r.context->VSSetConstantBuffers(2, 1, &r.materialCB);
     r.context->PSSetConstantBuffers(0, 1, &r.sceneCB);
     r.context->PSSetConstantBuffers(2, 1, &r.materialCB);
-    r.context->PSSetSamplers(0, 1, &r.pointSampler);
+    ID3D11SamplerState* samplers[7] = { r.materialSampler, r.materialSampler, r.materialSampler, r.materialSampler,
+                                        r.materialSampler, r.linearClampSampler, r.shadowSampler };
+    r.context->PSSetSamplers(0, 7, samplers);
+    ID3D11ShaderResourceView* globals[3] = { r.environmentMap.srv, r.cascadeShadows.srv, r.localShadows.srv };
+    r.context->PSSetShaderResources(5, 3, globals);
 
-    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-    // Draw lists live in the renderer so their storage is reused every frame.
-    std::vector<DrawItem>& opaqueItems = r.opaqueDrawItems;
-    std::vector<DrawItem>& transparentItems = r.transparentDrawItems;
-    opaqueItems.clear();
-    transparentItems.clear();
-    const Vector3 cameraPosition = { camera.x, camera.y, camera.z };
-
-    {
-        KES_ZONE(RENDER, "Build draw lists");
-        for (const SceneObject& obj : sceneObj.GetObjects())
-        {
-            if (!obj.active) continue;
-
-            const MaterialData* material = assets.GetMaterial(obj.material);
-            const Vector3 delta = {
-                obj.transform.position.x - cameraPosition.x,
-                obj.transform.position.y - cameraPosition.y,
-                obj.transform.position.z - cameraPosition.z
-            };
-            DrawItem item = {};
-            item.object = &obj;
-            item.material = material;
-            item.distanceSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-
-            if (IsTransparentMaterial(material))
-                transparentItems.push_back(item);
-            else
-                opaqueItems.push_back(item);
-        }
-
-        // Opaque: group by material, near-to-far inside a group (early depth reject).
-        std::sort(opaqueItems.begin(), opaqueItems.end(),
-            [](const DrawItem& a, const DrawItem& b)
-            {
-                if (a.material != b.material)
-                    return a.material < b.material;
-                return a.distanceSq < b.distanceSq;
-            });
-
-        // Transparent: back-to-front for correct blending.
-        std::sort(transparentItems.begin(), transparentItems.end(),
-            [](const DrawItem& a, const DrawItem& b)
-            {
-                return a.distanceSq > b.distanceSq;
-            });
-        KES_PROFILE_PLOT("Opaque draw items", static_cast<int64_t>(opaqueItems.size()));
-        KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
-    }
-
-    // Redundant state filtering across consecutive draws. The mesh setup
-    // above bound the default program; track what is currently set.
-    ID3D11RasterizerState* boundRS = nullptr;
-    ID3D11InputLayout* boundLayout = r.meshLayout;
-    ID3D11VertexShader* boundVS = r.meshVS;
-    ID3D11PixelShader* boundPS = r.meshPS;
-    ID3D11Buffer* boundVB = nullptr;
-    ID3D11Buffer* boundIB = nullptr;
-    const MaterialData* boundMaterial = nullptr;
-    bool haveMaterial = false;
-
-    auto drawMesh = [&](const GPUMesh& gpuMesh)
-    {
-        if (gpuMesh.vertexBuffer != boundVB)
-        {
-            UINT stride = sizeof(RenderVertex);
-            UINT offset = 0;
-            r.context->IASetVertexBuffers(0, 1, &gpuMesh.vertexBuffer, &stride, &offset);
-            boundVB = gpuMesh.vertexBuffer;
-        }
-        if (gpuMesh.indexBuffer)
-        {
-            if (gpuMesh.indexBuffer != boundIB)
-            {
-                r.context->IASetIndexBuffer(gpuMesh.indexBuffer, DXGI_FORMAT_R32_UINT, 0);
-                boundIB = gpuMesh.indexBuffer;
-            }
-            r.context->DrawIndexed(gpuMesh.indexCount, 0, 0);
-        }
-        else
-        {
-            r.context->Draw(gpuMesh.indexCount, 0);
-        }
-    };
-
-    auto drawItems = [&](const std::vector<DrawItem>& items, bool transparent)
-    {
-        r.context->OMSetBlendState(transparent ? r.alphaBlendState : r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
-        r.context->OMSetDepthStencilState(transparent ? r.depthReadState : r.depthWriteState, 0);
-
-        for (const DrawItem& item : items)
-        {
-            const SceneObject& obj = *item.object;
-            const KModelData* model = assets.GetModel(obj.model);
-            const bool skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
-
-            GPUShaderProgram* customProgram = nullptr;
-            if (item.material && item.material->shader != 0)
-                customProgram = GetOrCompileShaderProgram(r, item.material->shader, assets);
-
-            ID3D11RasterizerState* rs = SelectRasterizerState(r, scene.wireframe, IsDoubleSidedMaterial(item.material));
-            ID3D11InputLayout* layout = customProgram ? customProgram->inputLayout : r.meshLayout;
-            ID3D11VertexShader* vs = customProgram ? customProgram->vertexShader : r.meshVS;
-            ID3D11PixelShader* ps = customProgram ? customProgram->pixelShader : r.meshPS;
-            if (rs != boundRS) { r.context->RSSetState(rs); boundRS = rs; }
-            if (layout != boundLayout) { r.context->IASetInputLayout(layout); boundLayout = layout; }
-            if (vs != boundVS) { r.context->VSSetShader(vs, nullptr, 0); boundVS = vs; }
-            if (ps != boundPS) { r.context->PSSetShader(ps, nullptr, 0); boundPS = ps; }
-
-            // Material constants and texture only change with the material.
-            if (!haveMaterial || item.material != boundMaterial)
-            {
-                UpdateMaterialConstants(r, item.material);
-                ID3D11ShaderResourceView* textureSrv = GetMaterialTextureSRV(r, item.material);
-                r.context->PSSetShaderResources(0, 1, &textureSrv);
-                boundMaterial = item.material;
-                haveMaterial = true;
-            }
-
-            const float4x4 objectWorld = TransformToMatrix(obj.transform);
-
-            if (skinned)
-            {
-                const GPUModelRenderCache* modelRenderCache = GetOrBuildModelRenderCache(r, obj.model, assets);
-                if (!modelRenderCache)
-                    continue;
-
-                const uint32_t matrixCount = obj.skinMatrixCount > SceneObject::MaxSkinMatrices ? SceneObject::MaxSkinMatrices : obj.skinMatrixCount;
-                for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
-                {
-                    GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
-                    if (!gpuMesh)
-                        continue;
-
-                    float4x4 meshLocal = {};
-                    std::memcpy(&meshLocal, modelRenderCache->meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u, sizeof(meshLocal));
-                    const float4x4 world = Multiply(meshLocal, objectWorld);
-                    const float4x4 wvp = Multiply(world, viewProj);
-                    UpdateModelConstants(r, wvp, world, obj.skinMatrices, matrixCount);
-                    drawMesh(*gpuMesh);
-                }
-            }
-            else
-            {
-                GPUMesh* gpuMesh = GetOrUploadMesh(r, obj.mesh, assets);
-                if (!gpuMesh)
-                    continue;
-
-                const float4x4 wvp = Multiply(objectWorld, viewProj);
-                UpdateModelConstants(r, wvp, objectWorld, nullptr, 0);
-                drawMesh(*gpuMesh);
-            }
-        }
-    };
-
+    const float blendFactor[4] = { 0, 0, 0, 0 };
+    DrawState state;
     {
         KES_ZONE(RENDER, "Draw opaque");
         KES_D3D11_GPU_ZONE(r, "Opaque");
-        drawItems(opaqueItems, false);
+        r.context->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
+        r.context->OMSetDepthStencilState(r.depthWriteState, 0);
+        for (const DrawItem& item : opaqueItems)
+            DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, scene.wireframe);
     }
     {
         KES_ZONE(RENDER, "Draw transparent");
         KES_D3D11_GPU_ZONE(r, "Transparent");
-        drawItems(transparentItems, true);
+        r.context->OMSetBlendState(r.alphaBlendState, blendFactor, 0xFFFFFFFF);
+        r.context->OMSetDepthStencilState(r.depthReadState, 0);
+        for (const DrawItem& item : transparentItems)
+            DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, scene.wireframe);
     }
+
+    if (r.msaaSamples > 1)
+    {
+        KES_D3D11_GPU_ZONE(r, "MSAA resolve");
+        r.context->ResolveSubresource(r.sceneColor, 0, r.sceneColorMS, 0, kSceneColorFormat);
+    }
+    r.context->OMSetRenderTargets(0, nullptr, nullptr);
 }
 
 void RendererBeginBackbufferOverlay(Renderer& r)
 {
-    KES_D3D11_GPU_ZONE(r, "Backbuffer blit");
-    float black[4] = { 0,0,0,1 };
+    KES_D3D11_GPU_ZONE(r, "Tonemap");
+    const float black[4] = { 0, 0, 0, 1 };
     r.context->OMSetRenderTargets(1, &r.rtv, nullptr);
+    r.context->ClearRenderTargetView(r.rtv, black);
+    if (!r.sceneColorSRV)
+        return;
 
     D3D11_VIEWPORT vp = BuildPresentationViewport(r);
     r.context->RSSetViewports(1, &vp);
 
-    r.context->ClearRenderTargetView(r.rtv, black);
+    render::TonemapCBData tonemap = {};
+    tonemap.params[0] = r.exposure;
+    tonemap.params[1] = 1.0f / 255.0f;
+    UploadDynamic(r, r.tonemapCB, &tonemap, sizeof(tonemap));
 
-    ID3D11Buffer* noVB = nullptr;
-    UINT zero = 0;
-    r.context->IASetInputLayout(nullptr);
-    r.context->IASetVertexBuffers(0, 1, &noVB, &zero, &zero);
-    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-    r.context->VSSetShader(r.blitVS, nullptr, 0);
-    r.context->PSSetShader(r.blitPS, nullptr, 0);
-    r.context->PSSetShaderResources(0, 1, &r.offscreenSRV);
-    r.context->PSSetSamplers(0, 1, &r.pointSampler);
-    r.context->RSSetState(r.solidRS);
+    BindFullscreenTriangle(r);
+    r.context->VSSetShader(r.tonemapVS, nullptr, 0);
+    r.context->PSSetShader(r.tonemapPS, nullptr, 0);
+    r.context->PSSetConstantBuffers(0, 1, &r.tonemapCB);
+    r.context->PSSetShaderResources(0, 1, &r.sceneColorSRV);
+    r.context->PSSetSamplers(0, 1, &r.linearClampSampler);
+    r.context->RSSetState(r.solidNoCullRS);
     const float blendFactor[4] = { 0, 0, 0, 0 };
     r.context->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
-
+    r.context->OMSetDepthStencilState(nullptr, 0);
     r.context->Draw(3, 0);
 
     ID3D11ShaderResourceView* nullSRV = nullptr;
     r.context->PSSetShaderResources(0, 1, &nullSRV);
 }
+
+// UI
 
 UiTextureHandle RendererCreateUiTexture(Renderer& r, int width, int height, const uint8_t* rgbaPixels)
 {
@@ -1835,30 +1630,13 @@ UiTextureHandle RendererCreateUiTexture(Renderer& r, int width, int height, cons
     if (!r.device || width <= 0 || height <= 0 || !rgbaPixels)
         return 0;
 
-    D3D11_TEXTURE2D_DESC desc = {};
-    desc.Width = static_cast<UINT>(width);
-    desc.Height = static_cast<UINT>(height);
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_IMMUTABLE;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-    D3D11_SUBRESOURCE_DATA init = {};
-    init.pSysMem = rgbaPixels;
-    init.SysMemPitch = static_cast<UINT>(width) * 4u;
-
+    std::vector<render::MipLevel> levels(1);
+    levels[0].width = static_cast<uint32_t>(width);
+    levels[0].height = static_cast<uint32_t>(height);
+    levels[0].pixels.assign(rgbaPixels, rgbaPixels + static_cast<size_t>(width) * height * 4u);
     GPUTexture texture = {};
-    HRESULT hr = r.device->CreateTexture2D(&desc, &init, &texture.texture);
-    if (SUCCEEDED(hr))
-        hr = r.device->CreateShaderResourceView(texture.texture, nullptr, &texture.srv);
-    if (FAILED(hr))
-    {
-        EngineLogf("UI texture creation failed (%dx%d): 0x%08X", width, height, static_cast<unsigned>(hr));
-        DestroyGPUTexture(texture);
+    if (!CreateTexture2D(r, levels, DXGI_FORMAT_R8G8B8A8_UNORM, texture))
         return 0;
-    }
 
     const UiTextureHandle handle = r.nextUiTextureHandle++;
     r.uiTextures.emplace(handle, texture);
@@ -1917,7 +1695,7 @@ void RendererRenderUi(Renderer& r, const UiDrawList& drawList)
     r.context->VSSetShader(r.uiVS, nullptr, 0);
     r.context->VSSetConstantBuffers(0, 1, &r.uiCB);
     r.context->PSSetShader(r.uiPS, nullptr, 0);
-    r.context->PSSetSamplers(0, 1, &r.linearSampler);
+    r.context->PSSetSamplers(0, 1, &r.linearClampSampler);
 
     const LONG maxX = static_cast<LONG>(r.windowWidth);
     const LONG maxY = static_cast<LONG>(r.windowHeight);
@@ -1987,6 +1765,9 @@ void RendererRender(Renderer& r, const SceneState& scene, const Camera& camera, 
 
 void RendererShutdown(Renderer& r)
 {
+    if (r.context)
+        r.context->ClearState();
+
 #if KES_PROFILE_GPU
     if (r.gpuProfiler)
     {
@@ -1998,7 +1779,6 @@ void RendererShutdown(Renderer& r)
     for (auto& [handle, texture] : r.uiTextures)
         DestroyGPUTexture(texture);
     r.uiTextures.clear();
-    SafeRelease(r.linearSampler);
     SafeRelease(r.uiRS);
     SafeRelease(r.uiBlendState);
     SafeRelease(r.uiIndexBuffer);
@@ -2011,14 +1791,21 @@ void RendererShutdown(Renderer& r)
     SafeRelease(r.uiVS);
 
     DestroyGPUTexture(r.whiteTexture);
+    DestroyGPUTexture(r.environmentMap);
+    r.environment.key = 0;
+    DestroyShadowArray(r.cascadeShadows);
+    DestroyShadowArray(r.localShadows);
     DestroyRendererAssetCaches(r);
     r.assetGeneration = 0;
 
-    SafeRelease(r.pointSampler);
+    SafeRelease(r.materialSampler);
+    SafeRelease(r.linearClampSampler);
+    SafeRelease(r.shadowSampler);
     SafeRelease(r.depthReadState);
     SafeRelease(r.depthWriteState);
     SafeRelease(r.alphaBlendState);
     SafeRelease(r.opaqueBlendState);
+    SafeRelease(r.shadowRS);
     SafeRelease(r.wireNoCullRS);
     SafeRelease(r.wireRS);
     SafeRelease(r.solidNoCullRS);
@@ -2028,18 +1815,20 @@ void RendererShutdown(Renderer& r)
     SafeRelease(r.skyCB);
     SafeRelease(r.modelCB);
     SafeRelease(r.materialCB);
+    SafeRelease(r.tonemapCB);
 
-    SafeRelease(r.blitPS);
-    SafeRelease(r.blitVS);
-
+    SafeRelease(r.tonemapPS);
+    SafeRelease(r.tonemapVS);
     SafeRelease(r.skyPS);
     SafeRelease(r.skyVS);
-
+    SafeRelease(r.shadowPS);
+    SafeRelease(r.shadowVS);
     SafeRelease(r.meshLayout);
     SafeRelease(r.meshPS);
     SafeRelease(r.meshVS);
 
-    DestroyRenderTargets(r);
+    DestroySceneTargets(r);
+    DestroySwapchainTargets(r);
 
     SafeRelease(r.swapChain);
     SafeRelease(r.context);
@@ -2079,6 +1868,8 @@ namespace
         bool SetRenderResolution(int width, int height) override { return kes::d3d11::RendererSetRenderResolution(m_state, width, height); }
         void SetVSync(bool enabled) override { kes::d3d11::RendererSetVSync(m_state, enabled); }
         bool IsVSyncEnabled() const override { return m_state.vsync; }
+        void SetGraphicsOptions(const GraphicsOptions& options) override { kes::d3d11::RendererSetGraphicsOptions(m_state, options); }
+        GraphicsOptions GetGraphicsOptions() const override { return m_state.options; }
 
         void RenderScene(const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets) override
         {

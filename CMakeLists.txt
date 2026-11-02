@@ -51,6 +51,11 @@ include(KesPackage)     # "package" target: staged folder + archive / MSIXVC
 include(KesProfiler)    # KES_PROFILING: Tracy profiler zones (engine/profiler.h)
 include(KesUi)          # RmlUi + FreeType (HTML/CSS UI, engine/ui_system.h)
 
+# Debug hotkeys (F1-F4 render/input toggles, F7 UI reload, F8 RmlUi inspector)
+# and the RmlUi debugger. On for development builds; the package-* presets turn
+# it off so shipped games don't carry them (ENGINE_ALLOW_DEBUG_MODE).
+option(KES_DEBUG_TOOLS "Build debug hotkeys and the UI inspector into the engine" ON)
+
 # Include sub-projects.
 add_subdirectory ("engine")
 add_subdirectory ("game")

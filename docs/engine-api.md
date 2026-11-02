@@ -110,7 +110,15 @@ Input modes control the mouse (`EngineSetInputMode`, like Unreal's `SetInputMode
 | `InputMode::GameAndUI` | visible, free | keys, buttons and gamepad; no mouse look |
 | `InputMode::UIOnly` | visible, free | input actions read as idle (menus) |
 
-`EngineSetShowMouseCursor(app, false)` hides the cursor in the two UI modes, which are also the modes where UI documents get mouse and keyboard input (see [ui-system.md](ui-system.md#input)). In debug builds (`ENGINE_ALLOW_DEBUG_MODE`), **F4** switches between GameOnly and GameAndUI, **F7** reloads UI documents and **F8** toggles the UI debugger.
+`EngineSetShowMouseCursor(app, false)` hides the cursor in the two UI modes, which are also the modes where UI documents get mouse and keyboard input (see [ui-system.md](ui-system.md#input)). The cursor also hides while a gamepad navigates the UI (`DefaultUi.ini`).
+
+**Pause:** `EngineSetPaused(app, true)` stops entity updates and pauses audio output, while rendering and the UI keep running (`World::SetPaused`). A pause menu usually pairs it with `InputMode::UIOnly`, as `game/src/main.cpp` does.
+
+**Debug hotkeys** (`ENGINE_ALLOW_DEBUG_MODE`, CMake option `KES_DEBUG_TOOLS`, on by default, off in the `package-*` presets):
+- **F1** wireframe, **F3** animation debug
+- **F4** switches between GameOnly and GameAndUI
+- **F7** reloads UI documents and `DefaultUi.ini`
+- **F8** toggles the UI inspector
 
 Display helpers in `window.h`: `GetDisplayCount()`, `GetDesktopResolution(display)`, `GetSupportedFullscreenResolutions(display)`.
 
@@ -125,6 +133,7 @@ Display helpers in `window.h`: `GetDisplayCount()`, `GetDesktopResolution(displa
 | Display | `SetDisplayIndex` |
 | VSync | `SetVSyncEnabled`, `IsVSyncEnabled` |
 | Frame rate limit | `SetFrameRateLimit(fps)`, 0 = unlimited |
+| Look controls | `SetMouseSensitivity`, `SetGamepadLookSensitivity` (multipliers, 0.05-10), `SetLookYInverted`; used live by the default player |
 | Resolution scale | `SetResolutionScaleValue(percent)` / `SetResolutionScaleNormalized(0..1)`, scales the internal render resolution (`AppConfig::renderWidth/Height`) |
 | Renderer | `SetPreferredRenderer`, takes effect on the next launch |
 
@@ -188,7 +197,20 @@ Functions:
 
 Use this when you want map files to spawn your own entity classes by name.
 
-`EngineRegisterPlayerClass<T>` is the convenience path for a player entity that is constructed with `Camera&` and `InputState&`.
+`EngineRegisterPlayerClass<T>` registers a player entity and makes it the player class. `T` is constructed from `(Camera&, InputState&)`, `(InputState&)` or `()`, whichever it supports, so a class derived from `EnginePlayerEntity` works directly.
+
+### Default player (`EnginePlayerEntity`)
+
+A first-person fly camera with a collision capsule. It slides along walls instead of stopping, sub-steps fast moves so it can't pass through thin walls, and can move out if it starts inside geometry. It reads these input actions from `config/default.imap`:
+
+| Action | Type | Default bindings |
+|---|---|---|
+| `InputAction_Move` | vector2 | WASD, left stick (analog: partial tilt = partial speed) |
+| `InputAction_MoveUp` / `InputAction_MoveDown` | boolean | Space / Left Ctrl, RB / LB |
+| `InputAction_Look` | vector2 | mouse (deltas: an angle per frame) |
+| `InputAction_LookStick` | vector2 | right stick (a turn rate, squared response curve) |
+
+Look speed is scaled by `GameSettings` (`MouseSensitivity`, `GamepadLookSensitivity`, `bInvertLookY`). For base values and noclip, see `SetMoveSpeed`, `SetMouseLookScale`, `SetStickLookSpeed` and `SetCollisionEnabled`. Subclasses can reuse `MoveWithCollision` and `UpdateLook`.
 
 ## `World`
 
@@ -210,8 +232,10 @@ Important functions:
 - `void Shutdown();`
 - `void Update(float dt);`
 - `void FixedUpdate(float fixedDt);`
-- `bool LoadMap(const char* mapName);`
-- `void QueueMapLoad(const std::string& mapName);`
+- `bool LoadMap(const char* mapName);` loads synchronously. If the file can't be loaded, the current level stays and `false` is returned.
+- `void QueueMapLoad(const std::string& mapName);` loads at the end of the next `Update` (safe from inside entity code).
+- `const std::string& GetCurrentMapName() const;`
+- `void SetPaused(bool paused);` / `bool IsPaused() const;` stop entity updates and pause audio.
 - `void RegisterEntityClass(const std::string& className, EntityFactoryFunction factory);`
 - `void SetPlayerClassName(const std::string& className);`
 
@@ -219,6 +243,7 @@ Main accessors:
 
 - `Scene& GetScene();`
 - `AssetSystem& GetAssets();`
+- `AudioSystem& GetAudio();`
 - `GameContext& GetGameContext();`
 - `EntityManager& GetEntities();`
 
@@ -382,12 +407,17 @@ Important functions:
 - `void SetVoicePitch(AudioVoiceId id, float pitch);`
 - `void SetVoiceVolume(AudioVoiceId id, float volume);`
 
+- `void SetPaused(bool paused);` pauses the output device (voices keep their position)
+- `void StopAll();`
+- `bool HasOutput() const;`
+
 Current behavior:
 
-- loads `.ksound`
-- caches clips by path
-- supports 2D and simple positional playback
-- mixes to the current SDL audio device format
+- loads `.ksound` and caches clips by path, converted once to the mixer format (float stereo, 48 kHz)
+- mixes on SDL's audio thread (an `SDL_AudioStream` bound to the default playback device). SDL converts to the hardware format.
+- 2D and simple positional playback (distance attenuation and stereo pan from the listener the player sets)
+- at most `kMaxVoices` (128) voices at once. Further play calls return 0 and log a warning.
+- without an output device (headless machine, no sound card), it runs silent instead of failing startup
 
 ## `UiSystem`
 
@@ -402,30 +432,20 @@ Full guide: [ui-system.md](ui-system.md).
 
 ## `InputState`
 
-`InputState` is the current low-level input snapshot.
+`InputState` (`input.h`) holds the raw input snapshot and the **input actions** loaded from the project's `config/default.imap`.
 
-Stored input data:
+Raw state: `keys` / `previousKeys`, `mouseButtons` / `previousMouseButtons`, `mouseDeltaX/Y`, and the connected gamepads (`gamepad` is the one used last; all are opened).
 
-- keyboard state
-- previous keyboard state
-- mouse position
-- mouse delta
-- mouse button state
-- previous mouse button state
-- `quitRequested`
+Actions (preferred over raw keys, since players can rebind them and they cover keyboard and gamepad):
 
-Functions:
+- `bool InputActionDown / InputActionPressed / InputActionReleased(const InputState&, const char* action);`
+- `Vector2 InputActionValue2D(...)`, `Vector3 InputActionValue3D(...)`
+- game actions read as idle in `InputMode::UIOnly`. UI actions (`UI_*`, `"Context": "UI"`) only read while the UI navigates (see [ui-system.md](ui-system.md#navigation-keyboard-and-gamepad)).
+- an action held as its context turns on doesn't count as pressed (e.g. the Start that opened a menu)
 
-- `void InputInit(InputState& input);`
-- `void InputBeginFrame(InputState& input);`
-- `void InputProcessEvent(InputState& input, const SDL_Event& e);`
-- `bool InputKeyDown(const InputState& input, SDL_Scancode key);`
-- `bool InputKeyPressed(const InputState& input, SDL_Scancode key);`
-- `bool InputKeyReleased(const InputState& input, SDL_Scancode key);`
-- `bool InputMouseDown(const InputState& input, int button);`
-- `bool InputMousePressed(const InputState& input, int button);`
+Raw keys: `InputKeyDown / InputKeyPressed / InputKeyReleased(const InputState&, SDL_Scancode)`.
 
-This is a direct state API. There is no higher-level action mapping layer yet.
+Engine plumbing: `InputInit`, `InputBeginFrame`, `InputProcessEvent`, `InputEndFrame`, `InputLoadActionMap`, `InputAddDefaultActions`.
 
 ## Configuration Macros
 
@@ -437,8 +457,7 @@ Important macros:
 - `ENGINE_CONTENT_DIRECTORY`
 - `ENGINE_PAK_ENCRYPTION_KEY_HEX`
 - `ENGINE_STARTUP_MAP`
-- `ENGINE_ALLOW_CONSOLE`
-- `ENGINE_ALLOW_DEBUG_MODE`
+- `ENGINE_ALLOW_DEBUG_MODE` (set by the CMake option `KES_DEBUG_TOOLS`)
 - `ENGINE_DEFAULT_PLAYER_CLASS_NAME`
 
 These act as engine defaults and can be overridden at compile time.

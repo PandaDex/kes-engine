@@ -86,7 +86,7 @@
     </div>
     <div id="hitmarker" data-if="hit_flash > 0" data-style-opacity="hit_flash"/>
 
-    <div id="interact" data-if="!chat_open">Press <span class="key">E</span> to talk to Vex</div>
+    <div id="interact" data-if="!chat_open">Press <span class="key kbm-only">E</span><span class="key pad-only">A</span> to talk to Vex</div>
 
     <div id="weapon" class="panel">
         <img src="icons/blaster.bmp"/>
@@ -107,10 +107,18 @@
         </div>
     </div>
 
+    <!-- body.input-gamepad / input-mouse / input-keyboard is set by the UI system -->
     <div id="hints">
-        <span class="key">WASD</span> move  <span class="key">F</span> fire  <span class="key">R</span> reload
-        <span class="key">H</span> take damage  <span class="key">E</span> talk  <span class="key">I</span> inventory
-        <span class="key">T</span> chat  <span class="key">Esc</span> pause
+        <span class="kbm-only">
+            <span class="key">WASD</span> move  <span class="key">F</span> fire  <span class="key">R</span> reload
+            <span class="key">H</span> take damage  <span class="key">E</span> talk  <span class="key">I</span> inventory
+            <span class="key">T</span> chat  <span class="key">Esc</span> pause
+        </span>
+        <span class="pad-only">
+            <span class="key">L</span> move  <span class="key">RT</span> fire  <span class="key">X</span> reload
+            <span class="key">Y</span> take damage  <span class="key">A</span> talk  <span class="key">View</span> inventory
+            <span class="key">Menu</span> pause
+        </span>
     </div>
     <div id="debug-line" data-if="set_show_fps">{{ fps }} FPS  ·  {{ position }}</div>
 </div>

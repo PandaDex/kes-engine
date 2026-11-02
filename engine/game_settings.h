@@ -4,6 +4,7 @@
 #include <vector>
 #include "ini_file.h"
 #include "shared.h"
+#include "render_backend.h"   // GraphicsOptions, ShadowQuality
 
 struct AppWindow;
 class IRenderer;
@@ -77,13 +78,35 @@ public:
     void SetFrameRateLimit(float framesPerSecond);
     float GetFrameRateLimit() const { return m_frameRateLimit; }
 
-    // Internal render resolution as a percentage of AppConfig::renderWidth/Height
-    // (Unreal's r.ScreenPercentage). Normalized maps 0..1 to the min..100% range.
+    // Internal render resolution as a percentage of the window's pixel size
+    // (Unreal's r.ScreenPercentage; AppConfig::renderWidth/Height before the
+    // window exists). Normalized maps 0..1 to the min..100% range.
     void SetResolutionScaleValue(float percent);
     float GetResolutionScaleValue() const { return m_resolutionScale; }
     void SetResolutionScaleNormalized(float normalized);
     float GetResolutionScaleNormalized() const;
     IntPoint GetRenderResolution() const;
+
+    // Graphics quality, applied with ApplyNonResolutionSettings (IRenderer::SetGraphicsOptions).
+    void SetShadowQuality(ShadowQuality quality) { m_shadowQuality = quality; }
+    ShadowQuality GetShadowQuality() const { return m_shadowQuality; }
+    // MSAA samples: 1 (off), 2, 4 or 8; clamped to what the GPU supports.
+    void SetAntiAliasingSamples(int samples) { m_msaaSamples = samples; }
+    int GetAntiAliasingSamples() const { return m_msaaSamples; }
+    void SetAnisotropicFiltering(int level) { m_anisotropy = level; }
+    int GetAnisotropicFiltering() const { return m_anisotropy; }
+    void SetShadowDistance(float meters) { m_shadowDistance = meters; }
+    float GetShadowDistance() const { return m_shadowDistance; }
+    GraphicsOptions GetGraphicsOptions() const;
+
+    // Look controls, applied live (multipliers on the player's base values,
+    // clamped to 0.05-10).
+    void SetMouseSensitivity(float multiplier) { m_mouseSensitivity = multiplier; }
+    float GetMouseSensitivity() const { return m_mouseSensitivity; }
+    void SetGamepadLookSensitivity(float multiplier) { m_gamepadLookSensitivity = multiplier; }
+    float GetGamepadLookSensitivity() const { return m_gamepadLookSensitivity; }
+    void SetLookYInverted(bool inverted) { m_invertLookY = inverted; }
+    bool IsLookYInverted() const { return m_invertLookY; }
 
     // Takes effect on the next launch (the renderer can't be swapped live).
     void SetPreferredRenderer(RendererBackend backend) { m_preferredRenderer = backend; }
@@ -167,6 +190,13 @@ private:
     float m_frameRateLimit = 0.0f;    // FrameRateLimit
     float m_resolutionScale = 100.0f; // ResolutionScale (percent)
     RendererBackend m_preferredRenderer = RendererBackend::Auto;
+    ShadowQuality m_shadowQuality = ShadowQuality::High; // ShadowQuality (0-3)
+    int m_msaaSamples = 4;                 // AntiAliasing
+    int m_anisotropy = 8;                  // AnisotropicFiltering
+    float m_shadowDistance = 60.0f;        // ShadowDistance
+    float m_mouseSensitivity = 1.0f;       // MouseSensitivity
+    float m_gamepadLookSensitivity = 1.0f; // GamepadLookSensitivity
+    bool m_invertLookY = false;            // bInvertLookY
 
     IniFile m_ini; // whole document, so unknown sections survive a save
     bool m_loaded = false;

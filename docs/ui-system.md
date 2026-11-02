@@ -142,10 +142,76 @@ Each event goes to the UI first. When the UI consumes it, game input (`InputStat
 
 The SDL platform code handles text input and IME, clipboard, and cursor shapes (CSS `cursor: pointer | text | move | ...`).
 
-Debug builds (`ENGINE_ALLOW_DEBUG_MODE`) add:
+### Navigation (keyboard and gamepad)
 
-- **F7**: reload open documents and style sheets from disk
-- **F8**: toggle the RmlUi debugger (element inspector, event log), switching to `GameAndUI` if needed
+Menus are navigated with **UI input actions** from the project's input map (`config/default.imap`), so every project can rebind them:
+
+| Action | Type | Default bindings | Effect |
+|---|---|---|---|
+| `UI_Up` `UI_Down` `UI_Left` `UI_Right` | boolean | D-pad, arrow keys | move focus, repeating while held; left/right also step a focused range slider |
+| `UI_Navigate` | vector2 | left stick | same as the directions, with press/release thresholds |
+| `UI_Accept` | boolean | A, Enter, keypad Enter | activate the focused element (Enter) |
+| `UI_Back` | boolean | B, Start, Escape | close an open `<select>`, otherwise Escape, and `WasBackPressed()` |
+| `UI_PrevTab` `UI_NextTab` | boolean | LB / RB | switch tabs of the document's `<tabset>`, focusing the new panel's first control |
+| `UI_Scroll` | vector2 | right stick | scroll the nearest scrollable container (y) |
+
+- Actions named `UI_*` belong to the UI context (or set `"Context": "UI"` on any action). They only read while navigation is on, and game actions read as idle in `UIOnly` as before. A button held as navigation turns on (e.g. Start opening the pause menu) doesn't count as a press.
+- The engine adds every UI action the project's map doesn't define (`kUiDefaultActionMap` in `ui_system.cpp`). To change one, define it in the project map. An action with an empty `NativeKeys` list disables it.
+- Keys bound to UI actions are handled by the actions (the same repeat timing as the gamepad), not by RmlUi, except while a text field has focus: then every key goes to the field and UI keyboard bindings are ignored. Gamepad up/down leaves a text field along the tab order.
+- All connected gamepads are opened, and the one used last is the one bindings read.
+
+Focusable elements need `tab-index: auto`, and arrow/gamepad navigation needs `nav: auto` (or `nav-up` / `nav-down` / ... with an element id). `kes.rcss` sets both on buttons and form controls, and `[disabled]` elements are skipped. Add them to custom widgets (e.g. an inventory slot `div`) and give those a `:focus-visible` style. Tab / Shift+Tab always work natively.
+
+**Focus handling:** `ElementDocument::Show` only focuses the document itself. When a document has no focused control, the UI focuses its remembered control (the last one focused there), or else its first non-text-field control. That happens on the first navigation input, and with `AutoFocus=Gamepad` also automatically while the gamepad is active (including when the focused control is hidden or removed). The navigation target is the document holding focus, or the top-most visible document with a control.
+
+**Input device:** the device used last (`UiSystem::GetActiveInputDevice`) is set as a class on every document's `<body>`: `input-mouse`, `input-keyboard` or `input-gamepad`. Use it for prompts:
+
+```css
+.pad-only { display: none; }
+body.input-gamepad .pad-only { display: inline; }
+body.input-gamepad .kbm-only { display: none; }
+```
+
+While the gamepad navigates, the mouse cursor is hidden (`HideCursorWithGamepad`) and hover styles are cleared. Moving the mouse brings the cursor back.
+
+Navigation input that no element used is reported for the current frame, so game code doesn't check keys or buttons itself:
+
+```cpp
+if (ui.WasBackPressed())      // UI_Back (or Escape while navigation is off)
+    CloseTopMenu();
+if (ui.WasConfirmPressed())   // UI_Accept with nothing focusable, e.g. to skip dialogue text
+    SkipText();
+```
+
+## Project Configuration
+
+Each project ships `config/DefaultUi.ini` next to the exe (`kes_add_game(... CONFIG_DIR ...)`, the same folder as `default.imap` and `DefaultGameSettings.ini`). Missing keys, or a missing file, keep the engine defaults (`UiConfig` in `ui_system.h`). In debug builds, F7 reloads it together with the documents.
+
+```ini
+[UI]
+Fonts=engine/ui/fonts/LatoLatin-Regular.ttf, engine/ui/fonts/LatoLatin-Bold.ttf, ...   ; first = fallback
+FallbackFonts=                ; extra fallback faces (CJK, symbols)
+DensityScale=1.0              ; multiplies the window display scale for dp
+
+[Navigation]
+GamepadNavigation=UIOnly      ; input modes where UI_* actions drive the UI: UIOnly, GameAndUI, Never
+AutoFocus=Gamepad             ; Gamepad, Always or Never (only on the first input)
+RememberFocus=True
+HideCursorWithGamepad=True
+RepeatDelay=0.40              ; seconds before a held direction repeats
+RepeatInterval=0.11
+StickPressThreshold=0.50      ; UI_Navigate tilt for a press / a release
+StickReleaseThreshold=0.35
+ScrollDeadzone=0.20           ; UI_Scroll
+ScrollSpeed=900               ; dp per second
+
+[Sounds]                      ; content paths, played through the world's audio system
+Focus=
+Accept=
+Back=
+```
+
+`GameAndUI` lets the UI actions run alongside game actions. Bindings shared by both (A for Interact and Accept) then do both, so pick distinct bindings in that case. `game/config` and `samples/ui/config` are the two example projects. The sample overrides `UI_Accept` (adding Space) and adds gamepad bindings for its gameplay actions.
 
 ## Example
 

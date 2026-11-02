@@ -56,8 +56,19 @@ public:
     void SetVoicePitch(AudioVoiceId id, float pitch);
     void SetVoiceVolume(AudioVoiceId id, float volume);
 
+    // Pauses the output device (e.g. while the game is paused); voices keep
+    // their positions.
+    void SetPaused(bool paused);
+    bool IsPaused() const { return paused; }
+    void StopAll();
+    // False when there is no output device; the system then runs silent.
+    bool HasOutput() const { return stream != nullptr; }
+
+    static constexpr size_t kMaxVoices = 128;
+
 private:
-    static void SDLAudioCallback(void* userdata, Uint8* stream, int len);
+    static void SDLAudioCallback(void* userdata, SDL_AudioStream* stream, int additionalAmount, int totalAmount);
+    bool AddVoice(const AudioVoice& voice);
     void MixAudio(float* outSamples, int frameCount);
     const AudioClip* GetOrLoadClip(const char* soundFile);
     AudioVoice* FindVoice(AudioVoiceId id);
@@ -65,8 +76,10 @@ private:
     void CleanupVoices();
 
 private:
-    SDL_AudioDeviceID device = 0;
-    SDL_AudioSpec deviceSpec = {};
+    SDL_AudioStream* stream = nullptr;   // bound to the default playback device
+    SDL_AudioSpec deviceSpec = {};       // mixer format: F32 stereo 48 kHz
+    std::vector<float> mixBuffer;        // audio thread scratch
+    bool paused = false;
     AudioListener listener = {};
     std::unordered_map<std::string, AudioClip> clipCache;
     std::vector<AudioVoice> voices;

@@ -1062,6 +1062,8 @@ namespace
 
         const bool gameplay = s.screen == Screen::Playing && s.overlay == Overlay::None;
         EngineSetInputMode(*s.app, gameplay ? InputMode::GameOnly : InputMode::UIOnly);
+        // The pause menu (and settings opened from it) freezes the world and its audio.
+        EngineSetPaused(*s.app, s.overlay == Overlay::Pause || s.overlay == Overlay::Settings);
     }
 
     void OpenSettings(Showcase& s)
@@ -1383,8 +1385,9 @@ namespace
 
         if (gameplay)
         {
+            // Actions from the sample's config/default.imap (keyboard + gamepad).
             const bool mouseFire = input.mouseButtons[SDL_BUTTON_LEFT] && !input.previousMouseButtons[SDL_BUTTON_LEFT];
-            if (InputKeyPressed(input, SDL_SCANCODE_F) || mouseFire)
+            if (InputActionPressed(input, "Showcase_Fire") || mouseFire)
             {
                 if (s.reloading)
                 {
@@ -1410,16 +1413,16 @@ namespace
                     s.emptyWarnCooldown = 1.5f;
                 }
             }
-            if (InputKeyPressed(input, SDL_SCANCODE_R) && !s.reloading && s.ammo < kMagazineSize && s.reserve > 0)
+            if (InputActionPressed(input, "Showcase_Reload") && !s.reloading && s.ammo < kMagazineSize && s.reserve > 0)
             {
                 s.Set(s.reloading, true, "reloading");
                 s.reloadTime = 0.0f;
             }
-            if (InputKeyPressed(input, SDL_SCANCODE_H))
+            if (InputActionPressed(input, "Showcase_Damage"))
                 TakeDamage(s, DamagePerHit(s));
-            if (InputKeyPressed(input, SDL_SCANCODE_E))
+            if (InputActionPressed(input, "InputAction_Interact"))
                 RequestOverlay(s, Overlay::Dialogue);
-            if (InputKeyPressed(input, SDL_SCANCODE_I))
+            if (InputActionPressed(input, "Showcase_Inventory"))
                 RequestOverlay(s, Overlay::Inventory);
             if (InputKeyPressed(input, SDL_SCANCODE_T) || InputKeyPressed(input, SDL_SCANCODE_RETURN))
                 RequestOverlay(s, Overlay::Chat);
@@ -1511,7 +1514,8 @@ namespace
             s.Set(s.dlg_text, Rml::String(s.dialogueFull.substr(0, shown)), "dlg_text");
             if (shown >= s.dialogueFull.size())
                 s.Set(s.dlg_typing, false, "dlg_typing");
-            if (InputKeyPressed(input, SDL_SCANCODE_SPACE))
+            // Space, or A on a gamepad (nothing to focus while the text types).
+            if (InputKeyPressed(input, SDL_SCANCODE_SPACE) || Ui(s).WasConfirmPressed())
                 SkipTypewriter(s);
             return;
         }
@@ -1643,8 +1647,9 @@ namespace
         ApplyTransition(s);
 
         InputState& input = s.app->input;
-        // Escape: game actions read as idle in UIOnly mode, so check the key too.
-        if (InputActionPressed(input, "InputAction_Pause") || InputKeyPressed(input, SDL_SCANCODE_ESCAPE))
+        // Pause action in gameplay (Esc / Start). Game actions read as idle in
+        // UIOnly mode, where the UI reports Esc / B / Start as "back" instead.
+        if (InputActionPressed(input, "InputAction_Pause") || Ui(s).WasBackPressed())
             Back(s);
         if (s.overlay == Overlay::Inventory && InputKeyPressed(input, SDL_SCANCODE_I))
             RequestOverlay(s, Overlay::None);

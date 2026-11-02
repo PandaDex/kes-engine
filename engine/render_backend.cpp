@@ -241,9 +241,6 @@ void RendererUpdateScene(SceneState& scene, const InputState& input)
     if (InputKeyPressed(input, SDL_SCANCODE_F1))
         scene.wireframe = !scene.wireframe;
 
-    if (InputKeyPressed(input, SDL_SCANCODE_F2))
-        scene.vertexSnap = !scene.vertexSnap;
-
     if (InputKeyPressed(input, SDL_SCANCODE_F3))
         scene.animDebug = !scene.animDebug;
 #else

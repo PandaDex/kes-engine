@@ -30,4 +30,5 @@ private:
 
     uint32_t lightId = 0;
     Light lightData;
+    bool castShadowsSet = false;   // "CastShadows" given by the map
 };

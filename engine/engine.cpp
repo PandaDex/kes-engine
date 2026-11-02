@@ -99,30 +99,65 @@ namespace
             return;
         if (app.renderer->Resize(size.x, size.y))
             app.rendererSize = size;
+        // The internal resolution follows the window (times the resolution scale).
+        if (app.settings)
+        {
+            const IntPoint renderResolution = app.settings->GetRenderResolution();
+            app.renderer->SetRenderResolution(renderResolution.x, renderResolution.y);
+        }
         app.ui.SetViewportSize(size.x, size.y);
+    }
+
+    // Locked for mouse look in GameOnly. Otherwise shown (EngineSetShowMouseCursor),
+    // except while the gamepad navigates the UI (DefaultUi.ini HideCursorWithGamepad).
+    void ApplyCursor(EngineApp &app)
+    {
+        bool visible = false;
+        bool locked = true;
+        if (app.inputMode != InputMode::GameOnly)
+        {
+            const bool gamepadNavigating = app.ui.IsNavigationEnabled() &&
+                                           app.ui.GetActiveInputDevice() == UiInputDevice::Gamepad;
+            visible = app.showMouseCursor && !(gamepadNavigating && app.ui.GetConfig().hideCursorWithGamepad);
+            locked = false;
+        }
+        if (app.window.cursorVisible != visible || app.window.mouseLocked != locked)
+            SetAppWindowCursor(app.window, visible, locked);
+    }
+
+    bool IsUiNavigationMode(const EngineApp &app)
+    {
+        switch (app.ui.GetConfig().navigation)
+        {
+        case UiNavigationMode::UIOnly:
+            return app.inputMode == InputMode::UIOnly;
+        case UiNavigationMode::GameAndUI:
+            return app.inputMode != InputMode::GameOnly;
+        default:
+            return false;
+        }
     }
 
     void ApplyInputMode(EngineApp &app)
     {
         app.ui.SetInputEnabled(app.inputMode != InputMode::GameOnly);
-        switch (app.inputMode)
-        {
-        case InputMode::GameOnly:
-            SetAppWindowCursor(app.window, false, true);
-            app.input.gameInputEnabled = true;
-            app.input.mouseLookEnabled = true;
-            break;
-        case InputMode::GameAndUI:
-            SetAppWindowCursor(app.window, app.showMouseCursor, false);
-            app.input.gameInputEnabled = true;
-            app.input.mouseLookEnabled = false;
-            break;
-        case InputMode::UIOnly:
-            SetAppWindowCursor(app.window, app.showMouseCursor, false);
-            app.input.gameInputEnabled = false;
-            app.input.mouseLookEnabled = false;
-            break;
-        }
+        // UI_* actions drive the UI (DefaultUi.ini GamepadNavigation).
+        const bool navigation = IsUiNavigationMode(app);
+        app.ui.SetNavigationEnabled(navigation);
+        app.input.uiActionsEnabled = navigation;
+        app.input.gameInputEnabled = app.inputMode != InputMode::UIOnly;
+        app.input.mouseLookEnabled = app.inputMode == InputMode::GameOnly;
+        ApplyCursor(app);
+    }
+
+    UiConfig LoadProjectUiConfig()
+    {
+        bool found = false;
+        const std::string path = GetDefaultUiConfigPath();
+        UiConfig config = LoadUiConfig(path, &found);
+        if (!found)
+            EngineLogf("UI config not found (%s); using engine defaults.", path.c_str());
+        return config;
     }
 
     // Sleeps until the next frame slot when a frame rate limit is set.
@@ -226,6 +261,12 @@ bool EngineStart(EngineApp &app)
     EngineLog("SDL subsystems initialized.");
 
     InputInit(app.input);
+    {
+        // UI_* navigation actions the project's input map doesn't define.
+        std::string error;
+        if (!InputAddDefaultActions(app.input, kUiDefaultActionMap, &error))
+            EngineLogf("Default UI input actions not added: %s", error.c_str());
+    }
     EngineLog("Input initialized.");
 
     // Settings need SDL video (display queries) and come before the window.
@@ -250,8 +291,13 @@ bool EngineStart(EngineApp &app)
 
     // Non-fatal: the game still runs without UI (e.g. missing fonts are only
     // a warning, a failed RmlUi init just logs).
-    if (!app.ui.Init(app.window.handle, app.renderer.get(), app.window.pixelWidth, app.window.pixelHeight))
+    if (!app.ui.Init(app.window.handle, app.renderer.get(), app.window.pixelWidth, app.window.pixelHeight,
+                     &app.input, LoadProjectUiConfig()))
         EngineLog("UI system failed to initialize; continuing without UI.");
+    app.ui.SetSoundCallback([&app](const std::string &path) {
+        if (app.worldInitialized)
+            app.world.GetAudio().Play2D(path.c_str());
+    });
 
     EngineLogf("Main camera initialized at position (%.2f, %.2f, %.2f).", app.camera.x, app.camera.y, app.camera.z);
 
@@ -294,6 +340,7 @@ bool EngineTick(EngineApp &app)
     {
         KES_ZONE(INPUT, "Event pump");
         InputBeginFrame(app.input);
+        app.ui.BeginFrame();
 
         SDL_Event event = {};
         int eventCount = 0;
@@ -328,9 +375,13 @@ bool EngineTick(EngineApp &app)
 #if ENGINE_ALLOW_DEBUG_MODE
             if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F4))
                 EngineSetInputMode(app, app.inputMode == InputMode::GameOnly ? InputMode::GameAndUI : InputMode::GameOnly);
-            // F7: reload UI documents and style sheets, F8: RmlUi debugger
+            // F7: reload UI documents, style sheets and DefaultUi.ini, F8: RmlUi debugger
             if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F7))
+            {
+                app.ui.SetConfig(LoadProjectUiConfig());
+                ApplyInputMode(app);
                 app.ui.ReloadDocuments();
+            }
             if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F8))
             {
                 const bool show = !app.ui.IsDebuggerVisible();
@@ -371,6 +422,7 @@ bool EngineTick(EngineApp &app)
 
     app.world.Update(dt);
     app.ui.Update();
+    ApplyCursor(app);   // follows the active input device
 
     if (IsAppWindowRenderable(app.window))
     {
@@ -423,6 +475,17 @@ void EngineSetShowMouseCursor(EngineApp &app, bool show)
 {
     app.showMouseCursor = show;
     ApplyInputMode(app);
+}
+
+void EngineSetPaused(EngineApp &app, bool paused)
+{
+    if (app.worldInitialized)
+        app.world.SetPaused(paused);
+}
+
+bool EngineIsPaused(const EngineApp &app)
+{
+    return app.worldInitialized && app.world.IsPaused();
 }
 
 void EngineSetWindowTitle(EngineApp &app, const char *title)

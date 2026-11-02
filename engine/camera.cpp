@@ -13,8 +13,6 @@ namespace
         float m[4][4];
     };
 
-    static constexpr float kCameraFovYRadians = 70.0f * 3.14159265f / 180.0f;
-
     static float4x4 Identity()
     {
         float4x4 r = {};
@@ -140,7 +138,7 @@ void CameraBuildMatrices(const Camera& camera, float aspect, CameraViewData& out
     const float3 up = { 0.0f, 1.0f, 0.0f };
 
     const float4x4 view = LookToLH(eye, forward, up);
-    const float4x4 proj = PerspectiveFovLH(kCameraFovYRadians, aspect, 0.1f, 100.0f);
+    const float4x4 proj = PerspectiveFovLH(kCameraFovYRadians, aspect, kCameraNearPlane, kCameraFarPlane);
     const float4x4 vp = Multiply(view, proj);
 
     MatrixToArray(view, outData.view);

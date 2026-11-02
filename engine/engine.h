@@ -72,6 +72,11 @@ void EngineSetInputMode(EngineApp& app, InputMode mode);
 InputMode EngineGetInputMode(const EngineApp& app);
 void EngineSetShowMouseCursor(EngineApp& app, bool show);
 
+// Pause: entities stop updating and audio is paused, rendering and UI go on
+// (World::SetPaused). Typically paired with InputMode::UIOnly for a pause menu.
+void EngineSetPaused(EngineApp& app, bool paused);
+bool EngineIsPaused(const EngineApp& app);
+
 // Window helpers
 void EngineSetWindowTitle(EngineApp& app, const char* title);
 // Windowed <-> preferred fullscreen mode (also bound to Alt+Enter). Saved to settings.
@@ -106,22 +111,37 @@ void EngineRegisterEntityClass(EngineApp& app, const std::string& className)
         });
 }
 
+// Player classes are constructed from (Camera&, InputState&), (InputState&)
+// (like EnginePlayerEntity, to derive from) or nothing, whichever T supports.
 template<typename T>
 void EngineRegisterPlayerClass(EngineApp& app, const std::string& className)
 {
     static_assert(std::is_base_of_v<Entity, T>, "Registered player class must derive from Entity");
-    static_assert(std::is_constructible_v<T, Camera&, InputState&>,
-                  "Registered player class must be constructible from Camera& and InputState&");
+    static_assert(std::is_constructible_v<T, Camera&, InputState&> || std::is_constructible_v<T, InputState&> ||
+                      std::is_default_constructible_v<T>,
+                  "Registered player class must be constructible from (Camera&, InputState&), (InputState&) or ()");
 
     EngineRegisterEntityClass(
         app,
         className,
         [](EntityManager& manager, GameContext& context) -> Entity*
         {
-            if (!context.mainCamera || !context.input)
-                return nullptr;
-
-            return manager.CreateEntity<T>(*context.mainCamera, *context.input);
+            if constexpr (std::is_constructible_v<T, Camera&, InputState&>)
+            {
+                if (!context.mainCamera || !context.input)
+                    return nullptr;
+                return manager.CreateEntity<T>(*context.mainCamera, *context.input);
+            }
+            else if constexpr (std::is_constructible_v<T, InputState&>)
+            {
+                if (!context.input)
+                    return nullptr;
+                return manager.CreateEntity<T>(*context.input);
+            }
+            else
+            {
+                return manager.CreateEntity<T>();
+            }
         });
     EngineSetPlayerClass(app, className);
 }

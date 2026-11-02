@@ -21,7 +21,14 @@ public:
     void Shutdown();
     void Update(float dt);
     void FixedUpdate(float fixedDt);
+    // Loads synchronously. If the map can't be loaded, the current level stays.
     bool LoadMap(const char* mapName);
+    const std::string& GetCurrentMapName() const { return currentMapName; }
+
+    // Paused: entities don't update and audio output is paused. Rendering and
+    // queued map loads continue.
+    void SetPaused(bool paused);
+    bool IsPaused() const { return paused; }
     void QueueMapLoad(const std::string& mapName);
     void RegisterEntityClass(const std::string& className, EntityFactoryFunction factory);
     void SetPlayerClassName(const std::string& className);
@@ -32,6 +39,8 @@ public:
 
     AssetSystem& GetAssets();
     const AssetSystem& GetAssets() const;
+
+    AudioSystem& GetAudio();
 
     GameContext& GetGameContext();
     const GameContext& GetGameContext() const;
@@ -58,5 +67,7 @@ private:
     EntityFactoryRegistry entityFactories;
     std::vector<std::pair<std::string, EntityFactoryFunction>> customEntityFactories;
     std::string pendingMapLoad;
+    std::string currentMapName;
     std::string playerClassName;
+    bool paused = false;
 };

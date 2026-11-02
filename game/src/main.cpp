@@ -29,6 +29,9 @@ namespace
             ui.pauseMenu->Show(Rml::ModalFlag::Modal);
         else
             ui.pauseMenu->Hide();
+        // Stops entities and audio; UIOnly gives the menu the mouse, keyboard
+        // and gamepad (UI_* actions).
+        EngineSetPaused(app, paused);
         EngineSetInputMode(app, paused ? InputMode::UIOnly : InputMode::GameOnly);
     }
 
@@ -55,11 +58,12 @@ namespace
 
     void UpdateExampleUi(EngineApp& app, ExampleUi& example)
     {
-        // InputAction_Pause (config/default.imap) opens the menu; while it is
-        // open, game actions read as idle, so Escape is checked directly.
+        // InputAction_Pause (Esc / Start, config/default.imap) opens the menu.
+        // While it is open, game actions read as idle and the UI reports
+        // UI_Back (Esc, B, Start) instead.
         const bool paused = example.pauseMenu && example.pauseMenu->IsVisible();
         if ((!paused && InputActionPressed(app.input, "InputAction_Pause")) ||
-            (paused && InputKeyPressed(app.input, SDL_SCANCODE_ESCAPE)))
+            (paused && EngineGetUi(app).WasBackPressed()))
             SetPaused(app, example, !paused);
 
         ++example.frames;

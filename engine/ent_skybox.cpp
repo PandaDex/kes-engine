@@ -70,6 +70,12 @@ bool SkyboxEntity::ApplyProperty(const std::string& name, const std::string& val
         return true;
     }
 
+    if (name == "AmbientIntensity")
+    {
+        skyData.ambientIntensity = std::max(entityprops::ParseFloat(value, skyData.ambientIntensity), 0.0f);
+        return true;
+    }
+
     return Entity::ApplyProperty(name, value);
 }
 

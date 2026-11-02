@@ -25,6 +25,7 @@ enum class ShaderStage
 inline constexpr const char* kEngineShaderMeshDefault = "engine/shaders/mesh_default.slang";
 inline constexpr const char* kEngineShaderMeshFallback = "engine/shaders/mesh_fallback.slang";
 inline constexpr const char* kEngineShaderSky = "engine/shaders/sky.slang";
+inline constexpr const char* kEngineShaderShadow = "engine/shaders/shadow.slang";
 inline constexpr const char* kEngineShaderBlit = "engine/shaders/blit.slang";
 inline constexpr const char* kEngineShaderUi = "engine/shaders/ui.slang";
 

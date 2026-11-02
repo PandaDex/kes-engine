@@ -1,8 +1,9 @@
 Material {
-    Shader = "shaders/psx_default.shader"
     BaseColor = "1,1,1,1"
     BaseTexture = "textures/checker.bmp"
     Emissive = "0,0,0"
+    Metallic = 0
+    Roughness = 0.6
     AlphaCutoff = 0
     Lit = true
     Transparent = false

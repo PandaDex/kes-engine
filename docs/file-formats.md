@@ -122,8 +122,8 @@ Example:
 
 ```txt
 Shader {
-    Name = "PSX Default"
-    Source = "shaders/psx_mesh.slang"
+    Name = "Toon"
+    Source = "shaders/toon_mesh.slang"
 }
 ```
 
@@ -131,7 +131,7 @@ Shader {
 - `VertexShader` / `PixelShader` - optional per-stage overrides (another `.slang` file)
 - a stage that is not provided falls back to the engine's `engine/shaders/mesh_fallback.slang`
 
-The runtime never compiles shaders. It loads the binaries built next to the source path, e.g. `shaders/psx_mesh.vs.spv` (Vulkan) or `shaders/psx_mesh.vs.dxbc` (D3D11).
+The runtime never compiles shaders. It loads the binaries built next to the source path, e.g. `shaders/toon_mesh.vs.spv` (Vulkan) or `shaders/toon_mesh.vs.dxbc` (D3D11). Materials without a `Shader` use the engine's PBR program; see [rendering.md](rendering.md#custom-material-shaders).
 
 ## Material Files: `.mat`
 
@@ -151,14 +151,19 @@ Current node types:
 
 Typical top-level data stored in a material file:
 
-- `Shader`
-- `BaseTexture`
-- `BaseColor`
-- `Emissive`
+- `Shader` (optional; omitted = the engine's PBR program)
+- `BaseTexture`, `BaseColor`
+- `Metallic`, `Roughness`, `MetallicRoughnessTexture`
+- `NormalTexture`, `NormalScale`
+- `OcclusionTexture`, `OcclusionStrength`
+- `Emissive`, `EmissiveTexture`, `EmissiveIntensity`
 - `AlphaCutoff`
 - `Lit`
 - `Transparent`
 - `DoubleSided`
+- `CastShadows`
+
+The keys and their defaults are described in [rendering.md](rendering.md#materials-metallic--roughness-pbr).
 - `Node` blocks
 - `Link` blocks
 
@@ -166,8 +171,9 @@ Example:
 
 ```txt
 Material {
-    Shader = "shaders/psx_default.shader"
     BaseColor = "0.85,0.35,0.25,1"
+    Metallic = 0
+    Roughness = 0.5
     Lit = true
 }
 

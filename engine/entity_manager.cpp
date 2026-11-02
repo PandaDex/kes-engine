@@ -11,25 +11,36 @@ EntityManager::~EntityManager()
 void EntityManager::StartPending()
 {
     KES_ZONE_FN(WORLD);
-    for (Entity* entity : pendingStart)
+    // Start() may create entities (spawners); those start in the same call.
+    // The list is swapped out first because CreateEntity appends to it.
+    for (int guard = 0; !pendingStart.empty() && guard < 64; ++guard)
     {
-        if (entity && !entity->IsPendingDestroy())
+        std::vector<Entity*> starting;
+        starting.swap(pendingStart);
+        for (Entity* entity : starting)
         {
-            KES_ZONE(ENTITIES, "Entity::Start");
-            KES_ZONE_TEXTF(ENTITIES, "%s", typeid(*entity).name());
-            entity->Start();
+            if (entity && !entity->IsPendingDestroy())
+            {
+                KES_ZONE(ENTITIES, "Entity::Start");
+                KES_ZONE_TEXTF(ENTITIES, "%s", typeid(*entity).name());
+                entity->Start();
+            }
         }
     }
-    pendingStart.clear();
 }
 
+// Indexed loops with the count taken up front: Update may create entities,
+// which appends to `entities` (and may reallocate it). New entities run from
+// the next frame, after their Start().
 void EntityManager::Update(float dt)
 {
     KES_ZONE_FN(WORLD);
     StartPending();
 
-    for (const std::unique_ptr<Entity>& entity : entities)
+    const size_t count = entities.size();
+    for (size_t i = 0; i < count; ++i)
     {
+        Entity* entity = entities[i].get();
         if (!entity->IsPendingDestroy())
         {
             // Per-entity zone tagged with the C++ class name (KES_PROFILE_ENTITIES).
@@ -45,8 +56,10 @@ void EntityManager::FixedUpdate(float fixedDt)
     KES_ZONE_FN(WORLD);
     StartPending();
 
-    for (const std::unique_ptr<Entity>& entity : entities)
+    const size_t count = entities.size();
+    for (size_t i = 0; i < count; ++i)
     {
+        Entity* entity = entities[i].get();
         if (!entity->IsPendingDestroy())
         {
             KES_ZONE(ENTITIES, "Entity::FixedUpdate");
@@ -70,10 +83,21 @@ void EntityManager::DestroyPending()
             }),
         pendingStart.end());
 
-    for (const std::unique_ptr<Entity>& entity : entities)
+    // OnDestroy may destroy or create other entities: indexed, and repeated
+    // until a pass finds nothing new to destroy.
+    for (bool ran = true; ran;)
     {
-        if (entity->IsPendingDestroy())
-            entity->RunDestroy();
+        ran = false;
+        for (size_t i = 0; i < entities.size(); ++i)
+        {
+            Entity* entity = entities[i].get();
+            if (entity->IsPendingDestroy() && !entity->destroyRan)
+            {
+                entity->destroyRan = true;
+                entity->RunDestroy();
+                ran = true;
+            }
+        }
     }
 
     entities.erase(
@@ -92,11 +116,18 @@ void EntityManager::DestroyAll()
     KES_ZONE_FN(WORLD);
     pendingStart.clear();
 
-    for (const std::unique_ptr<Entity>& entity : entities)
+    for (size_t i = 0; i < entities.size(); ++i)
     {
-        entity->RunDestroy();
+        Entity* entity = entities[i].get();
+        if (!entity->destroyRan)
+        {
+            entity->destroyRan = true;
+            entity->RunDestroy();
+        }
     }
 
     entities.clear();
-    nextEntityId = 1;
+    pendingStart.clear();   // entities created by OnDestroy are dropped too
+    // Ids are not reset: they stay unique for the whole session, so an id kept
+    // across a map change can never name a different entity.
 }

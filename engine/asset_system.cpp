@@ -157,8 +157,13 @@ MaterialHandle AssetSystem::LoadMaterial(const char* path)
         return 0;
 
     EvaluateMaterialGraph(materialFile);
-    if (!materialFile.material.baseTexturePath.empty())
-        materialFile.material.baseTexturePath = ResolveAssetPath(materialFile.material.baseTexturePath.c_str());
+    MaterialData& material = materialFile.material;
+    for (std::string* texturePath : {&material.baseTexturePath, &material.normalTexturePath, &material.metallicRoughnessTexturePath,
+                                     &material.occlusionTexturePath, &material.emissiveTexturePath})
+    {
+        if (!texturePath->empty())
+            *texturePath = ResolveAssetPath(texturePath->c_str());
+    }
     if (!materialFile.shaderPath.empty())
         materialFile.material.shader = LoadShader(materialFile.shaderPath.c_str());
 

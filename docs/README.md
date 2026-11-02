@@ -8,6 +8,7 @@ The goal is to describe the current runtime, asset formats, and tool workflow in
 
 - [Asset and File Formats](file-formats.md)
 - [Engine API](engine-api.md)
+- [Rendering (PBR, shadows, settings)](rendering.md)
 - [UI System (HTML/CSS, RmlUi)](ui-system.md)
 - [Tools and Asset Pipeline](tools-and-pipeline.md)
 - [Profiling (Tracy)](profiling.md)

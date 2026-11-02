@@ -22,6 +22,7 @@ add_library(engine STATIC
     "input.cpp"
     "render_backend.h"
     "render_backend.cpp"
+    "render_common.cpp"
     "command_line.h"
     "command_line.cpp"
     "ini_file.h"
@@ -190,6 +191,13 @@ if(KES_PLATFORM STREQUAL "Linux")
 endif()
 
 # Project settings baked into the engine (engine_configuration.h) 
+# PUBLIC: engine and game code must agree (engine_configuration.h).
+if(KES_DEBUG_TOOLS)
+    target_compile_definitions(engine PUBLIC ENGINE_ALLOW_DEBUG_MODE=1)
+else()
+    target_compile_definitions(engine PUBLIC ENGINE_ALLOW_DEBUG_MODE=0)
+endif()
+
 target_compile_definitions(engine PRIVATE
         "ENGINE_PROJECT_NAME=\"${KES_PROJECT_NAME}\""
         "ENGINE_COMPANY_NAME=\"${KES_PROJECT_PUBLISHER}\""

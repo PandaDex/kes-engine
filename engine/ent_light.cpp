@@ -13,6 +13,10 @@ LightEntity::~LightEntity()
 
 void LightEntity::Start()
 {
+    // Unless the map says otherwise, directional and spot lights cast
+    // shadows; point lights don't (six shadow passes each).
+    if (!castShadowsSet)
+        lightData.castShadows = lightData.type != LightType::Point;
     SyncLightTransformFromEntity();
     if (game && game->scene)
     {
@@ -119,6 +123,13 @@ bool LightEntity::ApplyProperty(const std::string& name, const std::string& valu
     if (name == "SpotAngle")
     {
         SetSpotAngle(entityprops::ParseFloat(value, lightData.spotAngle));
+        return true;
+    }
+
+    if (name == "CastShadows")
+    {
+        lightData.castShadows = entityprops::ParseBool(value, lightData.castShadows);
+        castShadowsSet = true;
         return true;
     }
 

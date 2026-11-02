@@ -1,15 +1,27 @@
+#ifndef NOMINMAX
+#define NOMINMAX   // file_paths.h includes <windows.h>
+#endif
 #include "ui_system.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cctype>
 #include <cstring>
+#include <filesystem>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <RmlUi/Core/Elements/ElementTabSet.h>
 #include <RmlUi/Debugger.h>
 #include <RmlUi_Platform_SDL.h>
 
 #include "engine_configuration.h"
+#include "file_paths.h"
+#include "ini_file.h"
+#include "input.h"
 #include "logger.h"
 #include "pak_file_system.h"
 #include "profiler.h"
@@ -17,16 +29,6 @@
 
 namespace
 {
-    // Fonts loaded at startup (engine/assets/engine/ui/fonts): font family
-    // "LatoLatin", the default in engine/ui/kes.rcss. The regular face is also
-    // the fallback for glyphs missing from other fonts.
-    constexpr const char *kEngineFonts[] = {
-        "engine/ui/fonts/LatoLatin-Regular.ttf",
-        "engine/ui/fonts/LatoLatin-Bold.ttf",
-        "engine/ui/fonts/LatoLatin-Italic.ttf",
-        "engine/ui/fonts/LatoLatin-BoldItalic.ttf",
-    };
-
     std::string Trim(const std::string &text)
     {
         const size_t begin = text.find_first_not_of(" \t\r\n");
@@ -34,6 +36,30 @@ namespace
             return {};
         const size_t end = text.find_last_not_of(" \t\r\n");
         return text.substr(begin, end - begin + 1);
+    }
+
+    std::string Lower(std::string text)
+    {
+        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return text;
+    }
+
+    // "a, b, c" -> {"a", "b", "c"}
+    std::vector<std::string> SplitList(const std::string &text)
+    {
+        std::vector<std::string> items;
+        size_t start = 0;
+        while (start <= text.size())
+        {
+            size_t end = text.find(',', start);
+            if (end == std::string::npos)
+                end = text.size();
+            std::string item = Trim(text.substr(start, end - start));
+            if (!item.empty())
+                items.push_back(std::move(item));
+            start = end + 1;
+        }
+        return items;
     }
 
     // System interface: SDL time, cursors, clipboard and IME from RmlUi's SDL
@@ -304,6 +330,70 @@ namespace
     };
 }
 
+const char *const kUiDefaultActionMap = R"imap(
+"UI_Up": { "NativeKeys": [ {"key": "Gamepad_DPad_Up"}, {"key": "Keyboard_Up"} ], "ValueType": "boolean" }
+"UI_Down": { "NativeKeys": [ {"key": "Gamepad_DPad_Down"}, {"key": "Keyboard_Down"} ], "ValueType": "boolean" }
+"UI_Left": { "NativeKeys": [ {"key": "Gamepad_DPad_Left"}, {"key": "Keyboard_Left"} ], "ValueType": "boolean" }
+"UI_Right": { "NativeKeys": [ {"key": "Gamepad_DPad_Right"}, {"key": "Keyboard_Right"} ], "ValueType": "boolean" }
+"UI_Navigate": { "NativeKeys": [ {"key": "Gamepad_LeftAxis_2D"} ], "ValueType": "vector2" }
+"UI_Accept": { "NativeKeys": [ {"key": "Gamepad_Face_Bottom"}, {"key": "Keyboard_Return"}, {"key": "Keyboard_Keypad Enter"} ], "ValueType": "boolean" }
+"UI_Back": { "NativeKeys": [ {"key": "Gamepad_Face_Right"}, {"key": "Gamepad_Special_Right"}, {"key": "Keyboard_Escape"} ], "ValueType": "boolean" }
+"UI_PrevTab": { "NativeKeys": [ {"key": "Gamepad_LeftBumper"} ], "ValueType": "boolean" }
+"UI_NextTab": { "NativeKeys": [ {"key": "Gamepad_RightBumper"} ], "ValueType": "boolean" }
+"UI_Scroll": { "NativeKeys": [ {"key": "Gamepad_RightAxis_2D"} ], "ValueType": "vector2" }
+)imap";
+
+std::string GetDefaultUiConfigPath()
+{
+    return (GetExecutableDirectory() / "config" / "DefaultUi.ini").string();
+}
+
+UiConfig LoadUiConfig(const std::string &path, bool *outFound)
+{
+    UiConfig config;
+    IniFile ini;
+    const bool found = ini.LoadFromFile(path);
+    if (outFound)
+        *outFound = found;
+    if (!found)
+        return config;
+
+    if (ini.Has("UI", "Fonts"))
+        config.fonts = SplitList(ini.GetString("UI", "Fonts"));
+    config.fallbackFonts = SplitList(ini.GetString("UI", "FallbackFonts"));
+    config.densityScale = ini.GetFloat("UI", "DensityScale", config.densityScale);
+
+    const std::string navigation = Lower(ini.GetString("Navigation", "GamepadNavigation", "uionly"));
+    if (navigation == "never" || navigation == "false" || navigation == "off")
+        config.navigation = UiNavigationMode::Never;
+    else if (navigation == "gameandui")
+        config.navigation = UiNavigationMode::GameAndUI;
+    else
+        config.navigation = UiNavigationMode::UIOnly;
+
+    const std::string autoFocus = Lower(ini.GetString("Navigation", "AutoFocus", "gamepad"));
+    if (autoFocus == "never" || autoFocus == "false" || autoFocus == "off")
+        config.autoFocus = UiAutoFocus::Never;
+    else if (autoFocus == "always")
+        config.autoFocus = UiAutoFocus::Always;
+    else
+        config.autoFocus = UiAutoFocus::Gamepad;
+
+    config.rememberFocus = ini.GetBool("Navigation", "RememberFocus", config.rememberFocus);
+    config.hideCursorWithGamepad = ini.GetBool("Navigation", "HideCursorWithGamepad", config.hideCursorWithGamepad);
+    config.repeatDelay = ini.GetFloat("Navigation", "RepeatDelay", config.repeatDelay);
+    config.repeatInterval = ini.GetFloat("Navigation", "RepeatInterval", config.repeatInterval);
+    config.stickPressThreshold = ini.GetFloat("Navigation", "StickPressThreshold", config.stickPressThreshold);
+    config.stickReleaseThreshold = ini.GetFloat("Navigation", "StickReleaseThreshold", config.stickReleaseThreshold);
+    config.scrollDeadzone = ini.GetFloat("Navigation", "ScrollDeadzone", config.scrollDeadzone);
+    config.scrollSpeed = ini.GetFloat("Navigation", "ScrollSpeed", config.scrollSpeed);
+
+    config.focusSound = ini.GetString("Sounds", "Focus");
+    config.acceptSound = ini.GetString("Sounds", "Accept");
+    config.backSound = ini.GetString("Sounds", "Back");
+    return config;
+}
+
 struct UiSystem::Impl
 {
     SDL_Window *window = nullptr;
@@ -397,6 +487,494 @@ struct UiSystem::Impl
     };
     std::vector<OpenDocument> documents;
 
+    // Navigation with the UI_* input actions
+    InputState *input = nullptr;
+    UiConfig config;
+    bool navigationEnabled = false;
+    bool backPressed = false;
+    bool confirmPressed = false;
+    UiInputDevice device = UiInputDevice::Mouse;
+    UiSoundCallback soundCallback;
+    std::unordered_set<std::string> loadedFonts;
+
+    enum NavDirection
+    {
+        Nav_None = -1,
+        Nav_Up,
+        Nav_Down,
+        Nav_Left,
+        Nav_Right,
+        Nav_Count
+    };
+    int heldDirection = Nav_None;
+    bool resyncHeld = true;       // next update adopts the held direction without moving
+    bool repeatBlocked = false;   // held since navigation turned on: no repeat until it changes
+    bool stickLatched = false;    // UI_Navigate hysteresis
+    Uint64 nextRepeatNs = 0;
+    Uint64 lastUpdateNs = 0;
+    // Focus the first control of a tab panel once layout has run (after a tab switch).
+    Rml::ObserverPtr<Rml::Element> pendingPanelFocus;
+    std::unordered_map<Rml::ElementDocument *, Rml::ObserverPtr<Rml::Element>> rememberedFocus;
+
+    bool NavigationActive() const { return initialized && inputEnabled && navigationEnabled && input; }
+
+    // Directions, repeats and the stick latch start over, so a button held
+    // while navigation turns on (e.g. Start opening the pause menu) does nothing.
+    void ResetNavigationState()
+    {
+        heldDirection = Nav_None;
+        resyncHeld = true;
+        repeatBlocked = false;
+        stickLatched = false;
+        pendingPanelFocus.reset();
+    }
+
+    void PlaySound(const std::string &path) const
+    {
+        if (!path.empty() && soundCallback)
+            soundCallback(path);
+    }
+
+    const InputActionState *ActionState(const char *name) const
+    {
+        if (!input)
+            return nullptr;
+        const auto found = input->actionStates.find(std::string_view(name));
+        return found != input->actionStates.end() ? &found->second : nullptr;
+    }
+    bool ActionDown(const char *name) const
+    {
+        const InputActionState *state = ActionState(name);
+        return state && state->down;
+    }
+    bool ActionPressed(const char *name) const
+    {
+        const InputActionState *state = ActionState(name);
+        return state && state->pressed;
+    }
+    Vector2 ActionValue(const char *name) const
+    {
+        const InputActionState *state = ActionState(name);
+        return state ? state->value2 : Vector2{};
+    }
+
+    void SetDevice(UiInputDevice newDevice)
+    {
+        if (device == newDevice)
+            return;
+        device = newDevice;
+        // Hover styles would compete with the focus highlight.
+        if (newDevice == UiInputDevice::Gamepad && context && inputEnabled)
+            context->ProcessMouseLeave();
+    }
+
+    void TrackDevice(const SDL_Event &event)
+    {
+        switch (event.type)
+        {
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            SetDevice(UiInputDevice::Gamepad);
+            break;
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+            if (std::abs(static_cast<int>(event.gaxis.value)) > 16000)
+                SetDevice(UiInputDevice::Gamepad);
+            break;
+        case SDL_EVENT_KEY_DOWN:
+            SetDevice(UiInputDevice::Keyboard);
+            break;
+        case SDL_EVENT_MOUSE_MOTION:
+            // Ignore sensor jitter of a mouse nobody touches.
+            if (std::fabs(event.motion.xrel) + std::fabs(event.motion.yrel) >= 2.0f)
+                SetDevice(UiInputDevice::Mouse);
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_WHEEL:
+        case SDL_EVENT_FINGER_DOWN:
+            SetDevice(UiInputDevice::Mouse);
+            break;
+        default:
+            break;
+        }
+    }
+
+    // <body class="input-mouse | input-keyboard | input-gamepad">
+    void ApplyDeviceClasses()
+    {
+        for (int i = 0; i < context->GetNumDocuments(); ++i)
+        {
+            Rml::ElementDocument *document = context->GetDocument(i);
+            document->SetClass("input-mouse", device == UiInputDevice::Mouse);
+            document->SetClass("input-keyboard", device == UiInputDevice::Keyboard);
+            document->SetClass("input-gamepad", device == UiInputDevice::Gamepad);
+        }
+    }
+
+    static bool IsDebuggerDocument(const Rml::ElementDocument *document)
+    {
+        return document && document->GetId().rfind("rmlui-debug", 0) == 0;
+    }
+
+    static bool IsTabFocusable(const Rml::Element *element)
+    {
+        return element->GetComputedValues().tab_index() == Rml::Style::TabIndex::Auto;
+    }
+
+    static bool IsTextField(const Rml::Element *element)
+    {
+        const Rml::String &tag = element->GetTagName();
+        if (tag == "textarea")
+            return true;
+        if (tag != "input")
+            return false;
+        const Rml::String type = element->GetAttribute<Rml::String>("type", "text");
+        return type == "text" || type == "password";
+    }
+
+    static bool IsDescendantOf(const Rml::Element *element, const Rml::Element *ancestor)
+    {
+        for (; element; element = element->GetParentNode())
+        {
+            if (element == ancestor)
+                return true;
+        }
+        return false;
+    }
+
+    // The focused element when it can be navigated from: visible, focusable
+    // (or inside a focusable element) and not just a document's <body>.
+    Rml::Element *NavigableFocus() const
+    {
+        Rml::Element *focus = context->GetFocusElement();
+        if (!focus || !focus->IsVisible(true) || IsDebuggerDocument(focus->GetOwnerDocument()))
+            return nullptr;
+        for (Rml::Element *element = focus; element; element = element->GetParentNode())
+        {
+            if (element == element->GetOwnerDocument())
+                return nullptr;
+            if (IsTabFocusable(element))
+                return focus;
+        }
+        return nullptr;
+    }
+
+    // First control inside `scope` (a document or an element in it) that may
+    // get focus without being asked for: text fields are skipped, so a menu
+    // never starts in text-entry mode.
+    static Rml::Element *FirstAutoFocusable(Rml::ElementDocument *document, Rml::Element *scope)
+    {
+        Rml::Element *element = document->FindNextTabElement(scope, true, false);
+        for (int guard = 0; element && guard < 4096; ++guard)
+        {
+            if (element == document || !IsDescendantOf(element, scope))
+                return nullptr;
+            if (!IsTextField(element))
+                return element;
+            element = document->FindNextTabElement(element, true, false);
+        }
+        return nullptr;
+    }
+
+    // The document navigation acts on: the one holding focus (ElementDocument::Show
+    // focuses the shown document), else the top-most visible one with a control.
+    Rml::ElementDocument *NavigationDocument() const
+    {
+        if (Rml::Element *focus = context->GetFocusElement())
+        {
+            Rml::ElementDocument *document = focus->GetOwnerDocument();
+            if (document && document->IsVisible() && !IsDebuggerDocument(document))
+                return document;
+        }
+        for (int i = context->GetNumDocuments() - 1; i >= 0; --i)
+        {
+            Rml::ElementDocument *document = context->GetDocument(i);
+            if (document && document->IsVisible() && !IsDebuggerDocument(document) && FirstAutoFocusable(document, document))
+                return document;
+        }
+        return nullptr;
+    }
+
+    static bool FocusVisible(Rml::Element *element)
+    {
+        if (!element || !element->Focus(true))
+            return false;
+        element->ScrollIntoView(Rml::ScrollAlignment::Adaptive);
+        return true;
+    }
+
+    // The remembered control of `document` if it is still usable, else its
+    // first control.
+    bool FocusDefault(Rml::ElementDocument *document)
+    {
+        if (!document)
+            return false;
+        if (config.rememberFocus)
+        {
+            const auto found = rememberedFocus.find(document);
+            Rml::Element *element = found != rememberedFocus.end() ? found->second.get() : nullptr;
+            if (element && element->GetOwnerDocument() == document && element->IsVisible(true) && IsTabFocusable(element))
+                return FocusVisible(element);
+        }
+        return FocusVisible(FirstAutoFocusable(document, document));
+    }
+
+    // Sends a key press through the context; returns true when it propagated
+    // (nothing used it).
+    bool SendKey(Rml::Input::KeyIdentifier key)
+    {
+        const bool propagated = context->ProcessKeyDown(key, 0);
+        context->ProcessKeyUp(key, 0);
+        return propagated;
+    }
+
+    void Navigate(int direction)
+    {
+        Rml::Element *focus = NavigableFocus();
+        if (!focus)
+        {
+            if (FocusDefault(NavigationDocument()))
+                PlaySound(config.focusSound);
+            return;
+        }
+
+        // Up/down in a text field would only move the caret: leave the field
+        // along the tab order instead (keyboard bindings are off while typing,
+        // so this is the gamepad).
+        if (IsTextField(focus) && (direction == Nav_Up || direction == Nav_Down))
+        {
+            Rml::ElementDocument *document = focus->GetOwnerDocument();
+            if (FocusVisible(document->FindNextTabElement(focus, direction == Nav_Down, false)))
+                PlaySound(config.focusSound);
+            return;
+        }
+
+        static constexpr Rml::Input::KeyIdentifier kKeys[Nav_Count] = {
+            Rml::Input::KI_UP, Rml::Input::KI_DOWN, Rml::Input::KI_LEFT, Rml::Input::KI_RIGHT};
+        SendKey(kKeys[direction]);
+        if (context->GetFocusElement() != focus)
+            PlaySound(config.focusSound);
+    }
+
+    void Accept()
+    {
+        if (NavigableFocus())
+        {
+            if (!SendKey(Rml::Input::KI_RETURN))
+                PlaySound(config.acceptSound);
+        }
+        else if (FocusDefault(NavigationDocument()))
+            PlaySound(config.focusSound);
+        else
+            confirmPressed = true;
+    }
+
+    // Closes the focused <select>'s drop-down; RmlUi has no Escape handling for it.
+    bool CloseOpenSelect()
+    {
+        Rml::Element *focus = context->GetFocusElement();
+        auto *select = focus ? rmlui_dynamic_cast<Rml::ElementFormControlSelect *>(focus) : nullptr;
+        if (!select || !select->IsSelectBoxVisible())
+            return false;
+        select->HideSelectBox();
+        return true;
+    }
+
+    void Back()
+    {
+        PlaySound(config.backSound);
+        if (CloseOpenSelect())
+            return;
+        if (SendKey(Rml::Input::KI_ESCAPE))
+            backPressed = true;
+    }
+
+    void SwitchTab(int step)
+    {
+        Rml::ElementDocument *document = NavigationDocument();
+        if (!document)
+            return;
+        Rml::ElementList tabsets;
+        document->GetElementsByTagName(tabsets, "tabset");
+        for (Rml::Element *element : tabsets)
+        {
+            auto *tabset = rmlui_dynamic_cast<Rml::ElementTabSet *>(element);
+            if (!tabset || !tabset->IsVisible(true) || tabset->GetNumTabs() <= 1)
+                continue;
+            const int count = tabset->GetNumTabs();
+            const int active = ((tabset->GetActiveTab() + step) % count + count) % count;
+            tabset->SetActiveTab(active);
+            PlaySound(config.focusSound);
+
+            // Focus leaves the hidden panel; the new panel's first control
+            // gets it after the next layout pass (ApplyPendingPanelFocus).
+            document->Focus();
+            pendingPanelFocus.reset();
+            for (int i = 0; i < tabset->GetNumChildren(); ++i)
+            {
+                Rml::Element *panels = tabset->GetChild(i);
+                if (panels->GetTagName() == "panels" && active < panels->GetNumChildren())
+                    pendingPanelFocus = panels->GetChild(active)->GetObserverPtr();
+            }
+            return;
+        }
+    }
+
+    // Nearest ancestor of `element` (inclusive) that can scroll vertically.
+    static Rml::Element *ScrollContainerOf(Rml::Element *element)
+    {
+        for (; element; element = element->GetParentNode())
+        {
+            const auto overflow = element->GetComputedValues().overflow_y();
+            const bool scrolls = overflow == Rml::Style::Overflow::Auto || overflow == Rml::Style::Overflow::Scroll;
+            if (scrolls && element->GetScrollHeight() > element->GetClientHeight() + 1.0f)
+                return element;
+        }
+        return nullptr;
+    }
+
+    // Breadth-first search for the first visible scrollable element under `root`.
+    static Rml::Element *FindScrollContainer(Rml::Element *root)
+    {
+        std::vector<Rml::Element *> queue = {root};
+        for (size_t i = 0; i < queue.size(); ++i)
+        {
+            Rml::Element *element = queue[i];
+            if (!element->IsVisible())
+                continue;
+            if (element != root && ScrollContainerOf(element) == element)
+                return element;
+            for (int c = 0; c < element->GetNumChildren(); ++c)
+                queue.push_back(element->GetChild(c));
+        }
+        return nullptr;
+    }
+
+    void Scroll(float amount)
+    {
+        Rml::Element *focus = NavigableFocus();
+        Rml::Element *target = focus ? ScrollContainerOf(focus) : nullptr;
+        if (!target)
+        {
+            Rml::ElementDocument *document = focus ? focus->GetOwnerDocument() : NavigationDocument();
+            target = document ? FindScrollContainer(document) : nullptr;
+        }
+        if (target)
+            target->SetScrollTop(target->GetScrollTop() + amount);
+    }
+
+    int CurrentDirection()
+    {
+        static constexpr const char *kDirectionActions[Nav_Count] = {"UI_Up", "UI_Down", "UI_Left", "UI_Right"};
+        for (int direction = 0; direction < Nav_Count; ++direction)
+        {
+            if (ActionDown(kDirectionActions[direction]))
+                return direction;
+        }
+        const Vector2 stick = ActionValue("UI_Navigate");
+        const float magnitude = std::max(std::fabs(stick.x), std::fabs(stick.y));
+        stickLatched = magnitude >= (stickLatched ? config.stickReleaseThreshold : config.stickPressThreshold);
+        if (!stickLatched)
+            return Nav_None;
+        if (std::fabs(stick.x) > std::fabs(stick.y))
+            return stick.x < 0.0f ? Nav_Left : Nav_Right;
+        return stick.y < 0.0f ? Nav_Up : Nav_Down;   // SDL: +y is down
+    }
+
+    // UI action input, once per frame before layout.
+    void UpdateNavigation(Uint64 nowNs, float dt)
+    {
+        if (!NavigationActive())
+            return;
+
+        const int direction = CurrentDirection();
+        const auto seconds = [](float value) { return static_cast<Uint64>(std::max(value, 0.0f) * 1e9f); };
+        if (resyncHeld)
+        {
+            resyncHeld = false;
+            heldDirection = direction;
+            repeatBlocked = direction != Nav_None;
+        }
+        else if (direction != heldDirection)
+        {
+            heldDirection = direction;
+            repeatBlocked = false;
+            if (direction != Nav_None)
+            {
+                Navigate(direction);
+                nextRepeatNs = nowNs + seconds(config.repeatDelay);
+            }
+        }
+        else if (direction != Nav_None && !repeatBlocked && nowNs >= nextRepeatNs)
+        {
+            Navigate(direction);
+            nextRepeatNs = nowNs + seconds(std::max(config.repeatInterval, 0.01f));
+        }
+
+        if (ActionPressed("UI_Accept"))
+            Accept();
+        if (ActionPressed("UI_Back"))
+            Back();
+        if (ActionPressed("UI_PrevTab"))
+            SwitchTab(-1);
+        if (ActionPressed("UI_NextTab"))
+            SwitchTab(1);
+
+        const float scroll = ActionValue("UI_Scroll").y;
+        if (std::fabs(scroll) > config.scrollDeadzone)
+            Scroll(scroll * config.scrollSpeed * context->GetDensityIndependentPixelRatio() * dt);
+    }
+
+    // After layout: keeps a usable focus while navigating and remembers it.
+    void UpdateFocus()
+    {
+        for (auto it = rememberedFocus.begin(); it != rememberedFocus.end();)
+            it = (IsOpen(it->first) && it->second) ? std::next(it) : rememberedFocus.erase(it);
+
+        if (!NavigationActive())
+            return;
+
+        if (Rml::Element *panel = pendingPanelFocus.get())
+        {
+            pendingPanelFocus.reset();
+            if (Rml::ElementDocument *document = panel->GetOwnerDocument())
+                FocusVisible(FirstAutoFocusable(document, panel));
+        }
+
+        if (Rml::Element *focus = NavigableFocus())
+        {
+            rememberedFocus[focus->GetOwnerDocument()] = focus->GetObserverPtr();
+            return;
+        }
+        // Nothing usable has focus: a document was just shown, or the focused
+        // control was hidden or removed (data-if, data-for...).
+        const bool autoFocus = config.autoFocus == UiAutoFocus::Always ||
+                               (config.autoFocus == UiAutoFocus::Gamepad && device == UiInputDevice::Gamepad);
+        if (autoFocus)
+            FocusDefault(NavigationDocument());
+    }
+
+    void LoadFonts()
+    {
+        int index = 0;
+        for (const std::string &font : config.fonts)
+        {
+            const bool fallback = index++ == 0;
+            if (loadedFonts.insert(font).second && !Rml::LoadFontFace(font, fallback))
+                loadedFonts.erase(font);
+        }
+        for (const std::string &font : config.fallbackFonts)
+        {
+            if (loadedFonts.insert(font).second && !Rml::LoadFontFace(font, true))
+                loadedFonts.erase(font);
+        }
+    }
+
+    void ApplyDisplayScale()
+    {
+        const float display = window ? SDL_GetWindowDisplayScale(window) : 1.0f;
+        const float scale = (display > 0.0f ? display : 1.0f) * (config.densityScale > 0.0f ? config.densityScale : 1.0f);
+        context->SetDensityIndependentPixelRatio(scale);
+    }
+
     bool IsOpen(Rml::ElementDocument *document) const
     {
         if (!context || !document)
@@ -425,7 +1003,8 @@ UiSystem::~UiSystem()
     Shutdown();
 }
 
-bool UiSystem::Init(SDL_Window *window, IRenderer *renderer, int pixelWidth, int pixelHeight)
+bool UiSystem::Init(SDL_Window *window, IRenderer *renderer, int pixelWidth, int pixelHeight,
+                    InputState *input, const UiConfig &config)
 {
     KES_ZONE(UI, "UI init");
     Impl &impl = *m_impl;
@@ -436,6 +1015,8 @@ bool UiSystem::Init(SDL_Window *window, IRenderer *renderer, int pixelWidth, int
 
     impl.window = window;
     impl.renderer = renderer;
+    impl.input = input;
+    impl.config = config;
     impl.renderInterface.renderer = renderer;
     impl.systemInterface = std::make_unique<KesUiSystemInterface>(window);
 
@@ -458,16 +1039,12 @@ bool UiSystem::Init(SDL_Window *window, IRenderer *renderer, int pixelWidth, int
         impl.systemInterface.reset();
         return false;
     }
-    impl.context->SetDensityIndependentPixelRatio(SDL_GetWindowDisplayScale(window));
+    impl.ApplyDisplayScale();
 
-    int fontCount = 0;
-    for (const char *font : kEngineFonts)
-    {
-        if (Rml::LoadFontFace(font, fontCount == 0))
-            ++fontCount;
-    }
+    impl.LoadFonts();
+    const int fontCount = static_cast<int>(impl.loadedFonts.size());
     if (fontCount == 0)
-        EngineLog("[UI] Warning: no engine fonts found in engine/ui/fonts; text will not render until a font is loaded.");
+        EngineLog("[UI] Warning: no UI fonts loaded (DefaultUi.ini [UI] Fonts); text will not render until a font is loaded.");
 
 #if ENGINE_ALLOW_DEBUG_MODE
     impl.debuggerInitialized = Rml::Debugger::Initialise(impl.context);
@@ -501,6 +1078,10 @@ void UiSystem::Shutdown()
     impl.renderer = nullptr;
     impl.window = nullptr;
     impl.actions.clear();
+    impl.loadedFonts.clear();
+    impl.rememberedFocus.clear();
+    impl.ResetNavigationState();
+    impl.input = nullptr;
     impl.initialized = false;
     EngineLog("[UI] Shut down.");
 }
@@ -516,30 +1097,49 @@ bool UiSystem::ProcessEvent(const SDL_Event &event)
     if (!impl.initialized)
         return false;
 
+    impl.TrackDevice(event);
+
     switch (event.type)
     {
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         SetViewportSize(event.window.data1, event.window.data2);
         return false;
     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
-        SetDensityScale(SDL_GetWindowDisplayScale(impl.window));
+        impl.ApplyDisplayScale();
         return false;
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-    case SDL_EVENT_WINDOW_FOCUS_LOST:
         impl.context->ProcessMouseLeave();
         return false;
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        impl.context->ProcessMouseLeave();
+        impl.ResetNavigationState();
+        return false;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        if (!impl.inputEnabled)
+            return false;
+        // Keys bound to UI actions (arrows, Enter, Escape by default) are
+        // handled by the actions, with the same repeat timing as the gamepad,
+        // except while typing. They still reach game input, which is what the
+        // UI actions read.
+        if (impl.NavigationActive() && !WantsTextInput() &&
+            InputIsKeyBound(*impl.input, event.key.scancode, InputActionContext::UI))
+            return false;
+        // Escape closes an open <select> drop-down (RmlUi doesn't).
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_ESCAPE && impl.CloseOpenSelect())
+            return true;
+        break;
     case SDL_EVENT_MOUSE_MOTION:
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
     case SDL_EVENT_MOUSE_WHEEL:
-    case SDL_EVENT_KEY_DOWN:
-    case SDL_EVENT_KEY_UP:
     case SDL_EVENT_TEXT_INPUT:
     case SDL_EVENT_FINGER_DOWN:
     case SDL_EVENT_FINGER_UP:
     case SDL_EVENT_FINGER_MOTION:
         break;
     default:
+        // Gamepads are read through the UI_* input actions.
         return false;
     }
 
@@ -549,11 +1149,22 @@ bool UiSystem::ProcessEvent(const SDL_Event &event)
     KES_ZONE(UI, "UI event");
     // Decided before the event changes hover/focus state.
     const bool pointerOverUi = IsPointerOverUi();
+    const bool textInput = WantsTextInput();
     SDL_Event copy = event;
     // RmlSDL returns false when the context handled the event (key bindings,
     // stopped propagation). For the mouse, RmlUi counts hovering any document
     // body as handled, so pointer consumption uses IsPointerOverUi instead.
     const bool propagated = RmlSDL::InputEventHandler(impl.context, impl.window, copy);
+
+    // Escape that RmlUi didn't use while navigation (UI_Back) is off.
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_ESCAPE && !event.key.repeat &&
+        propagated && !textInput)
+        impl.backPressed = true;
+
+    // Clicks and typing change focus; UI action keyboard bindings must not
+    // fire while a text field has it.
+    if (impl.input)
+        impl.input->uiTextInput = WantsTextInput();
 
     switch (event.type)
     {
@@ -577,6 +1188,7 @@ void UiSystem::SetInputEnabled(bool enabled)
     if (impl.inputEnabled == enabled)
         return;
     impl.inputEnabled = enabled;
+    impl.ResetNavigationState();
     if (!enabled && impl.context)
     {
         // Clear hover/active state and drop keyboard focus from text fields.
@@ -589,6 +1201,64 @@ void UiSystem::SetInputEnabled(bool enabled)
 bool UiSystem::IsInputEnabled() const
 {
     return m_impl->inputEnabled;
+}
+
+void UiSystem::SetNavigationEnabled(bool enabled)
+{
+    Impl &impl = *m_impl;
+    if (impl.navigationEnabled == enabled)
+        return;
+    impl.navigationEnabled = enabled;
+    impl.ResetNavigationState();
+}
+
+bool UiSystem::IsNavigationEnabled() const
+{
+    return m_impl->navigationEnabled;
+}
+
+UiInputDevice UiSystem::GetActiveInputDevice() const
+{
+    return m_impl->device;
+}
+
+void UiSystem::SetSoundCallback(UiSoundCallback callback)
+{
+    m_impl->soundCallback = std::move(callback);
+}
+
+void UiSystem::SetConfig(const UiConfig &config)
+{
+    Impl &impl = *m_impl;
+    const bool densityChanged = config.densityScale != impl.config.densityScale;
+    impl.config = config;
+    impl.ResetNavigationState();
+    if (!impl.initialized)
+        return;
+    impl.LoadFonts();
+    if (densityChanged)
+        impl.ApplyDisplayScale();
+}
+
+const UiConfig &UiSystem::GetConfig() const
+{
+    return m_impl->config;
+}
+
+bool UiSystem::WasBackPressed() const
+{
+    return m_impl->backPressed;
+}
+
+bool UiSystem::WasConfirmPressed() const
+{
+    return m_impl->confirmPressed;
+}
+
+void UiSystem::BeginFrame()
+{
+    m_impl->backPressed = false;
+    m_impl->confirmPressed = false;
 }
 
 void UiSystem::SetViewportSize(int pixelWidth, int pixelHeight)
@@ -608,7 +1278,16 @@ void UiSystem::Update()
     if (!m_impl->initialized)
         return;
     KES_ZONE(UI, "UI update");
-    m_impl->context->Update();
+    Impl &impl = *m_impl;
+    const Uint64 now = SDL_GetTicksNS();
+    const float dt = impl.lastUpdateNs ? std::min(0.1f, static_cast<float>(now - impl.lastUpdateNs) * 1e-9f) : 0.0f;
+    impl.lastUpdateNs = now;
+    impl.UpdateNavigation(now, dt);
+    impl.ApplyDeviceClasses();
+    impl.context->Update();
+    impl.UpdateFocus();
+    if (impl.input)
+        impl.input->uiTextInput = WantsTextInput();
 }
 
 void UiSystem::Render()

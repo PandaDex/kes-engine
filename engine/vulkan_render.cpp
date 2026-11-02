@@ -1,11 +1,12 @@
+#ifndef NOMINMAX
+#define NOMINMAX   // file_paths.h includes <windows.h>
+#endif
 #include "vulkan_render.h"
 #include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <algorithm>
 #include <cstddef>
-#include <fstream>
-#include <sstream>
 #include "file_paths.h"
 #include "animation_pose.h"
 #include "scene.h"
@@ -27,135 +28,9 @@
 namespace kes::vk
 {
 
+using render::Matrix4;
 
-// Math helpers, kept identical to d3d11_render.cpp so both backends compute
-// the same world/view/projection matrices.
-
-
-static float Clamp01(float v)
-{
-    if (v < 0.0f) return 0.0f;
-    if (v > 1.0f) return 1.0f;
-    return v;
-}
-
-struct float3
-{
-    float x, y, z;
-};
-
-struct float4x4
-{
-    float m[4][4];
-};
-
-static constexpr float kCameraFovYRadians = 70.0f * 3.14159265f / 180.0f;
-
-static float3 Normalize(const float3& v)
-{
-    const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-    if (len <= 0.00001f)
-        return { 0.0f, 0.0f, 1.0f };
-    return { v.x / len, v.y / len, v.z / len };
-}
-
-static float4x4 Identity()
-{
-    float4x4 r = {};
-    r.m[0][0] = 1.0f;
-    r.m[1][1] = 1.0f;
-    r.m[2][2] = 1.0f;
-    r.m[3][3] = 1.0f;
-    return r;
-}
-
-static float4x4 Multiply(const float4x4& a, const float4x4& b)
-{
-    float4x4 r = {};
-    for (int row = 0; row < 4; ++row)
-    {
-        for (int col = 0; col < 4; ++col)
-        {
-            r.m[row][col] =
-                a.m[row][0] * b.m[0][col] +
-                a.m[row][1] * b.m[1][col] +
-                a.m[row][2] * b.m[2][col] +
-                a.m[row][3] * b.m[3][col];
-        }
-    }
-    return r;
-}
-
-static float4x4 RotationX(float a)
-{
-    float4x4 r = Identity();
-    const float c = std::cos(a);
-    const float s = std::sin(a);
-
-    r.m[1][1] = c;
-    r.m[1][2] = s;
-    r.m[2][1] = -s;
-    r.m[2][2] = c;
-    return r;
-}
-
-static float4x4 RotationY(float a)
-{
-    float4x4 r = Identity();
-    const float c = std::cos(a);
-    const float s = std::sin(a);
-
-    r.m[0][0] = c;
-    r.m[0][2] = -s;
-    r.m[2][0] = s;
-    r.m[2][2] = c;
-    return r;
-}
-
-static float4x4 RotationZ(float a)
-{
-    float4x4 r = Identity();
-    const float c = std::cos(a);
-    const float s = std::sin(a);
-    r.m[0][0] = c;
-    r.m[0][1] = s;
-    r.m[1][0] = -s;
-    r.m[1][1] = c;
-    return r;
-}
-
-static float4x4 Scale(float x, float y, float z)
-{
-    float4x4 r = Identity();
-    r.m[0][0] = x;
-    r.m[1][1] = y;
-    r.m[2][2] = z;
-    return r;
-}
-
-static float4x4 Translation(float x, float y, float z)
-{
-    float4x4 r = Identity();
-    r.m[3][0] = x;
-    r.m[3][1] = y;
-    r.m[3][2] = z;
-    return r;
-}
-
-struct MaterialCBData
-{
-    float baseColor[4];
-    float emissiveColorAndCutoff[4];
-    uint32_t flags[4];
-};
-
-struct ModelCBData
-{
-    float worldViewProj[16];
-    float world[16];
-    float skinMatrices[SceneObject::MaxSkinMatrices * 16];
-    float skinInfo[4];
-};
+static constexpr VkFormat kSceneColorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 struct RenderVertex
 {
@@ -167,82 +42,13 @@ struct RenderVertex
     float boneWeights[4];
 };
 
-struct GPULight
-{
-    float position[4];  // w = range
-    float color[4];     // w = intensity
-    float direction[4]; // w = spotCosAngle
-    uint32_t type;      // 0=Dir, 1=Point, 2=Spot
-    uint32_t active;
-    float padding[2];
-};
-
-struct SceneCBData
-{
-    float viewProj[16];
-    float ambient[4];
-    float snapParams[4];
-    GPULight lights[8];
-    float fogColor[4];
-    float fogParams[4];
-};
-
-struct SkyCBData
-{
-    float topColor[4];
-    float horizonColor[4];
-    float bottomColor[4];
-    float sunColor[4];
-    float sunDirection[4];
-    float cameraForward[4];
-    float cameraRight[4];
-    float cameraUp[4];
-    float projectionParams[4];
-    float skyParams[4];
-};
-
-static void MatrixToArrayRowMajor(const float4x4& m, float out[16])
-{
-    int i = 0;
-    for (int row = 0; row < 4; ++row)
-    {
-        for (int col = 0; col < 4; ++col)
-        {
-            out[i++] = m.m[row][col];
-        }
-    }
-}
-
-static float4x4 ArrayToMatrix(const float in[16])
-{
-    float4x4 m = {};
-    int i = 0;
-    for (int row = 0; row < 4; ++row)
-    {
-        for (int col = 0; col < 4; ++col)
-        {
-            m.m[row][col] = in[i++];
-        }
-    }
-    return m;
-}
-
-
-
-static bool CreateWhiteTexture(Renderer& r);
-static bool CreateTextureFromFile(Renderer& r, const char* path, GPUTexture& outTexture);
-static VkDescriptorSet GetMaterialTextureDescriptor(Renderer& r, const MaterialData* material);
 static void DestroyRendererAssetCaches(Renderer& r);
 static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelHandle handle, const AssetSystem& assets);
 static void DestroyGPUShaderProgram(Renderer& r, GPUShaderProgram& program);
 static void DestroyGPUTexture(Renderer& r, GPUTexture& texture);
 
-
 // Shaders are authored once in Slang (engine/shaders/*.slang) and compiled to
 // SPIR-V at build time (cmake/KesShaders.cmake). Nothing is compiled at runtime.
-
-// Small Vulkan utility helpers
-
 
 #define VK_CHECK_RET(expr, msg, retval) \
     do { VkResult vkCheckResult_ = (expr); if (vkCheckResult_ != VK_SUCCESS) { \
@@ -382,21 +188,33 @@ static bool CreateDeviceLocalBufferWithData(Renderer& r, const void* data, VkDev
     return true;
 }
 
-static bool CreateImage2D(Renderer& r, uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling,
-    VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& outImage, VkDeviceMemory& outMemory)
+// Images
+
+struct ImageDesc
+{
+    uint32_t width = 1;
+    uint32_t height = 1;
+    uint32_t mipLevels = 1;
+    uint32_t layers = 1;
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    VkImageUsageFlags usage = 0;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    VkImageCreateFlags flags = 0;
+};
+
+static bool CreateImage(Renderer& r, const ImageDesc& desc, VkImage& outImage, VkDeviceMemory& outMemory)
 {
     VkImageCreateInfo imageInfo = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    imageInfo.flags = desc.flags;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.extent.width = width;
-    imageInfo.extent.height = height;
-    imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.format = format;
-    imageInfo.tiling = tiling;
+    imageInfo.extent = { desc.width, desc.height, 1 };
+    imageInfo.mipLevels = desc.mipLevels;
+    imageInfo.arrayLayers = desc.layers;
+    imageInfo.format = desc.format;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage = usage;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.usage = desc.usage;
+    imageInfo.samples = desc.samples;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VK_CHECK_RET(vkCreateImage(r.device, &imageInfo, nullptr, &outImage), "vkCreateImage", false);
@@ -404,22 +222,15 @@ static bool CreateImage2D(Renderer& r, uint32_t width, uint32_t height, VkFormat
     VkMemoryRequirements memReq = {};
     vkGetImageMemoryRequirements(r.device, outImage, &memReq);
 
-    const uint32_t memoryType = FindMemoryType(r, memReq.memoryTypeBits, properties);
-    if (memoryType == UINT32_MAX)
-    {
-        vkDestroyImage(r.device, outImage, nullptr);
-        outImage = VK_NULL_HANDLE;
-        return false;
-    }
-
+    const uint32_t memoryType = FindMemoryType(r, memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     VkMemoryAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
     allocInfo.allocationSize = memReq.size;
     allocInfo.memoryTypeIndex = memoryType;
-
-    if (vkAllocateMemory(r.device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS)
+    if (memoryType == UINT32_MAX || vkAllocateMemory(r.device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS)
     {
         vkDestroyImage(r.device, outImage, nullptr);
         outImage = VK_NULL_HANDLE;
+        EngineLogf("Image memory allocation failed (%ux%u x%u)", desc.width, desc.height, desc.layers);
         return false;
     }
 
@@ -427,17 +238,19 @@ static bool CreateImage2D(Renderer& r, uint32_t width, uint32_t height, VkFormat
     return true;
 }
 
-static VkImageView CreateImageView2D(Renderer& r, VkImage image, VkFormat format, VkImageAspectFlags aspect)
+static VkImageView CreateImageView(Renderer& r, VkImage image, VkFormat format, VkImageAspectFlags aspect,
+                                   VkImageViewType type = VK_IMAGE_VIEW_TYPE_2D, uint32_t baseLayer = 0, uint32_t layerCount = 1,
+                                   uint32_t levelCount = 1)
 {
     VkImageViewCreateInfo viewInfo = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
     viewInfo.image = image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = type;
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = aspect;
     viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    viewInfo.subresourceRange.levelCount = levelCount;
+    viewInfo.subresourceRange.baseArrayLayer = baseLayer;
+    viewInfo.subresourceRange.layerCount = layerCount;
 
     VkImageView view = VK_NULL_HANDLE;
     if (vkCreateImageView(r.device, &viewInfo, nullptr, &view) != VK_SUCCESS)
@@ -448,7 +261,9 @@ static VkImageView CreateImageView2D(Renderer& r, VkImage image, VkFormat format
     return view;
 }
 
-static void TransitionImageLayout(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspect)
+// Coarse but correct barrier for one-off transitions (uploads, creation).
+static void TransitionImageLayout(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                                  VkImageAspectFlags aspect, uint32_t levels = 1, uint32_t layers = 1)
 {
     VkImageMemoryBarrier barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     barrier.oldLayout = oldLayout;
@@ -457,38 +272,98 @@ static void TransitionImageLayout(VkCommandBuffer cmd, VkImage image, VkImageLay
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
     barrier.subresourceRange.aspectMask = aspect;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.levelCount = levels;
+    barrier.subresourceRange.layerCount = layers;
+    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+}
 
-    VkPipelineStageFlags srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+struct UploadRegion
+{
+    uint32_t level = 0;
+    uint32_t layer = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    VkDeviceSize offset = 0;
+};
 
-    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+// Copies `bytes` into the image's regions and leaves it in SHADER_READ_ONLY_OPTIMAL.
+static bool UploadImage(Renderer& r, VkImage image, const void* bytes, VkDeviceSize size, const std::vector<UploadRegion>& regions,
+                        uint32_t levels, uint32_t layers)
+{
+    VkBuffer stagingBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+    if (!CreateBuffer(r, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingMemory))
+        return false;
+
+    void* mapped = nullptr;
+    vkMapMemory(r.device, stagingMemory, 0, size, 0, &mapped);
+    std::memcpy(mapped, bytes, static_cast<size_t>(size));
+    vkUnmapMemory(r.device, stagingMemory);
+
+    VkCommandBuffer cmd = BeginSingleTimeCommands(r);
+    if (!cmd)
     {
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    }
-    else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-    {
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    }
-    else
-    {
-        // Generic fallback: coarse but correct full barrier.
-        barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-        srcStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-        dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        DestroyBuffer(r, stagingBuffer, stagingMemory);
+        return false;
     }
 
-    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, levels, layers);
+    std::vector<VkBufferImageCopy> copies;
+    copies.reserve(regions.size());
+    for (const UploadRegion& region : regions)
+    {
+        VkBufferImageCopy copy = {};
+        copy.bufferOffset = region.offset;
+        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.mipLevel = region.level;
+        copy.imageSubresource.baseArrayLayer = region.layer;
+        copy.imageSubresource.layerCount = 1;
+        copy.imageExtent = { region.width, region.height, 1 };
+        copies.push_back(copy);
+    }
+    vkCmdCopyBufferToImage(cmd, stagingBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<uint32_t>(copies.size()), copies.data());
+    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, levels, layers);
+
+    EndSingleTimeCommands(r, cmd);
+    DestroyBuffer(r, stagingBuffer, stagingMemory);
+    return true;
+}
+
+// Uploads an RGBA8 mip chain as a sampled 2D texture.
+static bool CreateTexture2D(Renderer& r, const std::vector<render::MipLevel>& levels, VkFormat format, GPUTexture& out)
+{
+    if (levels.empty())
+        return false;
+    std::vector<uint8_t> bytes;
+    std::vector<UploadRegion> regions;
+    for (uint32_t level = 0; level < static_cast<uint32_t>(levels.size()); ++level)
+    {
+        regions.push_back({ level, 0, levels[level].width, levels[level].height, bytes.size() });
+        bytes.insert(bytes.end(), levels[level].pixels.begin(), levels[level].pixels.end());
+    }
+
+    ImageDesc desc;
+    desc.width = levels[0].width;
+    desc.height = levels[0].height;
+    desc.mipLevels = static_cast<uint32_t>(levels.size());
+    desc.format = format;
+    desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!CreateImage(r, desc, out.image, out.memory) ||
+        !UploadImage(r, out.image, bytes.data(), bytes.size(), regions, desc.mipLevels, 1))
+    {
+        DestroyGPUTexture(r, out);
+        return false;
+    }
+    out.view = CreateImageView(r, out.image, format, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_VIEW_TYPE_2D, 0, 1, desc.mipLevels);
+    if (!out.view)
+    {
+        DestroyGPUTexture(r, out);
+        return false;
+    }
+    return true;
 }
 
 // Creates a shader module from a precompiled SPIR-V binary produced by slangc.
@@ -524,9 +399,7 @@ static VkShaderModule CreateShaderModuleFromBinary(Renderer& r, const std::strin
     return module;
 }
 
-
 // Instance / device / swap chain creation
-
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL DebugMessengerCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -752,10 +625,12 @@ static bool CreateLogicalDevice(Renderer& r)
         queueInfos.push_back(presentQueueInfo);
     }
 
+    VkPhysicalDeviceFeatures supported = {};
+    vkGetPhysicalDeviceFeatures(r.physicalDevice, &supported);
     VkPhysicalDeviceFeatures features = {};
-    features.fillModeNonSolid = VK_TRUE; // required for the wireframe rasterizer variants (F1 debug toggle)
-    features.wideLines = VK_TRUE;
-    features.samplerAnisotropy = VK_FALSE;
+    features.fillModeNonSolid = supported.fillModeNonSolid; // wireframe rasterizer variants (F1 debug toggle)
+    features.samplerAnisotropy = supported.samplerAnisotropy;
+    r.anisotropySupported = supported.samplerAnisotropy == VK_TRUE;
 
     const char* deviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
@@ -780,6 +655,7 @@ static VkSurfaceFormatKHR ChooseSurfaceFormat(Renderer& r)
     std::vector<VkSurfaceFormatKHR> formats(count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(r.physicalDevice, r.surface, &count, formats.data());
 
+    // UNORM: the tonemap encodes sRGB itself, and the UI blends in display space.
     for (const VkSurfaceFormatKHR& format : formats)
     {
         if (format.format == VK_FORMAT_B8G8R8A8_UNORM && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
@@ -813,29 +689,14 @@ static VkPresentModeKHR ChoosePresentMode(Renderer& r)
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
-static VkExtent2D ChooseSwapExtent(
-    const VkSurfaceCapabilitiesKHR& caps,
-    int windowWidth,
-    int windowHeight)
+static VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& caps, int windowWidth, int windowHeight)
 {
     if (caps.currentExtent.width != UINT32_MAX)
         return caps.currentExtent;
 
-    VkExtent2D extent = {
-        static_cast<uint32_t>(windowWidth),
-        static_cast<uint32_t>(windowHeight)
-    };
-
-    if (extent.width < caps.minImageExtent.width)
-        extent.width = caps.minImageExtent.width;
-    else if (extent.width > caps.maxImageExtent.width)
-        extent.width = caps.maxImageExtent.width;
-
-    if (extent.height < caps.minImageExtent.height)
-        extent.height = caps.minImageExtent.height;
-    else if (extent.height > caps.maxImageExtent.height)
-        extent.height = caps.maxImageExtent.height;
-
+    VkExtent2D extent = { static_cast<uint32_t>(windowWidth), static_cast<uint32_t>(windowHeight) };
+    extent.width = std::clamp(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
+    extent.height = std::clamp(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
     return extent;
 }
 
@@ -917,7 +778,7 @@ static bool CreateSwapchain(Renderer& r)
     r.swapchainImageViews.resize(actualImageCount);
     for (uint32_t i = 0; i < actualImageCount; ++i)
     {
-        r.swapchainImageViews[i] = CreateImageView2D(r, r.swapchainImages[i], r.swapchainFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+        r.swapchainImageViews[i] = CreateImageView(r, r.swapchainImages[i], r.swapchainFormat, VK_IMAGE_ASPECT_COLOR_BIT);
         if (!r.swapchainImageViews[i])
             return false;
     }
@@ -933,11 +794,9 @@ static bool CreateSwapchain(Renderer& r)
     return true;
 }
 
+// Formats and render passes
 
-// Render passes
-
-
-static bool ChooseDepthFormat(Renderer& r)
+static bool ChooseDepthFormats(Renderer& r)
 {
     const VkFormat candidates[] = { VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D32_SFLOAT };
     for (VkFormat format : candidates)
@@ -947,48 +806,97 @@ static bool ChooseDepthFormat(Renderer& r)
         if (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
         {
             r.depthFormat = format;
-            return true;
+            break;
         }
     }
-    EngineLogf("No suitable depth/stencil format found");
+    if (!r.depthFormat)
+    {
+        EngineLogf("No suitable depth/stencil format found");
+        return false;
+    }
+
+    // Shadow maps: depth attachment + sampled, preferably with linear (PCF) filtering.
+    const VkFormatFeatureFlags needed = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    for (bool requireLinear : { true, false })
+    {
+        for (VkFormat format : { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM })
+        {
+            VkFormatProperties props = {};
+            vkGetPhysicalDeviceFormatProperties(r.physicalDevice, format, &props);
+            const bool linear = (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+            if ((props.optimalTilingFeatures & needed) == needed && (linear || !requireLinear))
+            {
+                r.shadowFormat = format;
+                r.shadowLinearFilter = linear;
+                return true;
+            }
+        }
+    }
+    EngineLogf("No sampleable depth format for shadow maps found");
     return false;
 }
 
-static bool CreateOffscreenRenderPass(Renderer& r)
+static VkSampleCountFlagBits ChooseMsaaSamples(Renderer& r, int requested)
 {
-    VkAttachmentDescription colorAttachment = {};
-    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const VkSampleCountFlags supported = r.physicalDeviceProperties.limits.framebufferColorSampleCounts &
+                                         r.physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+    for (int samples = std::clamp(requested, 1, 8); samples > 1; samples /= 2)
+    {
+        if (supported & static_cast<VkSampleCountFlags>(samples))
+            return static_cast<VkSampleCountFlagBits>(samples);
+    }
+    return VK_SAMPLE_COUNT_1_BIT;
+}
 
-    VkAttachmentDescription depthAttachment = {};
-    depthAttachment.format = r.depthFormat;
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+// HDR color (+ depth); with MSAA the color resolves into a single-sample
+// attachment that the tonemap samples.
+static bool CreateSceneRenderPass(Renderer& r)
+{
+    const bool msaa = r.msaaSamples != VK_SAMPLE_COUNT_1_BIT;
+    VkAttachmentDescription attachments[3] = {};
+
+    attachments[0].format = kSceneColorFormat;
+    attachments[0].samples = r.msaaSamples;
+    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[0].storeOp = msaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[0].finalLayout = msaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    attachments[1].format = r.depthFormat;
+    attachments[1].samples = r.msaaSamples;
+    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    attachments[2].format = kSceneColorFormat;
+    attachments[2].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[2].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference colorRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
     VkAttachmentReference depthRef = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+    VkAttachmentReference resolveRef = { 2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
 
     VkSubpassDescription subpass = {};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorRef;
+    subpass.pResolveAttachments = msaa ? &resolveRef : nullptr;
     subpass.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency dependencies[2] = {};
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
-    // Previous frame's blit read of the color target (WAR) and its depth
+    // Previous frame's tonemap read of the color target (WAR) and its depth
     // writes (WAW): with several frames in flight, frames overlap on the GPU.
     dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
@@ -1002,17 +910,59 @@ static bool CreateOffscreenRenderPass(Renderer& r)
     dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    VkAttachmentDescription attachments[2] = { colorAttachment, depthAttachment };
-
     VkRenderPassCreateInfo passInfo = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-    passInfo.attachmentCount = 2;
+    passInfo.attachmentCount = msaa ? 3u : 2u;
     passInfo.pAttachments = attachments;
     passInfo.subpassCount = 1;
     passInfo.pSubpasses = &subpass;
     passInfo.dependencyCount = 2;
     passInfo.pDependencies = dependencies;
 
-    VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &r.offscreenRenderPass), "vkCreateRenderPass (offscreen)", false);
+    VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &r.sceneRenderPass), "vkCreateRenderPass (scene)", false);
+    return true;
+}
+
+// Depth only. Shadow images live in DEPTH_STENCIL_READ_ONLY_OPTIMAL between
+// passes, so layers not rendered this frame stay valid for sampling.
+static bool CreateShadowRenderPass(Renderer& r)
+{
+    VkAttachmentDescription depth = {};
+    depth.format = r.shadowFormat;
+    depth.samples = VK_SAMPLE_COUNT_1_BIT;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference depthRef = { 0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+    VkSubpassDescription subpass = {};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependencies[2] = {};
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkRenderPassCreateInfo passInfo = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    passInfo.attachmentCount = 1;
+    passInfo.pAttachments = &depth;
+    passInfo.subpassCount = 1;
+    passInfo.pSubpasses = &subpass;
+    passInfo.dependencyCount = 2;
+    passInfo.pDependencies = dependencies;
+    VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &r.shadowRenderPass), "vkCreateRenderPass (shadow)", false);
     return true;
 }
 
@@ -1055,9 +1005,64 @@ static bool CreateBackbufferRenderPass(Renderer& r)
     return true;
 }
 
+// Samplers
 
-// Descriptor / pipeline layouts (created once; independent of window size)
+static bool CreateMaterialSampler(Renderer& r)
+{
+    if (r.materialSampler)
+    {
+        vkDestroySampler(r.device, r.materialSampler, nullptr);
+        r.materialSampler = VK_NULL_HANDLE;
+    }
+    const float anisotropy = std::min(static_cast<float>(std::clamp(r.options.anisotropy, 1, 16)),
+                                      r.physicalDeviceProperties.limits.maxSamplerAnisotropy);
+    VkSamplerCreateInfo info = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    info.magFilter = VK_FILTER_LINEAR;
+    info.minFilter = VK_FILTER_LINEAR;
+    info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    info.anisotropyEnable = (r.anisotropySupported && anisotropy > 1.0f) ? VK_TRUE : VK_FALSE;
+    info.maxAnisotropy = info.anisotropyEnable ? anisotropy : 1.0f;
+    info.maxLod = VK_LOD_CLAMP_NONE;
+    VK_CHECK_RET(vkCreateSampler(r.device, &info, nullptr, &r.materialSampler), "vkCreateSampler (material)", false);
+    return true;
+}
 
+static bool CreateSamplers(Renderer& r)
+{
+    if (!CreateMaterialSampler(r))
+        return false;
+
+    // Environment, tonemap and UI: bilinear, clamped.
+    VkSamplerCreateInfo info = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    info.magFilter = VK_FILTER_LINEAR;
+    info.minFilter = VK_FILTER_LINEAR;
+    info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.maxLod = VK_LOD_CLAMP_NONE;
+    VK_CHECK_RET(vkCreateSampler(r.device, &info, nullptr, &r.linearSampler), "vkCreateSampler (linear)", false);
+
+    // PCF: depth comparison, outside the map counts as lit.
+    VkSamplerCreateInfo shadow = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    shadow.magFilter = r.shadowLinearFilter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    shadow.minFilter = shadow.magFilter;
+    shadow.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    shadow.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    shadow.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    shadow.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    shadow.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    shadow.compareEnable = VK_TRUE;
+    shadow.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    shadow.maxLod = 0.0f;
+    VK_CHECK_RET(vkCreateSampler(r.device, &shadow, nullptr, &r.shadowSampler), "vkCreateSampler (shadow)", false);
+    return true;
+}
+
+// Descriptor / pipeline layouts
 
 static bool CreateDescriptorSetLayouts(Renderer& r)
 {
@@ -1067,12 +1072,10 @@ static bool CreateDescriptorSetLayouts(Renderer& r)
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-
     bindings[2].binding = 2;
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     bindings[2].descriptorCount = 1;
@@ -1083,28 +1086,57 @@ static bool CreateDescriptorSetLayouts(Renderer& r)
     uboLayoutInfo.pBindings = bindings;
     VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &uboLayoutInfo, nullptr, &r.uboSetLayout), "vkCreateDescriptorSetLayout (ubo)", false);
 
-    // set 1 for mesh pipelines / set 0 for blit: a single combined image sampler
-    // with an immutable point sampler baked in (matches the single shared
-    // r.pointSampler used for every texture in the D3D11 renderer).
+    // set 1: material textures. The sampler is written per set (not
+    // immutable), so changing anisotropy only rewrites the sets.
+    VkDescriptorSetLayoutBinding materialBindings[render::kMaterialTextureCount] = {};
+    for (uint32_t i = 0; i < render::kMaterialTextureCount; ++i)
+    {
+        materialBindings[i].binding = i;
+        materialBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        materialBindings[i].descriptorCount = 1;
+        materialBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo materialLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    materialLayoutInfo.bindingCount = render::kMaterialTextureCount;
+    materialLayoutInfo.pBindings = materialBindings;
+    VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &materialLayoutInfo, nullptr, &r.materialSetLayout), "vkCreateDescriptorSetLayout (material)", false);
+
+    // set 2: environment cube, cascade + local shadow arrays, linear + compare samplers.
+    VkDescriptorSetLayoutBinding globalBindings[5] = {};
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        globalBindings[i].binding = i;
+        globalBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        globalBindings[i].descriptorCount = 1;
+        globalBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    globalBindings[3].binding = 3;
+    globalBindings[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    globalBindings[3].descriptorCount = 1;
+    globalBindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    globalBindings[3].pImmutableSamplers = &r.linearSampler;
+    globalBindings[4].binding = 4;
+    globalBindings[4].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    globalBindings[4].descriptorCount = 1;
+    globalBindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    globalBindings[4].pImmutableSamplers = &r.shadowSampler;
+    VkDescriptorSetLayoutCreateInfo globalLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    globalLayoutInfo.bindingCount = 5;
+    globalLayoutInfo.pBindings = globalBindings;
+    VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &globalLayoutInfo, nullptr, &r.globalSetLayout), "vkCreateDescriptorSetLayout (global)", false);
+
+    // Tonemap and UI: one combined image sampler, linear immutable sampler.
     VkDescriptorSetLayoutBinding texBinding = {};
     texBinding.binding = 0;
     texBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     texBinding.descriptorCount = 1;
     texBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    texBinding.pImmutableSamplers = &r.pointSampler;
-
+    texBinding.pImmutableSamplers = &r.linearSampler;
     VkDescriptorSetLayoutCreateInfo texLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     texLayoutInfo.bindingCount = 1;
     texLayoutInfo.pBindings = &texBinding;
     VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &texLayoutInfo, nullptr, &r.texSetLayout), "vkCreateDescriptorSetLayout (tex)", false);
-
-    // set 0 for the UI pipeline: same shape, linear immutable sampler.
-    VkDescriptorSetLayoutBinding uiTexBinding = texBinding;
-    uiTexBinding.pImmutableSamplers = &r.linearSampler;
-    VkDescriptorSetLayoutCreateInfo uiTexLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    uiTexLayoutInfo.bindingCount = 1;
-    uiTexLayoutInfo.pBindings = &uiTexBinding;
-    VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &uiTexLayoutInfo, nullptr, &r.uiTexSetLayout), "vkCreateDescriptorSetLayout (ui tex)", false);
+    VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &texLayoutInfo, nullptr, &r.uiTexSetLayout), "vkCreateDescriptorSetLayout (ui tex)", false);
 
     // set 0 for the sky pipeline: SkyCB only.
     VkDescriptorSetLayoutBinding skyBinding = {};
@@ -1112,7 +1144,6 @@ static bool CreateDescriptorSetLayouts(Renderer& r)
     skyBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     skyBinding.descriptorCount = 1;
     skyBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
     VkDescriptorSetLayoutCreateInfo skyLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     skyLayoutInfo.bindingCount = 1;
     skyLayoutInfo.pBindings = &skyBinding;
@@ -1123,9 +1154,9 @@ static bool CreateDescriptorSetLayouts(Renderer& r)
 
 static bool CreatePipelineLayouts(Renderer& r)
 {
-    VkDescriptorSetLayout meshSets[2] = { r.uboSetLayout, r.texSetLayout };
+    VkDescriptorSetLayout meshSets[3] = { r.uboSetLayout, r.materialSetLayout, r.globalSetLayout };
     VkPipelineLayoutCreateInfo meshLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-    meshLayoutInfo.setLayoutCount = 2;
+    meshLayoutInfo.setLayoutCount = 3;
     meshLayoutInfo.pSetLayouts = meshSets;
     VK_CHECK_RET(vkCreatePipelineLayout(r.device, &meshLayoutInfo, nullptr, &r.meshPipelineLayout), "vkCreatePipelineLayout (mesh)", false);
 
@@ -1134,14 +1165,18 @@ static bool CreatePipelineLayouts(Renderer& r)
     skyLayoutInfo.pSetLayouts = &r.skySetLayout;
     VK_CHECK_RET(vkCreatePipelineLayout(r.device, &skyLayoutInfo, nullptr, &r.skyPipelineLayout), "vkCreatePipelineLayout (sky)", false);
 
-    VkPipelineLayoutCreateInfo blitLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-    blitLayoutInfo.setLayoutCount = 1;
-    blitLayoutInfo.pSetLayouts = &r.texSetLayout;
-    VK_CHECK_RET(vkCreatePipelineLayout(r.device, &blitLayoutInfo, nullptr, &r.blitPipelineLayout), "vkCreatePipelineLayout (blit)", false);
+    VkPushConstantRange tonemapPush = {};
+    tonemapPush.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    tonemapPush.size = sizeof(render::TonemapCBData);
+    VkPipelineLayoutCreateInfo tonemapLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    tonemapLayoutInfo.setLayoutCount = 1;
+    tonemapLayoutInfo.pSetLayouts = &r.texSetLayout;
+    tonemapLayoutInfo.pushConstantRangeCount = 1;
+    tonemapLayoutInfo.pPushConstantRanges = &tonemapPush;
+    VK_CHECK_RET(vkCreatePipelineLayout(r.device, &tonemapLayoutInfo, nullptr, &r.tonemapPipelineLayout), "vkCreatePipelineLayout (tonemap)", false);
 
     VkPushConstantRange uiPushRange = {};
     uiPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    uiPushRange.offset = 0;
     uiPushRange.size = sizeof(float) * 4;   // ui.slang UiConstants
     VkPipelineLayoutCreateInfo uiLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     uiLayoutInfo.setLayoutCount = 1;
@@ -1155,48 +1190,51 @@ static bool CreatePipelineLayouts(Renderer& r)
 
 static bool CreateDescriptorPool(Renderer& r)
 {
-    // Sized generously: texSetLayout sets are allocated per unique texture
-    // (materials, white texture, offscreen color), uboSetLayout/skySetLayout
-    // once per frame in flight.
-    VkDescriptorPoolSize poolSizes[3] = {};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = 8;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    poolSizes[1].descriptorCount = 8;
-    poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[2].descriptorCount = 4096;
+    // Material sets (5 images each) are allocated per unique texture set, UI
+    // sets per UI texture, the rest a few per frame in flight.
+    VkDescriptorPoolSize poolSizes[5] = {};
+    poolSizes[0] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8 };
+    poolSizes[1] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8 };
+    poolSizes[2] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 };
+    poolSizes[3] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16 };
+    poolSizes[4] = { VK_DESCRIPTOR_TYPE_SAMPLER, 16 };
 
     VkDescriptorPoolCreateInfo poolInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets = 4096 + 8;
-    poolInfo.poolSizeCount = 3;
+    poolInfo.maxSets = 4096 + 16;
+    poolInfo.poolSizeCount = 5;
     poolInfo.pPoolSizes = poolSizes;
 
     VK_CHECK_RET(vkCreateDescriptorPool(r.device, &poolInfo, nullptr, &r.descriptorPool), "vkCreateDescriptorPool", false);
     return true;
 }
 
-static VkDescriptorSet AllocateTextureDescriptorSet(Renderer& r, VkImageView view, VkDescriptorSetLayout layout = VK_NULL_HANDLE)
+static VkDescriptorSet AllocateDescriptorSet(Renderer& r, VkDescriptorSetLayout layout)
 {
-    if (!layout)
-        layout = r.texSetLayout;
-
     VkDescriptorSetAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     allocInfo.descriptorPool = r.descriptorPool;
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &layout;
-
     VkDescriptorSet set = VK_NULL_HANDLE;
     if (vkAllocateDescriptorSets(r.device, &allocInfo, &set) != VK_SUCCESS)
     {
-        EngineLogf("vkAllocateDescriptorSets (texture) failed");
+        EngineLogf("vkAllocateDescriptorSets failed");
         return VK_NULL_HANDLE;
     }
+    return set;
+}
+
+// One combined image sampler at binding 0 (tonemap / UI layouts, linear immutable sampler).
+static VkDescriptorSet AllocateTextureDescriptorSet(Renderer& r, VkImageView view, VkDescriptorSetLayout layout)
+{
+    VkDescriptorSet set = AllocateDescriptorSet(r, layout);
+    if (!set)
+        return VK_NULL_HANDLE;
 
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     imageInfo.imageView = view;
-    imageInfo.sampler = layout == r.uiTexSetLayout ? r.linearSampler : r.pointSampler; // ignored (immutable sampler), set for clarity/validation
+    imageInfo.sampler = r.linearSampler; // ignored (immutable sampler), set for clarity
 
     VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     write.dstSet = set;
@@ -1204,7 +1242,6 @@ static VkDescriptorSet AllocateTextureDescriptorSet(Renderer& r, VkImageView vie
     write.descriptorCount = 1;
     write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     write.pImageInfo = &imageInfo;
-
     vkUpdateDescriptorSets(r.device, 1, &write, 0, nullptr);
     return set;
 }
@@ -1213,26 +1250,19 @@ static bool CreateUboDescriptorSets(Renderer& r)
 {
     for (FrameResources& frame : r.frames)
     {
-        VkDescriptorSetAllocateInfo uboAllocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-        uboAllocInfo.descriptorPool = r.descriptorPool;
-        uboAllocInfo.descriptorSetCount = 1;
-        uboAllocInfo.pSetLayouts = &r.uboSetLayout;
-        VK_CHECK_RET(vkAllocateDescriptorSets(r.device, &uboAllocInfo, &frame.uboDescriptorSet), "vkAllocateDescriptorSets (ubo)", false);
-
-        VkDescriptorSetAllocateInfo skyAllocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-        skyAllocInfo.descriptorPool = r.descriptorPool;
-        skyAllocInfo.descriptorSetCount = 1;
-        skyAllocInfo.pSetLayouts = &r.skySetLayout;
-        VK_CHECK_RET(vkAllocateDescriptorSets(r.device, &skyAllocInfo, &frame.skyDescriptorSet), "vkAllocateDescriptorSets (sky)", false);
+        frame.uboDescriptorSet = AllocateDescriptorSet(r, r.uboSetLayout);
+        frame.skyDescriptorSet = AllocateDescriptorSet(r, r.skySetLayout);
+        if (!frame.uboDescriptorSet || !frame.skyDescriptorSet)
+            return false;
     }
-
-    return true;
+    r.globalDescriptorSet = AllocateDescriptorSet(r, r.globalSetLayout);
+    return r.globalDescriptorSet != VK_NULL_HANDLE;
 }
 
 static void UpdateSceneAndSkyDescriptorBindings(Renderer& r, const FrameResources& frame)
 {
-    VkDescriptorBufferInfo sceneInfo = { frame.sceneCB, 0, sizeof(SceneCBData) };
-    VkDescriptorBufferInfo skyInfo = { frame.skyCB, 0, sizeof(SkyCBData) };
+    VkDescriptorBufferInfo sceneInfo = { frame.sceneCB, 0, sizeof(render::SceneCBData) };
+    VkDescriptorBufferInfo skyInfo = { frame.skyCB, 0, sizeof(render::SkyCBData) };
 
     VkWriteDescriptorSet writes[2] = {};
     writes[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
@@ -1267,6 +1297,30 @@ static void UpdateDynamicRingDescriptorBinding(Renderer& r, VkDescriptorSet set,
     write.pBufferInfo = &info;
 
     vkUpdateDescriptorSets(r.device, 1, &write, 0, nullptr);
+}
+
+// Points set 2 at the current environment and shadow images. Only called
+// while no frame using the set can be in flight (after vkDeviceWaitIdle).
+static void UpdateGlobalDescriptorSet(Renderer& r)
+{
+    const GPUShadowArray& cascades = r.cascadeShadows.arrayView ? r.cascadeShadows : r.dummyShadows;
+    const GPUShadowArray& locals = r.localShadows.arrayView ? r.localShadows : r.dummyShadows;
+    VkDescriptorImageInfo images[3] = {};
+    images[0] = { VK_NULL_HANDLE, r.environmentMap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    images[1] = { VK_NULL_HANDLE, cascades.arrayView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+    images[2] = { VK_NULL_HANDLE, locals.arrayView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+    VkWriteDescriptorSet writes[3] = {};
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        writes[i].dstSet = r.globalDescriptorSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        writes[i].pImageInfo = &images[i];
+    }
+    vkUpdateDescriptorSets(r.device, 3, writes, 0, nullptr);
+    r.globalSetDirty = false;
 }
 
 // Dynamic uniform ring buffers (ModelCB / MaterialCB per-draw slots)
@@ -1331,11 +1385,13 @@ static bool GrowDynamicRingBuffer(Renderer& r, GPUDynamicRingBuffer& ring, uint3
     if (ring.mapped && ring.cursor > 0)
         std::memcpy(newMapped, ring.mapped, static_cast<size_t>(ring.slotStride) * ring.cursor);
 
+    const uint32_t cursor = ring.cursor;
     DestroyDynamicRingBuffer(r, ring);
     ring.buffer = newBuffer;
     ring.memory = newMemory;
     ring.mapped = newMapped;
     ring.slotCapacity = newCapacity;
+    ring.cursor = cursor;
 
     UpdateDynamicRingDescriptorBinding(r, r.frames[r.frameIndex].uboDescriptorSet, descriptorBinding, ring);
     return true;
@@ -1360,51 +1416,80 @@ static VkDeviceSize AcquireDynamicSlot(Renderer& r, GPUDynamicRingBuffer& ring, 
     return offset;
 }
 
-// Sampler / render targets
-static bool CreateSampler(Renderer& r)
+// Render targets
+
+static void DestroySceneTargets(Renderer& r)
 {
-    VkSamplerCreateInfo samplerInfo = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.anisotropyEnable = VK_FALSE;
-    samplerInfo.maxAnisotropy = 1.0f;
-    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;
-    samplerInfo.compareEnable = VK_FALSE;
-    samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+    if (r.tonemapDescriptorSet)
+    {
+        vkFreeDescriptorSets(r.device, r.descriptorPool, 1, &r.tonemapDescriptorSet);
+        r.tonemapDescriptorSet = VK_NULL_HANDLE;
+    }
+    if (r.sceneFramebuffer) { vkDestroyFramebuffer(r.device, r.sceneFramebuffer, nullptr); r.sceneFramebuffer = VK_NULL_HANDLE; }
+    const struct { VkImageView* view; VkImage* image; VkDeviceMemory* memory; } targets[] = {
+        { &r.sceneColorView, &r.sceneColorImage, &r.sceneColorMemory },
+        { &r.sceneColorMSView, &r.sceneColorMSImage, &r.sceneColorMSMemory },
+        { &r.depthView, &r.depthImage, &r.depthMemory } };
+    for (const auto& target : targets)
+    {
+        if (*target.view) { vkDestroyImageView(r.device, *target.view, nullptr); *target.view = VK_NULL_HANDLE; }
+        if (*target.image) { vkDestroyImage(r.device, *target.image, nullptr); *target.image = VK_NULL_HANDLE; }
+        if (*target.memory) { vkFreeMemory(r.device, *target.memory, nullptr); *target.memory = VK_NULL_HANDLE; }
+    }
+}
 
-    VK_CHECK_RET(vkCreateSampler(r.device, &samplerInfo, nullptr, &r.pointSampler), "vkCreateSampler", false);
+static bool CreateSceneTargets(Renderer& r)
+{
+    const bool msaa = r.msaaSamples != VK_SAMPLE_COUNT_1_BIT;
+    ImageDesc color;
+    color.width = static_cast<uint32_t>(std::max(r.renderWidth, 1));
+    color.height = static_cast<uint32_t>(std::max(r.renderHeight, 1));
+    color.format = kSceneColorFormat;
+    color.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!CreateImage(r, color, r.sceneColorImage, r.sceneColorMemory))
+        return false;
+    r.sceneColorView = CreateImageView(r, r.sceneColorImage, kSceneColorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    // UI images and transformed text (ui.slang) use bilinear filtering.
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    VK_CHECK_RET(vkCreateSampler(r.device, &samplerInfo, nullptr, &r.linearSampler), "vkCreateSampler (linear)", false);
-    return true;
+    if (msaa)
+    {
+        ImageDesc ms = color;
+        ms.samples = r.msaaSamples;
+        ms.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+        if (!CreateImage(r, ms, r.sceneColorMSImage, r.sceneColorMSMemory))
+            return false;
+        r.sceneColorMSView = CreateImageView(r, r.sceneColorMSImage, kSceneColorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+    }
+
+    ImageDesc depth = color;
+    depth.format = r.depthFormat;
+    depth.samples = r.msaaSamples;
+    depth.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (!CreateImage(r, depth, r.depthImage, r.depthMemory))
+        return false;
+    VkImageAspectFlags depthAspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (r.depthFormat == VK_FORMAT_D24_UNORM_S8_UINT || r.depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT)
+        depthAspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    r.depthView = CreateImageView(r, r.depthImage, r.depthFormat, depthAspect);
+    if (!r.sceneColorView || !r.depthView || (msaa && !r.sceneColorMSView))
+        return false;
+
+    VkImageView attachments[3] = { msaa ? r.sceneColorMSView : r.sceneColorView, r.depthView, r.sceneColorView };
+    VkFramebufferCreateInfo fbInfo = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    fbInfo.renderPass = r.sceneRenderPass;
+    fbInfo.attachmentCount = msaa ? 3u : 2u;
+    fbInfo.pAttachments = attachments;
+    fbInfo.width = color.width;
+    fbInfo.height = color.height;
+    fbInfo.layers = 1;
+    VK_CHECK_RET(vkCreateFramebuffer(r.device, &fbInfo, nullptr, &r.sceneFramebuffer), "vkCreateFramebuffer (scene)", false);
+
+    r.tonemapDescriptorSet = AllocateTextureDescriptorSet(r, r.sceneColorView, r.texSetLayout);
+    return r.tonemapDescriptorSet != VK_NULL_HANDLE;
 }
 
 static void DestroyRenderTargets(Renderer& r)
 {
-    if (r.offscreenColorDescriptorSet)
-    {
-        vkFreeDescriptorSets(r.device, r.descriptorPool, 1, &r.offscreenColorDescriptorSet);
-        r.offscreenColorDescriptorSet = VK_NULL_HANDLE;
-    }
-
-    if (r.offscreenFramebuffer) { vkDestroyFramebuffer(r.device, r.offscreenFramebuffer, nullptr); r.offscreenFramebuffer = VK_NULL_HANDLE; }
-    if (r.offscreenColorView) { vkDestroyImageView(r.device, r.offscreenColorView, nullptr); r.offscreenColorView = VK_NULL_HANDLE; }
-    if (r.offscreenColorImage) { vkDestroyImage(r.device, r.offscreenColorImage, nullptr); r.offscreenColorImage = VK_NULL_HANDLE; }
-    if (r.offscreenColorMemory) { vkFreeMemory(r.device, r.offscreenColorMemory, nullptr); r.offscreenColorMemory = VK_NULL_HANDLE; }
-
-    if (r.depthView) { vkDestroyImageView(r.device, r.depthView, nullptr); r.depthView = VK_NULL_HANDLE; }
-    if (r.depthImage) { vkDestroyImage(r.device, r.depthImage, nullptr); r.depthImage = VK_NULL_HANDLE; }
-    if (r.depthMemory) { vkFreeMemory(r.device, r.depthMemory, nullptr); r.depthMemory = VK_NULL_HANDLE; }
-
+    DestroySceneTargets(r);
     DestroySwapchainObjects(r);
 }
 
@@ -1412,54 +1497,9 @@ static bool CreateRenderTargets(Renderer& r)
 {
     if (!CreateSwapchain(r))
         return false;
-
-    if (!r.backbufferRenderPass)
-    {
-        if (!CreateBackbufferRenderPass(r))
-            return false;
-    }
-
-    if (!r.depthFormat && !ChooseDepthFormat(r))
+    if (!r.backbufferRenderPass && !CreateBackbufferRenderPass(r))
         return false;
-
-    if (!r.offscreenRenderPass)
-    {
-        if (!CreateOffscreenRenderPass(r))
-            return false;
-    }
-
-    // Depth buffer, sized to the internal render resolution (matches
-    // r.renderWidth/renderHeight in the D3D11 version, not the window size).
-    if (!CreateImage2D(r, static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight), r.depthFormat,
-        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        r.depthImage, r.depthMemory))
-        return false;
-    r.depthView = CreateImageView2D(r, r.depthImage, r.depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
-    if (!r.depthView)
-        return false;
-
-    // Offscreen color target the scene renders into, later blitted (via the
-    // fullscreen blit pipeline) onto the swap chain image.
-    if (!CreateImage2D(r, static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight), VK_FORMAT_R8G8B8A8_UNORM,
-        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        r.offscreenColorImage, r.offscreenColorMemory))
-        return false;
-    r.offscreenColorView = CreateImageView2D(r, r.offscreenColorImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
-    if (!r.offscreenColorView)
-        return false;
-
-    VkImageView offscreenAttachments[2] = { r.offscreenColorView, r.depthView };
-    VkFramebufferCreateInfo offscreenFbInfo = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-    offscreenFbInfo.renderPass = r.offscreenRenderPass;
-    offscreenFbInfo.attachmentCount = 2;
-    offscreenFbInfo.pAttachments = offscreenAttachments;
-    offscreenFbInfo.width = static_cast<uint32_t>(r.renderWidth);
-    offscreenFbInfo.height = static_cast<uint32_t>(r.renderHeight);
-    offscreenFbInfo.layers = 1;
-    VK_CHECK_RET(vkCreateFramebuffer(r.device, &offscreenFbInfo, nullptr, &r.offscreenFramebuffer), "vkCreateFramebuffer (offscreen)", false);
-
-    r.offscreenColorDescriptorSet = AllocateTextureDescriptorSet(r, r.offscreenColorView);
-    if (!r.offscreenColorDescriptorSet)
+    if (!CreateSceneTargets(r))
         return false;
 
     // Backbuffer framebuffers, one per swap chain image.
@@ -1475,10 +1515,87 @@ static bool CreateRenderTargets(Renderer& r)
         fbInfo.layers = 1;
         VK_CHECK_RET(vkCreateFramebuffer(r.device, &fbInfo, nullptr, &r.backbufferFramebuffers[i]), "vkCreateFramebuffer (backbuffer)", false);
     }
-
     return true;
 }
 
+// Shadow maps
+
+static void DestroyShadowArray(Renderer& r, GPUShadowArray& shadows)
+{
+    for (VkFramebuffer framebuffer : shadows.framebuffers)
+        vkDestroyFramebuffer(r.device, framebuffer, nullptr);
+    shadows.framebuffers.clear();
+    for (VkImageView view : shadows.layerViews)
+        vkDestroyImageView(r.device, view, nullptr);
+    shadows.layerViews.clear();
+    if (shadows.arrayView) { vkDestroyImageView(r.device, shadows.arrayView, nullptr); shadows.arrayView = VK_NULL_HANDLE; }
+    if (shadows.image) { vkDestroyImage(r.device, shadows.image, nullptr); shadows.image = VK_NULL_HANDLE; }
+    if (shadows.memory) { vkFreeMemory(r.device, shadows.memory, nullptr); shadows.memory = VK_NULL_HANDLE; }
+    shadows.resolution = 0;
+    shadows.layers = 0;
+}
+
+static bool CreateShadowArray(Renderer& r, GPUShadowArray& shadows, int layers, int resolution, bool renderable)
+{
+    DestroyShadowArray(r, shadows);
+    if (layers <= 0 || resolution <= 0)
+        return true;
+
+    ImageDesc desc;
+    desc.width = desc.height = static_cast<uint32_t>(resolution);
+    desc.layers = static_cast<uint32_t>(layers);
+    desc.format = r.shadowFormat;
+    desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!CreateImage(r, desc, shadows.image, shadows.memory))
+        return false;
+
+    // Every layer starts in the layout the passes and the sampler expect.
+    VkCommandBuffer cmd = BeginSingleTimeCommands(r);
+    if (!cmd)
+        return false;
+    TransitionImageLayout(cmd, shadows.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_ASPECT_DEPTH_BIT, 1, desc.layers);
+    EndSingleTimeCommands(r, cmd);
+
+    shadows.arrayView = CreateImageView(r, shadows.image, r.shadowFormat, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 0, desc.layers);
+    if (!shadows.arrayView)
+        return false;
+    shadows.resolution = resolution;
+    shadows.layers = layers;
+    if (!renderable)
+        return true;
+
+    for (uint32_t layer = 0; layer < desc.layers; ++layer)
+    {
+        VkImageView view = CreateImageView(r, shadows.image, r.shadowFormat, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_VIEW_TYPE_2D, layer, 1);
+        if (!view)
+            return false;
+        shadows.layerViews.push_back(view);
+
+        VkFramebufferCreateInfo fbInfo = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+        fbInfo.renderPass = r.shadowRenderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &view;
+        fbInfo.width = desc.width;
+        fbInfo.height = desc.height;
+        fbInfo.layers = 1;
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VK_CHECK_RET(vkCreateFramebuffer(r.device, &fbInfo, nullptr, &framebuffer), "vkCreateFramebuffer (shadow)", false);
+        shadows.framebuffers.push_back(framebuffer);
+    }
+    return true;
+}
+
+static bool CreateShadowTargets(Renderer& r)
+{
+    const render::ShadowConfig config = render::GetShadowConfig(r.options.shadowQuality);
+    const bool ok = CreateShadowArray(r, r.cascadeShadows, config.cascadeCount, config.cascadeResolution, true) &&
+                    CreateShadowArray(r, r.localShadows, config.localSlices, config.localResolution, true);
+    r.globalSetDirty = true;
+    if (!ok)
+        EngineLog("Shadow map creation failed; shadows are off.");
+    return ok;
+}
 
 // Mesh pipeline permutations
 
@@ -1490,17 +1607,23 @@ enum MeshPipelineVariantBit : uint32_t
     kVariantBit_DepthReadOnly = 1u << 3,
 };
 
-static uint32_t SelectMeshPipelineVariant(bool wireframe, bool doubleSided, bool transparent, bool depthReadOnly)
+static void FillMeshVertexInput(VkVertexInputBindingDescription& binding, VkVertexInputAttributeDescription attrs[6])
 {
-    uint32_t v = 0;
-    if (wireframe) v |= kVariantBit_Wireframe;
-    if (doubleSided) v |= kVariantBit_DoubleSided;
-    if (transparent) v |= kVariantBit_Transparent;
-    if (depthReadOnly) v |= kVariantBit_DepthReadOnly;
-    return v;
+    // Matches RenderVertex: pos(vec3)+normal(vec3)+uv(vec2)+color(vec4)+boneIndices(uint16x4)+boneWeights(vec4)
+    binding = {};
+    binding.binding = 0;
+    binding.stride = sizeof(RenderVertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    attrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RenderVertex, px) };
+    attrs[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RenderVertex, nx) };
+    attrs[2] = { 2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(RenderVertex, u) };
+    attrs[3] = { 3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RenderVertex, r) };
+    attrs[4] = { 4, 0, VK_FORMAT_R16G16B16A16_UINT, offsetof(RenderVertex, boneIndices) };
+    attrs[5] = { 5, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RenderVertex, boneWeights) };
 }
 
-static VkPipeline CreateMeshPipelineVariant(Renderer& r, const GPUShaderProgram& program, uint32_t variant)
+// Scene pipelines (variant bits) or, with shadowPipeline, the depth-only shadow pipeline.
+static VkPipeline CreateMeshPipeline(Renderer& r, const GPUShaderProgram& program, uint32_t variant, bool shadowPipeline)
 {
     const bool wireframe = (variant & kVariantBit_Wireframe) != 0;
     const bool doubleSided = (variant & kVariantBit_DoubleSided) != 0;
@@ -1517,20 +1640,9 @@ static VkPipeline CreateMeshPipelineVariant(Renderer& r, const GPUShaderProgram&
     stages[1].module = program.pixelShader;
     stages[1].pName = "main";
 
-    // Matches RenderVertex exactly: pos(vec3)+normal(vec3)+uv(vec2)+color(vec4)+boneIndices(uint16x4)+boneWeights(vec4)
-    VkVertexInputBindingDescription binding = {};
-    binding.binding = 0;
-    binding.stride = sizeof(RenderVertex);
-    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    VkVertexInputAttributeDescription attrs[6] = {};
-    attrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RenderVertex, px) };
-    attrs[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RenderVertex, nx) };
-    attrs[2] = { 2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(RenderVertex, u) };
-    attrs[3] = { 3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RenderVertex, r) };
-    attrs[4] = { 4, 0, VK_FORMAT_R16G16B16A16_UINT, offsetof(RenderVertex, boneIndices) };
-    attrs[5] = { 5, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RenderVertex, boneWeights) };
-
+    VkVertexInputBindingDescription binding;
+    VkVertexInputAttributeDescription attrs[6];
+    FillMeshVertexInput(binding, attrs);
     VkPipelineVertexInputStateCreateInfo vertexInput = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     vertexInput.vertexBindingDescriptionCount = 1;
     vertexInput.pVertexBindingDescriptions = &binding;
@@ -1546,13 +1658,19 @@ static VkPipeline CreateMeshPipelineVariant(Renderer& r, const GPUShaderProgram&
 
     VkPipelineRasterizationStateCreateInfo rasterizer = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
     rasterizer.polygonMode = wireframe ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
-    rasterizer.cullMode = doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+    rasterizer.cullMode = (doubleSided || shadowPipeline) ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
     rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE; // matches D3D11's default (CCW culled as back-facing) under the negative-viewport-height flip
     rasterizer.lineWidth = 1.0f;
-    rasterizer.depthClampEnable = VK_FALSE;
+    if (shadowPipeline)
+    {
+        // Same bias as D3D11's shadow rasterizer state (float depth: units of 2^(e-23)).
+        rasterizer.depthBiasEnable = VK_TRUE;
+        rasterizer.depthBiasConstantFactor = r.shadowFormat == VK_FORMAT_D16_UNORM ? 2.0f : 1000.0f;
+        rasterizer.depthBiasSlopeFactor = 2.0f;
+    }
 
     VkPipelineMultisampleStateCreateInfo multisample = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = shadowPipeline ? VK_SAMPLE_COUNT_1_BIT : r.msaaSamples;
 
     VkPipelineDepthStencilStateCreateInfo depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
     depthStencil.depthTestEnable = VK_TRUE;
@@ -1571,13 +1689,9 @@ static VkPipeline CreateMeshPipelineVariant(Renderer& r, const GPUShaderProgram&
         blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
     }
-    else
-    {
-        blendAttachment.blendEnable = VK_FALSE;
-    }
 
     VkPipelineColorBlendStateCreateInfo colorBlend = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-    colorBlend.attachmentCount = 1;
+    colorBlend.attachmentCount = shadowPipeline ? 0u : 1u;
     colorBlend.pAttachments = &blendAttachment;
 
     const VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
@@ -1597,79 +1711,68 @@ static VkPipeline CreateMeshPipelineVariant(Renderer& r, const GPUShaderProgram&
     pipelineInfo.pColorBlendState = &colorBlend;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = r.meshPipelineLayout;
-    pipelineInfo.renderPass = r.offscreenRenderPass;
+    pipelineInfo.renderPass = shadowPipeline ? r.shadowRenderPass : r.sceneRenderPass;
     pipelineInfo.subpass = 0;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     if (vkCreateGraphicsPipelines(r.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS)
     {
-        EngineLogf("vkCreateGraphicsPipelines (mesh variant 0x%X) failed", variant);
+        EngineLogf("vkCreateGraphicsPipelines (mesh variant 0x%X%s) failed", variant, shadowPipeline ? ", shadow" : "");
         return VK_NULL_HANDLE;
     }
     return pipeline;
 }
 
-// Lazily builds (and caches) the pipeline for the requested state
-// combination - the Vulkan analogue of SelectRasterizerState() combined
-// with the OMSetBlendState/OMSetDepthStencilState calls around it.
+// Lazily builds (and caches) the pipeline for the requested state combination.
 static VkPipeline GetOrCreateMeshPipelineVariant(Renderer& r, GPUShaderProgram& program, bool wireframe, bool doubleSided, bool transparent)
 {
-    const bool depthReadOnly = transparent;
-    const uint32_t variant = SelectMeshPipelineVariant(wireframe, doubleSided, transparent, depthReadOnly);
+    uint32_t variant = 0;
+    if (wireframe) variant |= kVariantBit_Wireframe;
+    if (doubleSided) variant |= kVariantBit_DoubleSided;
+    if (transparent) variant |= kVariantBit_Transparent | kVariantBit_DepthReadOnly;
 
     if (program.pipelines[variant] == VK_NULL_HANDLE)
     {
         KES_ZONE(RENDER, "Create pipeline variant (cache miss)");
-        program.pipelines[variant] = CreateMeshPipelineVariant(r, program, variant);
+        program.pipelines[variant] = CreateMeshPipeline(r, program, variant, false);
     }
-
     return program.pipelines[variant];
 }
 
-static bool CreateMeshDefaultProgram(Renderer& r)
+static void DestroyProgramPipelines(Renderer& r, GPUShaderProgram& program)
 {
-    r.meshDefaultProgram.vertexShader = CreateShaderModuleFromBinary(r, kEngineShaderMeshDefault, ShaderStage::Vertex);
-    if (!r.meshDefaultProgram.vertexShader)
-        return false;
-
-    r.meshDefaultProgram.pixelShader = CreateShaderModuleFromBinary(r, kEngineShaderMeshDefault, ShaderStage::Pixel);
-    if (!r.meshDefaultProgram.pixelShader)
-        return false;
-
-    r.meshDefaultProgram.usesFogVarying = false;
-
-    // Eagerly build the common (solid + wireframe, single/double-sided,
-    // opaque) variants so the very first frame doesn't stall on pipeline
-    // creation; transparent variants are built on first use.
-    for (uint32_t variant = 0; variant < kMeshPipelineVariantCount; ++variant)
+    for (VkPipeline& pipeline : program.pipelines)
     {
-        const bool transparent = (variant & kVariantBit_Transparent) != 0;
-        const bool depthReadOnly = (variant & kVariantBit_DepthReadOnly) != 0;
-        if (transparent != depthReadOnly)
-            continue; // this combination is never selected by GetOrCreateMeshPipelineVariant
-        r.meshDefaultProgram.pipelines[variant] = CreateMeshPipelineVariant(r, r.meshDefaultProgram, variant);
-        if (!r.meshDefaultProgram.pipelines[variant])
-            return false;
+        if (pipeline) vkDestroyPipeline(r.device, pipeline, nullptr);
+        pipeline = VK_NULL_HANDLE;
+    }
+}
+
+static bool CreateShaderProgram(Renderer& r, const std::string& vsSource, const std::string& psSource, GPUShaderProgram& outProgram)
+{
+    outProgram.vertexShader = CreateShaderModuleFromBinary(r, vsSource, ShaderStage::Vertex);
+    outProgram.pixelShader = outProgram.vertexShader ? CreateShaderModuleFromBinary(r, psSource, ShaderStage::Pixel) : VK_NULL_HANDLE;
+    if (!outProgram.pixelShader)
+    {
+        DestroyGPUShaderProgram(r, outProgram);
+        return false;
     }
     return true;
 }
 
-static bool CreateShaderProgramFromBinaries(Renderer& r, const std::string& vsSource, const std::string& psSource, bool usesFogVarying, GPUShaderProgram& outProgram)
+static bool CreateMeshPrograms(Renderer& r)
 {
-    outProgram.vertexShader = CreateShaderModuleFromBinary(r, vsSource, ShaderStage::Vertex);
-    if (!outProgram.vertexShader)
+    if (!CreateShaderProgram(r, kEngineShaderMeshDefault, kEngineShaderMeshDefault, r.meshDefaultProgram) ||
+        !CreateShaderProgram(r, kEngineShaderShadow, kEngineShaderShadow, r.shadowProgram))
         return false;
-
-    outProgram.pixelShader = CreateShaderModuleFromBinary(r, psSource, ShaderStage::Pixel);
-    if (!outProgram.pixelShader)
+    // The common opaque variants up front so the first frame doesn't stall.
+    for (bool doubleSided : { false, true })
     {
-        vkDestroyShaderModule(r.device, outProgram.vertexShader, nullptr);
-        outProgram.vertexShader = VK_NULL_HANDLE;
-        return false;
+        if (!GetOrCreateMeshPipelineVariant(r, r.meshDefaultProgram, false, doubleSided, false))
+            return false;
     }
-
-    outProgram.usesFogVarying = usesFogVarying;
-    return true;
+    r.shadowProgram.pipelines[0] = CreateMeshPipeline(r, r.shadowProgram, 0, true);
+    return r.shadowProgram.pipelines[0] != VK_NULL_HANDLE;
 }
 
 static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle handle, const AssetSystem& assets)
@@ -1686,12 +1789,12 @@ static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle han
     if (!shader)
         return nullptr;
 
-    // Stages a .shader asset doesn't provide fall back to the engine's fog-capable mesh program.
+    // Stages a .shader asset doesn't provide fall back to the engine's template program.
     const std::string vs = shader->vertexShaderFile.empty() ? std::string(kEngineShaderMeshFallback) : shader->vertexShaderFile;
     const std::string ps = shader->pixelShaderFile.empty() ? std::string(kEngineShaderMeshFallback) : shader->pixelShaderFile;
 
     GPUShaderProgram program = {};
-    if (!CreateShaderProgramFromBinaries(r, vs, ps, true, program))
+    if (!CreateShaderProgram(r, vs, ps, program))
     {
         EngineLogf("Failed to create shader program for \"%s\".", shader->name.c_str());
         return nullptr;
@@ -1701,9 +1804,9 @@ static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle han
     return &inserted.first->second;
 }
 
-// Sky / blit pipelines (fixed, no vertex input, drawn via gl_VertexIndex)
+// Sky / tonemap pipelines (fixed, no vertex input, drawn via gl_VertexIndex)
 static VkPipeline CreateFullscreenTrianglePipeline(Renderer& r, VkShaderModule vs, VkShaderModule ps, VkPipelineLayout layout,
-    VkRenderPass renderPass, bool depthTestReadOnly, bool hasDepthAttachment)
+    VkRenderPass renderPass, bool hasDepthAttachment, VkSampleCountFlagBits samples)
 {
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
@@ -1731,11 +1834,12 @@ static VkPipeline CreateFullscreenTrianglePipeline(Renderer& r, VkShaderModule v
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisample = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = samples;
 
+    // The sky tests against the cleared depth without writing it.
     VkPipelineDepthStencilStateCreateInfo depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
     depthStencil.depthTestEnable = hasDepthAttachment ? VK_TRUE : VK_FALSE;
-    depthStencil.depthWriteEnable = (hasDepthAttachment && !depthTestReadOnly) ? VK_TRUE : VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
     VkPipelineColorBlendAttachmentState blendAttachment = {};
@@ -1777,30 +1881,25 @@ static VkPipeline CreateFullscreenTrianglePipeline(Renderer& r, VkShaderModule v
 
 static bool CreateSkyPipeline(Renderer& r)
 {
-    r.skyVS = CreateShaderModuleFromBinary(r, kEngineShaderSky, ShaderStage::Vertex);
     if (!r.skyVS)
-        return false;
-    r.skyPS = CreateShaderModuleFromBinary(r, kEngineShaderSky, ShaderStage::Pixel);
+        r.skyVS = CreateShaderModuleFromBinary(r, kEngineShaderSky, ShaderStage::Vertex);
     if (!r.skyPS)
+        r.skyPS = CreateShaderModuleFromBinary(r, kEngineShaderSky, ShaderStage::Pixel);
+    if (!r.skyVS || !r.skyPS)
         return false;
-
-    // Matches the D3D11 sky draw: solidNoCullRS, opaque blend, depthReadState.
-    r.skyPipeline = CreateFullscreenTrianglePipeline(r, r.skyVS, r.skyPS, r.skyPipelineLayout, r.offscreenRenderPass, /*depthTestReadOnly=*/true, /*hasDepthAttachment=*/true);
+    r.skyPipeline = CreateFullscreenTrianglePipeline(r, r.skyVS, r.skyPS, r.skyPipelineLayout, r.sceneRenderPass, true, r.msaaSamples);
     return r.skyPipeline != VK_NULL_HANDLE;
 }
 
-static bool CreateBlitPipeline(Renderer& r)
+static bool CreateTonemapPipeline(Renderer& r)
 {
-    r.blitVS = CreateShaderModuleFromBinary(r, kEngineShaderBlit, ShaderStage::Vertex);
-    if (!r.blitVS)
+    r.tonemapVS = CreateShaderModuleFromBinary(r, kEngineShaderBlit, ShaderStage::Vertex);
+    r.tonemapPS = CreateShaderModuleFromBinary(r, kEngineShaderBlit, ShaderStage::Pixel);
+    if (!r.tonemapVS || !r.tonemapPS)
         return false;
-    r.blitPS = CreateShaderModuleFromBinary(r, kEngineShaderBlit, ShaderStage::Pixel);
-    if (!r.blitPS)
-        return false;
-
-    // Matches the D3D11 overlay draw: solidRS, opaque blend, no depth buffer bound.
-    r.blitPipeline = CreateFullscreenTrianglePipeline(r, r.blitVS, r.blitPS, r.blitPipelineLayout, r.backbufferRenderPass, /*depthTestReadOnly=*/false, /*hasDepthAttachment=*/false);
-    return r.blitPipeline != VK_NULL_HANDLE;
+    r.tonemapPipeline = CreateFullscreenTrianglePipeline(r, r.tonemapVS, r.tonemapPS, r.tonemapPipelineLayout, r.backbufferRenderPass,
+                                                         false, VK_SAMPLE_COUNT_1_BIT);
+    return r.tonemapPipeline != VK_NULL_HANDLE;
 }
 
 // UI pipeline (ui.slang): UiVertex input, premultiplied alpha, dynamic scissor.
@@ -1899,19 +1998,19 @@ static bool CreateConstantBuffers(Renderer& r)
 {
     for (FrameResources& frame : r.frames)
     {
-        if (!CreateBuffer(r, sizeof(SceneCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        if (!CreateBuffer(r, sizeof(render::SceneCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, frame.sceneCB, frame.sceneCBMemory))
             return false;
-        VK_CHECK_RET(vkMapMemory(r.device, frame.sceneCBMemory, 0, sizeof(SceneCBData), 0, &frame.sceneCBMapped), "vkMapMemory (sceneCB)", false);
+        VK_CHECK_RET(vkMapMemory(r.device, frame.sceneCBMemory, 0, sizeof(render::SceneCBData), 0, &frame.sceneCBMapped), "vkMapMemory (sceneCB)", false);
 
-        if (!CreateBuffer(r, sizeof(SkyCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        if (!CreateBuffer(r, sizeof(render::SkyCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, frame.skyCB, frame.skyCBMemory))
             return false;
-        VK_CHECK_RET(vkMapMemory(r.device, frame.skyCBMemory, 0, sizeof(SkyCBData), 0, &frame.skyCBMapped), "vkMapMemory (skyCB)", false);
+        VK_CHECK_RET(vkMapMemory(r.device, frame.skyCBMemory, 0, sizeof(render::SkyCBData), 0, &frame.skyCBMapped), "vkMapMemory (skyCB)", false);
 
-        if (!CreateDynamicRingBuffer(r, frame.modelCBRing, sizeof(ModelCBData), kInitialDynamicSlotCapacity))
+        if (!CreateDynamicRingBuffer(r, frame.modelCBRing, sizeof(render::ModelCBData), kInitialDynamicSlotCapacity))
             return false;
-        if (!CreateDynamicRingBuffer(r, frame.materialCBRing, sizeof(MaterialCBData), kInitialDynamicSlotCapacity))
+        if (!CreateDynamicRingBuffer(r, frame.materialCBRing, sizeof(render::MaterialCBData), kInitialDynamicSlotCapacity))
             return false;
 
         UpdateSceneAndSkyDescriptorBindings(r, frame);
@@ -1923,117 +2022,158 @@ static bool CreateConstantBuffers(Renderer& r)
 
 // Textures
 
-static bool UploadPixelsToImage(Renderer& r, VkImage image, uint32_t width, uint32_t height, const void* pixels, VkDeviceSize pixelBytes)
-{
-    VkBuffer stagingBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
-    if (!CreateBuffer(r, pixelBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingMemory))
-        return false;
-
-    void* mapped = nullptr;
-    vkMapMemory(r.device, stagingMemory, 0, pixelBytes, 0, &mapped);
-    std::memcpy(mapped, pixels, static_cast<size_t>(pixelBytes));
-    vkUnmapMemory(r.device, stagingMemory);
-
-    VkCommandBuffer cmd = BeginSingleTimeCommands(r);
-    if (!cmd)
-    {
-        DestroyBuffer(r, stagingBuffer, stagingMemory);
-        return false;
-    }
-
-    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
-
-    VkBufferImageCopy region = {};
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
-    region.imageExtent = { width, height, 1 };
-    vkCmdCopyBufferToImage(cmd, stagingBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
-
-    EndSingleTimeCommands(r, cmd);
-    DestroyBuffer(r, stagingBuffer, stagingMemory);
-    return true;
-}
-
 static bool CreateWhiteTexture(Renderer& r)
 {
-    const uint32_t pixel = 0xFFFFFFFFu;
-
-    if (!CreateImage2D(r, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        r.whiteTexture.image, r.whiteTexture.memory))
-        return false;
-
-    if (!UploadPixelsToImage(r, r.whiteTexture.image, 1, 1, &pixel, sizeof(pixel)))
-        return false;
-
-    r.whiteTexture.view = CreateImageView2D(r, r.whiteTexture.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
-    if (!r.whiteTexture.view)
-        return false;
-
-    r.whiteTexture.descriptorSet = AllocateTextureDescriptorSet(r, r.whiteTexture.view);
-    return r.whiteTexture.descriptorSet != VK_NULL_HANDLE;
+    std::vector<render::MipLevel> levels(1);
+    levels[0].width = levels[0].height = 1;
+    levels[0].pixels = { 255, 255, 255, 255 };
+    return CreateTexture2D(r, levels, VK_FORMAT_R8G8B8A8_UNORM, r.whiteTexture);
 }
 
-static bool CreateTextureFromFile(Renderer& r, const char* path, GPUTexture& outTexture)
+// Material texture with mips, in the color space its slot needs. Failed loads
+// are cached as empty so they aren't retried every frame.
+static VkImageView GetMaterialTexture(Renderer& r, const std::string& path, render::TextureUsage usage)
 {
-    KES_ZONE_FN(RENDER);
-    KES_ZONE_TEXTF(RENDER, "%s", path ? path : "<null>");
-    TextureFileData textureFile = {};
-    std::string error;
-    if (!LoadTextureFile(path, textureFile, &error))
-    {
-        EngineLogf("LoadTextureFile failed for %s: %s", path ? path : "<null>", error.c_str());
-        return false;
-    }
-
-    const VkFormat format = (textureFile.flags & TextureFileFlag_Srgb) != 0 ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
-
-    if (!CreateImage2D(r, textureFile.width, textureFile.height, format, VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        outTexture.image, outTexture.memory))
-    {
-        EngineLogf("Create texture failed for %s", path ? path : "<null>");
-        return false;
-    }
-
-    const VkDeviceSize pixelBytes = static_cast<VkDeviceSize>(textureFile.width) * textureFile.height * 4u;
-    if (!UploadPixelsToImage(r, outTexture.image, textureFile.width, textureFile.height, textureFile.pixels.data(), pixelBytes))
-        return false;
-
-    outTexture.view = CreateImageView2D(r, outTexture.image, format, VK_IMAGE_ASPECT_COLOR_BIT);
-    if (!outTexture.view)
-        return false;
-
-    outTexture.descriptorSet = AllocateTextureDescriptorSet(r, outTexture.view);
-    return outTexture.descriptorSet != VK_NULL_HANDLE;
-}
-
-static VkDescriptorSet GetMaterialTextureDescriptor(Renderer& r, const MaterialData* material)
-{
-    if (!material || material->baseTexturePath.empty())
-        return r.whiteTexture.descriptorSet;
-
-    const std::string resolvedPath = ResolveAssetPath(material->baseTexturePath.c_str());
-    auto it = r.gpuTextures.find(resolvedPath);
+    if (path.empty())
+        return VK_NULL_HANDLE;
+    const std::string key = std::to_string(static_cast<int>(usage)) + "|" + path;
+    auto it = r.gpuTextures.find(key);
     if (it != r.gpuTextures.end())
-        return it->second.descriptorSet ? it->second.descriptorSet : r.whiteTexture.descriptorSet;
+        return it->second.view;
 
+    KES_ZONE(RENDER, "Load material texture (cache miss)");
+    KES_ZONE_TEXTF(RENDER, "%s", path.c_str());
     GPUTexture texture = {};
-    if (!CreateTextureFromFile(r, resolvedPath.c_str(), texture))
+    TextureFileData file = {};
+    std::string error;
+    if (LoadTextureFile(path.c_str(), file, &error) && file.pixels.size() >= static_cast<size_t>(file.width) * file.height * 4u)
     {
-        r.gpuTextures.emplace(resolvedPath, GPUTexture{});
-        return r.whiteTexture.descriptorSet;
+        std::vector<render::MipLevel> levels;
+        render::GenerateMips(file.pixels.data(), file.width, file.height, usage, levels);
+        const VkFormat format = usage == render::TextureUsage::Color ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        CreateTexture2D(r, levels, format, texture);
+    }
+    else
+    {
+        EngineLogf("LoadTextureFile failed for %s: %s", path.c_str(), error.c_str());
+    }
+    return r.gpuTextures.emplace(key, texture).first->second.view;
+}
+
+// Set 1 for a material: its five textures (white where missing). Materials
+// with the same textures share a set.
+static const GPUMaterialSet& GetMaterialSet(Renderer& r, const MaterialData* material)
+{
+    static const MaterialData kNone = {};
+    const MaterialData& m = material ? *material : kNone;
+    const struct { const std::string* path; render::TextureUsage usage; uint32_t flag; } slots[render::kMaterialTextureCount] = {
+        { &m.baseTexturePath, render::TextureUsage::Color, MaterialFlag_HasBaseTexture },
+        { &m.normalTexturePath, render::TextureUsage::Normal, MaterialFlag_HasNormalTexture },
+        { &m.metallicRoughnessTexturePath, render::TextureUsage::Linear, MaterialFlag_HasMetallicRoughnessTexture },
+        { &m.occlusionTexturePath, render::TextureUsage::Linear, MaterialFlag_HasOcclusionTexture },
+        { &m.emissiveTexturePath, render::TextureUsage::Color, MaterialFlag_HasEmissiveTexture },
+    };
+    std::string key;
+    for (const auto& slot : slots)
+        key += *slot.path + '\n';
+
+    auto it = r.gpuMaterialSets.find(key);
+    if (it != r.gpuMaterialSets.end())
+        return it->second;
+
+    GPUMaterialSet entry;
+    VkDescriptorImageInfo images[render::kMaterialTextureCount] = {};
+    for (int i = 0; i < render::kMaterialTextureCount; ++i)
+    {
+        VkImageView view = GetMaterialTexture(r, *slots[i].path, slots[i].usage);
+        if (view)
+            entry.textureFlags |= slots[i].flag;
+        images[i] = { r.materialSampler, view ? view : r.whiteTexture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    }
+    entry.set = AllocateDescriptorSet(r, r.materialSetLayout);
+    if (entry.set)
+    {
+        VkWriteDescriptorSet writes[render::kMaterialTextureCount] = {};
+        for (uint32_t i = 0; i < render::kMaterialTextureCount; ++i)
+        {
+            writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            writes[i].dstSet = entry.set;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo = &images[i];
+        }
+        vkUpdateDescriptorSets(r.device, render::kMaterialTextureCount, writes, 0, nullptr);
+    }
+    return r.gpuMaterialSets.emplace(key, entry).first->second;
+}
+
+static void DestroyMaterialSets(Renderer& r)
+{
+    for (auto& [key, entry] : r.gpuMaterialSets)
+    {
+        if (entry.set)
+            vkFreeDescriptorSets(r.device, r.descriptorPool, 1, &entry.set);
+    }
+    r.gpuMaterialSets.clear();
+}
+
+static bool UploadEnvironment(Renderer& r)
+{
+    DestroyGPUTexture(r, r.environmentMap);
+    const render::EnvironmentMaps& env = r.environment;
+
+    std::vector<uint8_t> bytes;
+    std::vector<UploadRegion> regions;
+    for (int face = 0; face < 6; ++face)
+    {
+        for (int mip = 0; mip < env.mipCount; ++mip)
+        {
+            const uint32_t size = static_cast<uint32_t>(std::max(env.faceSize >> mip, 1));
+            const std::vector<uint16_t>& texels = env.faces[mip][face];
+            regions.push_back({ static_cast<uint32_t>(mip), static_cast<uint32_t>(face), size, size, bytes.size() });
+            const uint8_t* data = reinterpret_cast<const uint8_t*>(texels.data());
+            bytes.insert(bytes.end(), data, data + texels.size() * sizeof(uint16_t));
+        }
     }
 
-    auto inserted = r.gpuTextures.emplace(resolvedPath, texture);
-    return inserted.first->second.descriptorSet ? inserted.first->second.descriptorSet : r.whiteTexture.descriptorSet;
+    ImageDesc desc;
+    desc.width = desc.height = static_cast<uint32_t>(env.faceSize);
+    desc.mipLevels = static_cast<uint32_t>(env.mipCount);
+    desc.layers = 6;
+    desc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    desc.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    if (!CreateImage(r, desc, r.environmentMap.image, r.environmentMap.memory) ||
+        !UploadImage(r, r.environmentMap.image, bytes.data(), bytes.size(), regions, desc.mipLevels, 6))
+    {
+        DestroyGPUTexture(r, r.environmentMap);
+        return false;
+    }
+    r.environmentMap.view = CreateImageView(r, r.environmentMap.image, desc.format, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_VIEW_TYPE_CUBE, 0, 6, desc.mipLevels);
+    r.globalSetDirty = true;
+    return r.environmentMap.view != VK_NULL_HANDLE;
 }
 
 // Mesh upload
+
+static bool UploadMeshBuffers(Renderer& r, const std::vector<RenderVertex>& vertices, const std::vector<uint32_t>& indices, GPUMesh& gpu)
+{
+    gpu.indexCount = static_cast<uint32_t>(indices.empty() ? vertices.size() : indices.size());
+    render::ComputeBoundingSphere(vertices.data(), vertices.size(), sizeof(RenderVertex), gpu.boundsCenter, gpu.boundsRadius);
+    if (!CreateDeviceLocalBufferWithData(r, vertices.data(), vertices.size() * sizeof(RenderVertex),
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, gpu.vertexBuffer, gpu.vertexMemory))
+        return false;
+    if (!indices.empty() &&
+        !CreateDeviceLocalBufferWithData(r, indices.data(), indices.size() * sizeof(uint32_t),
+                                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT, gpu.indexBuffer, gpu.indexMemory))
+    {
+        DestroyBuffer(r, gpu.vertexBuffer, gpu.vertexMemory);
+        return false;
+    }
+    return true;
+}
+
 static GPUMesh* GetOrUploadMesh(Renderer& r, MeshHandle handle, const AssetSystem& assets)
 {
     if (handle == 0) return nullptr;
@@ -2070,24 +2210,9 @@ static GPUMesh* GetOrUploadMesh(Renderer& r, MeshHandle handle, const AssetSyste
     }
 
     GPUMesh gpu = {};
-    gpu.indexCount = static_cast<uint32_t>(data->indices.size());
-
-    if (!CreateDeviceLocalBufferWithData(r, vertices.data(), vertices.size() * sizeof(RenderVertex),
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, gpu.vertexBuffer, gpu.vertexMemory))
+    if (!UploadMeshBuffers(r, vertices, data->indices, gpu))
         return nullptr;
-
-    if (!data->indices.empty())
-    {
-        if (!CreateDeviceLocalBufferWithData(r, data->indices.data(), data->indices.size() * sizeof(uint32_t),
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT, gpu.indexBuffer, gpu.indexMemory))
-        {
-            DestroyBuffer(r, gpu.vertexBuffer, gpu.vertexMemory);
-            return nullptr;
-        }
-    }
-
-    r.gpuMeshes[handle] = gpu;
-    return &r.gpuMeshes[handle];
+    return &(r.gpuMeshes[handle] = gpu);
 }
 
 static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t meshIndex, const AssetSystem& assets)
@@ -2132,35 +2257,9 @@ static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t m
     }
 
     GPUMesh gpu = {};
-    gpu.indexCount = static_cast<uint32_t>(source.indices.size());
-
-    if (!CreateDeviceLocalBufferWithData(r, vertices.data(), vertices.size() * sizeof(RenderVertex),
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, gpu.vertexBuffer, gpu.vertexMemory))
+    if (!UploadMeshBuffers(r, vertices, source.indices, gpu))
         return nullptr;
-
-    if (!source.indices.empty())
-    {
-        if (!CreateDeviceLocalBufferWithData(r, source.indices.data(), source.indices.size() * sizeof(uint32_t),
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT, gpu.indexBuffer, gpu.indexMemory))
-        {
-            DestroyBuffer(r, gpu.vertexBuffer, gpu.vertexMemory);
-            return nullptr;
-        }
-    }
-
-    r.gpuModelMeshes[key] = gpu;
-    return &r.gpuModelMeshes[key];
-}
-
-// Pure data/math helpers
-static float4x4 TransformToMatrix(const Transform& t)
-{
-    float4x4 r = Scale(t.scale.x, t.scale.y, t.scale.z);
-    r = Multiply(r, RotationX(t.rotation.x));
-    r = Multiply(r, RotationY(t.rotation.y));
-    r = Multiply(r, RotationZ(t.rotation.z));
-    r = Multiply(r, Translation(t.position.x, t.position.y, t.position.z));
-    return r;
+    return &(r.gpuModelMeshes[key] = gpu);
 }
 
 static int32_t FindModelNodeForMesh(const KModelData& model, uint32_t meshIndex)
@@ -2213,13 +2312,6 @@ static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelH
     return &inserted.first->second;
 }
 
-static float3 BuildLightDirection(const Transform& t)
-{
-    const Vector3 direction = Vector3DirectionFromRotation(t.rotation);
-    return { direction.x, direction.y, direction.z };
-}
-
-
 static bool IsTransparentMaterial(const MaterialData* material)
 {
     return material && (material->flags & MaterialFlag_Transparent) != 0;
@@ -2228,6 +2320,11 @@ static bool IsTransparentMaterial(const MaterialData* material)
 static bool IsDoubleSidedMaterial(const MaterialData* material)
 {
     return material && (material->flags & MaterialFlag_DoubleSided) != 0;
+}
+
+static bool CastsShadows(const MaterialData* material)
+{
+    return !material || ((material->flags & MaterialFlag_CastShadows) != 0 && (material->flags & MaterialFlag_Transparent) == 0);
 }
 
 // Asset cache teardown
@@ -2245,11 +2342,7 @@ static void DestroyGPUTexture(Renderer& r, GPUTexture& texture)
 
 static void DestroyGPUShaderProgram(Renderer& r, GPUShaderProgram& program)
 {
-    for (VkPipeline& pipeline : program.pipelines)
-    {
-        if (pipeline) vkDestroyPipeline(r.device, pipeline, nullptr);
-        pipeline = VK_NULL_HANDLE;
-    }
+    DestroyProgramPipelines(r, program);
     if (program.vertexShader) { vkDestroyShaderModule(r.device, program.vertexShader, nullptr); program.vertexShader = VK_NULL_HANDLE; }
     if (program.pixelShader) { vkDestroyShaderModule(r.device, program.pixelShader, nullptr); program.pixelShader = VK_NULL_HANDLE; }
 }
@@ -2265,6 +2358,7 @@ static void DestroyRendererAssetCaches(Renderer& r)
     KES_ZONE_FN(RENDER);
     // Nothing here may be in flight: callers only invoke this outside of an
     // active frame (asset-generation change, or full shutdown).
+    DestroyMaterialSets(r);
     for (auto& pair : r.gpuTextures)
         DestroyGPUTexture(r, pair.second);
     r.gpuTextures.clear();
@@ -2331,27 +2425,28 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
     r.preferIntegerPresentationScale = config.preferIntegerPresentationScale;
     r.vsync = config.vsync;
 
-    if (!CreateInstance(r, window)) { RendererShutdown(r); return false; }
-    if (!SelectPhysicalDevice(r)) { RendererShutdown(r); return false; }
-    if (!CreateLogicalDevice(r)) { RendererShutdown(r); return false; }
-
-    // The sampler must exist before the texture descriptor set layout is
-    // created, since it is baked in as an immutable sampler.
-    if (!CreateSampler(r)) { RendererShutdown(r); return false; }
-    if (!CreateDescriptorSetLayouts(r)) { RendererShutdown(r); return false; }
-    if (!CreatePipelineLayouts(r)) { RendererShutdown(r); return false; }
-    if (!CreateDescriptorPool(r)) { RendererShutdown(r); return false; }
-    if (!CreateUboDescriptorSets(r)) { RendererShutdown(r); return false; }
-
-    if (!CreateRenderTargets(r)) { RendererShutdown(r); return false; }
-
-    if (!CreateMeshDefaultProgram(r)) { RendererShutdown(r); return false; }
-    if (!CreateSkyPipeline(r)) { RendererShutdown(r); return false; }
-    if (!CreateBlitPipeline(r)) { RendererShutdown(r); return false; }
-    if (!CreateUiPipeline(r)) { RendererShutdown(r); return false; }
-
-    if (!CreateConstantBuffers(r)) { RendererShutdown(r); return false; }
-    if (!CreateCommandObjects(r)) { RendererShutdown(r); return false; }
+    // Order matters: immutable samplers before the set layouts, render passes
+    // before targets and pipelines, command pools before any upload.
+    bool ok = CreateInstance(r, window) && SelectPhysicalDevice(r) && CreateLogicalDevice(r) && ChooseDepthFormats(r);
+    if (ok)
+        r.msaaSamples = ChooseMsaaSamples(r, r.options.msaaSamples);
+    ok = ok && CreateSamplers(r) && CreateDescriptorSetLayouts(r) && CreatePipelineLayouts(r) && CreateDescriptorPool(r) &&
+         CreateUboDescriptorSets(r) && CreateCommandObjects(r) && CreateSceneRenderPass(r) && CreateShadowRenderPass(r) &&
+         CreateRenderTargets(r) && CreateMeshPrograms(r) && CreateSkyPipeline(r) && CreateTonemapPipeline(r) &&
+         CreateUiPipeline(r) && CreateConstantBuffers(r) && CreateWhiteTexture(r) &&
+         CreateShadowArray(r, r.dummyShadows, 1, 1, false);
+    if (ok)
+        CreateShadowTargets(r);   // non-fatal: shadows stay off on failure
+    if (ok)
+    {
+        r.uiWhiteDescriptorSet = AllocateTextureDescriptorSet(r, r.whiteTexture.view, r.uiTexSetLayout);
+        ok = r.uiWhiteDescriptorSet != VK_NULL_HANDLE;
+    }
+    if (!ok)
+    {
+        RendererShutdown(r);
+        return false;
+    }
 
 #if KES_PROFILE_GPU
     // Records and submits a few one-off command buffers on the graphics queue
@@ -2359,11 +2454,10 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
     r.gpuProfiler = TracyVkContext(r.physicalDevice, r.device, r.graphicsQueue, r.commandBuffer);
     TracyVkContextName(r.gpuProfiler, "Vulkan", 6);
 #endif
-    if (!CreateWhiteTexture(r)) { RendererShutdown(r); return false; }
-    r.uiWhiteDescriptorSet = AllocateTextureDescriptorSet(r, r.whiteTexture.view, r.uiTexSetLayout);
-    if (!r.uiWhiteDescriptorSet) { RendererShutdown(r); return false; }
 
-    EngineLogf("Renderer initialized successfully (Vulkan). window=%dx%d render=%dx%d.", r.windowWidth, r.windowHeight, r.renderWidth, r.renderHeight);
+    EngineLogf("Renderer initialized successfully (Vulkan). window=%dx%d render=%dx%d, MSAA %dx, shadow format %s.",
+               r.windowWidth, r.windowHeight, r.renderWidth, r.renderHeight, static_cast<int>(r.msaaSamples),
+               r.shadowFormat == VK_FORMAT_D32_SFLOAT ? "D32" : "D16");
     return true;
 }
 
@@ -2412,78 +2506,75 @@ void RendererSetVSync(Renderer& r, bool enabled)
     r.swapchainNeedsRecreate = true;   // present mode is a swapchain property
 }
 
+void RendererSetGraphicsOptions(Renderer& r, const GraphicsOptions& options)
+{
+    const GraphicsOptions previous = r.options;
+    r.options = options;
+    if (!r.device || previous == options || r.frameActive)
+        return;
+
+    vkDeviceWaitIdle(r.device);
+    const VkSampleCountFlagBits samples = ChooseMsaaSamples(r, options.msaaSamples);
+    if (samples != r.msaaSamples)
+    {
+        // Every scene pipeline is tied to the render pass's sample count.
+        DestroySceneTargets(r);
+        DestroyProgramPipelines(r, r.meshDefaultProgram);
+        for (auto& [handle, program] : r.gpuShaders)
+            DestroyProgramPipelines(r, program);
+        if (r.skyPipeline) { vkDestroyPipeline(r.device, r.skyPipeline, nullptr); r.skyPipeline = VK_NULL_HANDLE; }
+        vkDestroyRenderPass(r.device, r.sceneRenderPass, nullptr);
+        r.sceneRenderPass = VK_NULL_HANDLE;
+        r.msaaSamples = samples;
+        if (!CreateSceneRenderPass(r) || !CreateSceneTargets(r) || !CreateSkyPipeline(r))
+            EngineLog("Recreating the scene pass for the new MSAA setting failed.");
+    }
+    if (previous.shadowQuality != options.shadowQuality)
+        CreateShadowTargets(r);
+    if (previous.anisotropy != options.anisotropy)
+    {
+        DestroyMaterialSets(r);
+        CreateMaterialSampler(r);
+    }
+    EngineLogf("Graphics options: MSAA %dx, shadows %d, anisotropy %dx.", static_cast<int>(r.msaaSamples),
+               static_cast<int>(options.shadowQuality), std::clamp(options.anisotropy, 1, 16));
+}
 
 // Per-draw dynamic constant writes
 // Writes only what the shader reads: the two matrices, the skin info and the
 // skin matrices that are actually used. ModelCBData is ~8 KB because of the
 // 128-matrix skin palette, too much to copy for every static mesh draw.
-static VkDeviceSize WriteModelConstants(Renderer& r, const float4x4& wvp, const float4x4& world, const float* skinMatrices, uint32_t skinMatrixCount)
+static VkDeviceSize WriteModelConstants(Renderer& r, const Matrix4& wvp, const Matrix4& world, const float* skinMatrices, uint32_t skinMatrixCount)
 {
     const VkDeviceSize offset = AcquireDynamicSlot(r, r.frames[r.frameIndex].modelCBRing, 1);
     uint8_t* dst = r.frames[r.frameIndex].modelCBRing.mapped + offset;
-
-    float matrix[16];
-    MatrixToArrayRowMajor(wvp, matrix);
-    std::memcpy(dst + offsetof(ModelCBData, worldViewProj), matrix, sizeof(matrix));
-    MatrixToArrayRowMajor(world, matrix);
-    std::memcpy(dst + offsetof(ModelCBData, world), matrix, sizeof(matrix));
-
+    std::memcpy(dst + offsetof(render::ModelCBData, worldViewProj), wvp.m, sizeof(wvp.m));
+    std::memcpy(dst + offsetof(render::ModelCBData, world), world.m, sizeof(world.m));
     if (skinMatrices && skinMatrixCount > 0)
-        std::memcpy(dst + offsetof(ModelCBData, skinMatrices), skinMatrices, skinMatrixCount * 16u * sizeof(float));
-
+        std::memcpy(dst + offsetof(render::ModelCBData, skinMatrices), skinMatrices, skinMatrixCount * 16u * sizeof(float));
     const float skinInfo[4] = { skinMatrixCount > 0 ? 1.0f : 0.0f, static_cast<float>(skinMatrixCount), 0.0f, 0.0f };
-    std::memcpy(dst + offsetof(ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
+    std::memcpy(dst + offsetof(render::ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
     return offset;
 }
 
-static VkDeviceSize WriteMaterialConstants(Renderer& r, const MaterialData* material)
+static VkDeviceSize WriteMaterialConstants(Renderer& r, const MaterialData* material, uint32_t textureFlags)
 {
-    MaterialCBData matcb = {};
-    matcb.baseColor[0] = 1.0f;
-    matcb.baseColor[1] = 1.0f;
-    matcb.baseColor[2] = 1.0f;
-    matcb.baseColor[3] = 1.0f;
-    matcb.flags[0] = MaterialFlag_Lit;
-
-    if (material)
-    {
-        matcb.baseColor[0] = material->baseColor[0];
-        matcb.baseColor[1] = material->baseColor[1];
-        matcb.baseColor[2] = material->baseColor[2];
-        matcb.baseColor[3] = material->baseColor[3];
-        matcb.emissiveColorAndCutoff[0] = material->emissiveColor[0];
-        matcb.emissiveColorAndCutoff[1] = material->emissiveColor[1];
-        matcb.emissiveColorAndCutoff[2] = material->emissiveColor[2];
-        matcb.emissiveColorAndCutoff[3] = material->alphaCutoff;
-        matcb.flags[0] = material->flags;
-    }
-
+    const render::MaterialCBData cb = render::BuildMaterialConstants(material, textureFlags);
     const VkDeviceSize offset = AcquireDynamicSlot(r, r.frames[r.frameIndex].materialCBRing, 2);
-    std::memcpy(r.frames[r.frameIndex].materialCBRing.mapped + offset, &matcb, sizeof(matcb));
+    std::memcpy(r.frames[r.frameIndex].materialCBRing.mapped + offset, &cb, sizeof(cb));
     return offset;
 }
-
-static void BindMeshDrawDescriptors(Renderer& r, VkDeviceSize modelOffset, VkDeviceSize materialOffset, VkDescriptorSet textureSet)
-{
-    const uint32_t dynamicOffsets[2] = { static_cast<uint32_t>(modelOffset), static_cast<uint32_t>(materialOffset) };
-    VkDescriptorSet sets[2] = { r.uboDescriptorSet, textureSet };
-    vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.meshPipelineLayout, 0, 2, sets, 2, dynamicOffsets);
-}
-
 
 // Viewports (negative-height trick: makes Vulkan's screen-space Y and
 // depth-range conventions match D3D11's, so the shared camera/projection
-// math and every clip-space computation above need no changes at all)
+// math, shadow matrices and every clip-space computation need no changes)
 
-
-static VkViewport BuildOffscreenViewport(const Renderer& r)
+static VkViewport BuildFlippedViewport(float width, float height)
 {
     VkViewport vp = {};
-    vp.x = 0.0f;
-    vp.y = static_cast<float>(r.renderHeight);
-    vp.width = static_cast<float>(r.renderWidth);
-    vp.height = -static_cast<float>(r.renderHeight);
-    vp.minDepth = 0.0f;
+    vp.y = height;
+    vp.width = width;
+    vp.height = -height;
     vp.maxDepth = 1.0f;
     return vp;
 }
@@ -2525,11 +2616,7 @@ static VkViewport BuildPresentationViewport(const Renderer& r)
     return vp;
 }
 
-
-// Sky
-
-
-static void BuildSkyClearColor(const Scene& sceneObj, float outColor[4])
+static void BuildClearColor(const Scene& sceneObj, float outColor[4])
 {
     outColor[0] = 0.07f;
     outColor[1] = 0.06f;
@@ -2539,9 +2626,9 @@ static void BuildSkyClearColor(const Scene& sceneObj, float outColor[4])
     const FogSettings& fog = sceneObj.GetFog();
     if (fog.active)
     {
-        outColor[0] = Clamp01(fog.color[0]);
-        outColor[1] = Clamp01(fog.color[1]);
-        outColor[2] = Clamp01(fog.color[2]);
+        outColor[0] = fog.color[0];
+        outColor[1] = fog.color[1];
+        outColor[2] = fog.color[2];
         return;
     }
 
@@ -2549,70 +2636,17 @@ static void BuildSkyClearColor(const Scene& sceneObj, float outColor[4])
     if (!sky.active)
         return;
 
-    outColor[0] = Clamp01(sky.horizonColor[0] * 0.65f + sky.bottomColor[0] * 0.35f);
-    outColor[1] = Clamp01(sky.horizonColor[1] * 0.65f + sky.bottomColor[1] * 0.35f);
-    outColor[2] = Clamp01(sky.horizonColor[2] * 0.65f + sky.bottomColor[2] * 0.35f);
+    for (int i = 0; i < 3; ++i)
+        outColor[i] = sky.horizonColor[i] * 0.65f + sky.bottomColor[i] * 0.35f;
 }
 
 static void RenderSkyBackground(Renderer& r, const Camera& camera, const Scene& sceneObj)
 {
-    if (sceneObj.GetFog().active)
-        return;
-
-    const SkySettings& sky = sceneObj.GetSky();
-    if (!sky.active)
+    if (sceneObj.GetFog().active || !sceneObj.GetSky().active)
         return;
 
     const float aspect = static_cast<float>(r.renderWidth) / static_cast<float>(r.renderHeight);
-    const float tanHalfFov = std::tan(kCameraFovYRadians * 0.5f);
-    const float sunAngleRadians = sky.sunSize * 3.14159265f / 180.0f;
-    const float sunOuterCos = std::cos(sunAngleRadians);
-    const float sunInnerCos = std::cos(sunAngleRadians * 0.35f);
-    const Vector3 cameraForward = CameraGetForward(camera);
-    const Vector3 cameraRight = CameraGetRight(camera);
-    const Vector3 cameraUp = CameraGetUp(camera);
-
-    SkyCBData skyCB = {};
-    skyCB.topColor[0] = sky.topColor[0];
-    skyCB.topColor[1] = sky.topColor[1];
-    skyCB.topColor[2] = sky.topColor[2];
-    skyCB.topColor[3] = 1.0f;
-    skyCB.horizonColor[0] = sky.horizonColor[0];
-    skyCB.horizonColor[1] = sky.horizonColor[1];
-    skyCB.horizonColor[2] = sky.horizonColor[2];
-    skyCB.horizonColor[3] = 1.0f;
-    skyCB.bottomColor[0] = sky.bottomColor[0];
-    skyCB.bottomColor[1] = sky.bottomColor[1];
-    skyCB.bottomColor[2] = sky.bottomColor[2];
-    skyCB.bottomColor[3] = 1.0f;
-    skyCB.sunColor[0] = sky.sunColor[0];
-    skyCB.sunColor[1] = sky.sunColor[1];
-    skyCB.sunColor[2] = sky.sunColor[2];
-    skyCB.sunColor[3] = 1.0f;
-    skyCB.sunDirection[0] = sky.sunDirection[0];
-    skyCB.sunDirection[1] = sky.sunDirection[1];
-    skyCB.sunDirection[2] = sky.sunDirection[2];
-    skyCB.sunDirection[3] = 0.0f;
-    skyCB.cameraForward[0] = cameraForward.x;
-    skyCB.cameraForward[1] = cameraForward.y;
-    skyCB.cameraForward[2] = cameraForward.z;
-    skyCB.cameraForward[3] = 0.0f;
-    skyCB.cameraRight[0] = cameraRight.x;
-    skyCB.cameraRight[1] = cameraRight.y;
-    skyCB.cameraRight[2] = cameraRight.z;
-    skyCB.cameraRight[3] = 0.0f;
-    skyCB.cameraUp[0] = cameraUp.x;
-    skyCB.cameraUp[1] = cameraUp.y;
-    skyCB.cameraUp[2] = cameraUp.z;
-    skyCB.cameraUp[3] = 0.0f;
-    skyCB.projectionParams[0] = tanHalfFov * aspect;
-    skyCB.projectionParams[1] = tanHalfFov;
-    skyCB.projectionParams[2] = sunOuterCos;
-    skyCB.projectionParams[3] = sunInnerCos;
-    skyCB.skyParams[0] = sky.sunIntensity;
-    skyCB.skyParams[1] = sky.horizonExponent;
-    skyCB.skyParams[2] = 1.0f;
-    skyCB.skyParams[3] = 0.0f;
+    const render::SkyCBData skyCB = render::BuildSkyConstants(sceneObj.GetSky(), camera, aspect);
     std::memcpy(r.frames[r.frameIndex].skyCBMapped, &skyCB, sizeof(skyCB));
 
     vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.skyPipeline);
@@ -2620,15 +2654,10 @@ static void RenderSkyBackground(Renderer& r, const Camera& camera, const Scene& 
     vkCmdDraw(r.commandBuffer, 3, 1, 0, 0);
 }
 
-
 // Frame lifecycle
 
-
 // Starts recording this frame's command buffer the first time any render
-// call is made. Mirrors the fact that D3D11's immediate context has no
-// explicit "begin frame" step; Vulkan needs one, so it is hidden here and
-// triggered lazily by RendererRenderScene, matching how RendererRender
-// always calls RendererRenderScene first.
+// call is made (D3D11's immediate context has no explicit "begin frame").
 static void BeginFrameIfNeeded(Renderer& r)
 {
     if (r.frameActive)
@@ -2690,6 +2719,160 @@ static void BeginFrameIfNeeded(Renderer& r)
     r.haveSwapchainImage = false;
 }
 
+// Redundant-state filter for consecutive draws.
+struct DrawState
+{
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkBuffer indexBuffer = VK_NULL_HANDLE;
+    const MaterialData* material = nullptr;
+    bool haveMaterial = false;
+    VkDeviceSize materialOffset = 0;
+    VkDescriptorSet materialSet = VK_NULL_HANDLE;
+};
+
+static void DrawGPUMesh(Renderer& r, DrawState& state, const GPUMesh& gpuMesh, VkDeviceSize modelOffset)
+{
+    const uint32_t dynamicOffsets[2] = { static_cast<uint32_t>(modelOffset), static_cast<uint32_t>(state.materialOffset) };
+    VkDescriptorSet sets[2] = { r.uboDescriptorSet, state.materialSet };
+    vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.meshPipelineLayout, 0, 2, sets, 2, dynamicOffsets);
+
+    if (gpuMesh.vertexBuffer != state.vertexBuffer)
+    {
+        const VkDeviceSize vertexOffset = 0;
+        vkCmdBindVertexBuffers(r.commandBuffer, 0, 1, &gpuMesh.vertexBuffer, &vertexOffset);
+        state.vertexBuffer = gpuMesh.vertexBuffer;
+    }
+    if (gpuMesh.indexBuffer)
+    {
+        if (gpuMesh.indexBuffer != state.indexBuffer)
+        {
+            vkCmdBindIndexBuffer(r.commandBuffer, gpuMesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            state.indexBuffer = gpuMesh.indexBuffer;
+        }
+        vkCmdDrawIndexed(r.commandBuffer, gpuMesh.indexCount, 1, 0, 0, 0);
+    }
+    else
+    {
+        vkCmdDraw(r.commandBuffer, gpuMesh.indexCount, 1, 0, 0);
+    }
+}
+
+// Draws one scene object with `viewProj` (camera or shadow view), culled against `frustum`.
+static void DrawSceneObject(Renderer& r, DrawState& state, const DrawItem& item, const Matrix4& viewProj, const render::Frustum& frustum,
+                            const AssetSystem& assets, bool shadowPass, bool wireframe, bool transparent)
+{
+    const SceneObject& obj = *item.object;
+    const KModelData* model = assets.GetModel(obj.model);
+    const bool skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
+
+    VkPipeline pipeline = r.shadowProgram.pipelines[0];
+    if (!shadowPass)
+    {
+        GPUShaderProgram* program = &r.meshDefaultProgram;
+        if (item.material && item.material->shader != 0)
+        {
+            if (GPUShaderProgram* custom = GetOrCompileShaderProgram(r, item.material->shader, assets))
+                program = custom;
+        }
+        pipeline = GetOrCreateMeshPipelineVariant(r, *program, wireframe, IsDoubleSidedMaterial(item.material), transparent);
+    }
+    if (!pipeline)
+        return;
+    if (pipeline != state.pipeline)
+    {
+        vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        state.pipeline = pipeline;
+    }
+
+    // Material constants and textures are identical for every draw of a material.
+    if (!state.haveMaterial || item.material != state.material)
+    {
+        const GPUMaterialSet& materialSet = GetMaterialSet(r, item.material);
+        state.materialSet = materialSet.set;
+        state.materialOffset = WriteMaterialConstants(r, item.material, materialSet.textureFlags);
+        state.material = item.material;
+        state.haveMaterial = true;
+    }
+    if (!state.materialSet)
+        return;
+
+    const Matrix4 objectWorld = render::TransformToMatrix(obj.transform);
+    if (skinned)
+    {
+        const GPUModelRenderCache* modelRenderCache = GetOrBuildModelRenderCache(r, obj.model, assets);
+        if (!modelRenderCache)
+            return;
+
+        // Animated: no culling (the bind-pose bounds don't cover the animation).
+        const uint32_t matrixCount = std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices);
+        for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
+        {
+            GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
+            if (!gpuMesh)
+                continue;
+            Matrix4 meshLocal;
+            std::memcpy(meshLocal.m, modelRenderCache->meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u, sizeof(meshLocal.m));
+            const Matrix4 world = render::MatrixMultiply(meshLocal, objectWorld);
+            const VkDeviceSize modelOffset = WriteModelConstants(r, render::MatrixMultiply(world, viewProj), world, obj.skinMatrices, matrixCount);
+            DrawGPUMesh(r, state, *gpuMesh, modelOffset);
+        }
+        return;
+    }
+
+    GPUMesh* gpuMesh = GetOrUploadMesh(r, obj.mesh, assets);
+    if (!gpuMesh)
+        return;
+    Vector3 center;
+    float radius = 0.0f;
+    render::TransformSphere(obj.transform, gpuMesh->boundsCenter, gpuMesh->boundsRadius, center, radius);
+    if (!render::SphereInFrustum(frustum, center, radius))
+        return;
+    const VkDeviceSize modelOffset = WriteModelConstants(r, render::MatrixMultiply(objectWorld, viewProj), objectWorld, nullptr, 0);
+    DrawGPUMesh(r, state, *gpuMesh, modelOffset);
+}
+
+static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
+{
+    if (r.frame.shadowViews.empty())
+        return;
+    KES_ZONE(RENDER, "Shadow maps");
+    KES_VK_GPU_ZONE(r, "Shadows");
+
+    for (const render::ShadowView& view : r.frame.shadowViews)
+    {
+        GPUShadowArray& target = view.cascade ? r.cascadeShadows : r.localShadows;
+        if (view.slice >= static_cast<int>(target.framebuffers.size()))
+            continue;
+
+        VkClearValue clear = {};
+        clear.depthStencil = { 1.0f, 0 };
+        VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        passBegin.renderPass = r.shadowRenderPass;
+        passBegin.framebuffer = target.framebuffers[static_cast<size_t>(view.slice)];
+        passBegin.renderArea.extent = { static_cast<uint32_t>(target.resolution), static_cast<uint32_t>(target.resolution) };
+        passBegin.clearValueCount = 1;
+        passBegin.pClearValues = &clear;
+        vkCmdBeginRenderPass(r.commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+        const float size = static_cast<float>(target.resolution);
+        const VkViewport viewport = BuildFlippedViewport(size, size);
+        vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
+        const VkRect2D scissor = { { 0, 0 }, passBegin.renderArea.extent };
+        vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
+
+        // The light's frustum (far plane = range for local lights) culls casters.
+        const render::Frustum frustum = render::ExtractFrustum(view.viewProj);
+        DrawState state;
+        for (const DrawItem& item : r.opaqueDrawItems)
+        {
+            if (CastsShadows(item.material))
+                DrawSceneObject(r, state, item, view.viewProj, frustum, assets, true, false, false);
+        }
+        vkCmdEndRenderPass(r.commandBuffer);
+    }
+}
+
 void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
 {
     if (r.assetGeneration != assets.GetGeneration())
@@ -2713,254 +2896,104 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
         if (CreateRenderTargets(r))
             r.swapchainNeedsRecreate = false;
     }
-    if (!r.offscreenFramebuffer || !r.swapchain)
+    if (!r.sceneFramebuffer || !r.swapchain)
         return;   // targets unavailable (window minimized); retry next frame
 
-    BeginFrameIfNeeded(r);
-    KES_VK_GPU_ZONE(r, "Scene pass");
-
-    float clearColor[4] = {};
-    BuildSkyClearColor(sceneObj, clearColor);
-
-    VkClearValue clearValues[2] = {};
-    clearValues[0].color = { { clearColor[0], clearColor[1], clearColor[2], clearColor[3] } };
-    clearValues[1].depthStencil = { 1.0f, 0 };
-
-    VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-    passBegin.renderPass = r.offscreenRenderPass;
-    passBegin.framebuffer = r.offscreenFramebuffer;
-    passBegin.renderArea.offset = { 0, 0 };
-    passBegin.renderArea.extent = { static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight) };
-    passBegin.clearValueCount = 2;
-    passBegin.pClearValues = clearValues;
-    vkCmdBeginRenderPass(r.commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
-
-    const VkViewport viewport = BuildOffscreenViewport(r);
-    vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
-    const VkRect2D scissor = { { 0, 0 }, { static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight) } };
-    vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
-
-    RenderSkyBackground(r, camera, sceneObj);
-
-    CameraViewData camData = {};
-    const float aspect = static_cast<float>(r.renderWidth) / static_cast<float>(r.renderHeight);
-    CameraBuildMatrices(camera, aspect, camData);
-
-    const float4x4 viewProj = ArrayToMatrix(camData.viewProjection);
-
-    SceneCBData scb = {};
-    MatrixToArrayRowMajor(viewProj, scb.viewProj);
-    scb.ambient[0] = scene.ambient[0];
-    scb.ambient[1] = scene.ambient[1];
-    scb.ambient[2] = scene.ambient[2];
-    scb.ambient[3] = 1.0f;
-    scb.snapParams[0] = static_cast<float>(r.renderWidth);
-    scb.snapParams[1] = static_cast<float>(r.renderHeight);
-    scb.snapParams[2] = scene.vertexSnap ? 1.0f : 0.0f;
-    scb.snapParams[3] = 0.0f;
-
-    const auto& sceneLights = sceneObj.GetLights();
-    for (size_t i = 0; i < sceneLights.size() && i < 8; ++i)
+    // Ambient environment, rebuilt when the sky (or flat ambient) changes.
+    const uint64_t environmentKey = render::EnvironmentKey(scene, sceneObj);
+    if (!r.frameActive && (environmentKey != r.environment.key || !r.environmentMap.view))
     {
-        const Light& light = sceneLights[i];
-        if (!light.active) continue;
-
-        const float3 lightDirection = BuildLightDirection(light.transform);
-
-        scb.lights[i].position[0] = light.transform.position.x;
-        scb.lights[i].position[1] = light.transform.position.y;
-        scb.lights[i].position[2] = light.transform.position.z;
-        scb.lights[i].position[3] = light.range;
-
-        scb.lights[i].color[0] = light.color[0];
-        scb.lights[i].color[1] = light.color[1];
-        scb.lights[i].color[2] = light.color[2];
-        scb.lights[i].color[3] = light.intensity;
-
-        scb.lights[i].direction[0] = lightDirection.x;
-        scb.lights[i].direction[1] = lightDirection.y;
-        scb.lights[i].direction[2] = lightDirection.z;
-        scb.lights[i].direction[3] = std::cos(light.spotAngle * 0.5f * 3.14159265f / 180.0f);
-
-        scb.lights[i].type = static_cast<uint32_t>(light.type);
-        scb.lights[i].active = 1;
+        KES_ZONE(RENDER, "Build environment");
+        vkDeviceWaitIdle(r.device);   // the old cube may still be sampled
+        render::BuildEnvironment(scene, sceneObj, r.environment);
+        UploadEnvironment(r);
+    }
+    if (!r.environmentMap.view)
+        return;
+    if (r.globalSetDirty && !r.frameActive)
+    {
+        vkDeviceWaitIdle(r.device);
+        UpdateGlobalDescriptorSet(r);
     }
 
-    const FogSettings& fog = sceneObj.GetFog();
-    scb.fogColor[0] = fog.color[0];
-    scb.fogColor[1] = fog.color[1];
-    scb.fogColor[2] = fog.color[2];
-    scb.fogColor[3] = 1.0f;
-    scb.fogParams[0] = fog.nearDistance;
-    scb.fogParams[1] = fog.farDistance;
-    scb.fogParams[2] = fog.active ? 1.0f : 0.0f;
-    scb.fogParams[3] = fog.stepCount;
+    const float aspect = static_cast<float>(r.renderWidth) / static_cast<float>(r.renderHeight);
+    render::BuildFrameSetup(r.frame, scene, camera, sceneObj, aspect, r.options);
+    render::ApplyEnvironment(r.environment, r.frame.scene);
+    if (!r.cascadeShadows.arrayView)
+    {
+        r.frame.scene.shadowParams[3] = 0.0f;
+        r.frame.shadowViews.clear();
+    }
+    r.exposure = std::max(scene.exposure, 0.0f);
 
-    std::memcpy(r.frames[r.frameIndex].sceneCBMapped, &scb, sizeof(scb));
+    BeginFrameIfNeeded(r);
+    std::memcpy(r.frames[r.frameIndex].sceneCBMapped, &r.frame.scene, sizeof(r.frame.scene));
 
-    // Draw lists live in the renderer so their storage is reused every frame.
+    // Draw lists (shared by shadow and scene passes).
     std::vector<DrawItem>& opaqueItems = r.opaqueDrawItems;
     std::vector<DrawItem>& transparentItems = r.transparentDrawItems;
     opaqueItems.clear();
     transparentItems.clear();
-    const Vector3 cameraPosition = { camera.x, camera.y, camera.z };
-
+    const Vector3 cameraPosition = CameraGetPosition(camera);
     {
         KES_ZONE(RENDER, "Build draw lists");
         for (const SceneObject& obj : sceneObj.GetObjects())
         {
-            if (!obj.active) continue;
-
-            const MaterialData* material = assets.GetMaterial(obj.material);
-            const Vector3 delta = {
-                obj.transform.position.x - cameraPosition.x,
-                obj.transform.position.y - cameraPosition.y,
-                obj.transform.position.z - cameraPosition.z
-            };
+            if (!obj.active)
+                continue;
             DrawItem item = {};
             item.object = &obj;
-            item.material = material;
-            item.distanceSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-
-            if (IsTransparentMaterial(material))
-                transparentItems.push_back(item);
-            else
-                opaqueItems.push_back(item);
+            item.material = assets.GetMaterial(obj.material);
+            item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
+            (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);
         }
-
-        // Opaque: group by material (shader, textures and material constants are
-        // per material) and draw near-to-far inside a group for early depth reject.
-        std::sort(opaqueItems.begin(), opaqueItems.end(),
-            [](const DrawItem& a, const DrawItem& b)
-            {
-                if (a.material != b.material)
-                    return a.material < b.material;
-                return a.distanceSq < b.distanceSq;
-            });
-
+        // Opaque: group by material, near-to-far inside a group (early depth reject).
+        std::sort(opaqueItems.begin(), opaqueItems.end(), [](const DrawItem& a, const DrawItem& b)
+                  { return a.material != b.material ? a.material < b.material : a.distanceSq < b.distanceSq; });
         // Transparent: back-to-front for correct blending.
-        std::sort(transparentItems.begin(), transparentItems.end(),
-            [](const DrawItem& a, const DrawItem& b)
-            {
-                return a.distanceSq > b.distanceSq;
-            });
+        std::sort(transparentItems.begin(), transparentItems.end(), [](const DrawItem& a, const DrawItem& b)
+                  { return a.distanceSq > b.distanceSq; });
         KES_PROFILE_PLOT("Opaque draw items", static_cast<int64_t>(opaqueItems.size()));
         KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
     }
 
-    // Redundant state filtering across consecutive draws.
-    VkPipeline boundPipeline = VK_NULL_HANDLE;
-    VkBuffer boundVertexBuffer = VK_NULL_HANDLE;
-    VkBuffer boundIndexBuffer = VK_NULL_HANDLE;
-    const MaterialData* cachedMaterial = nullptr;
-    VkDeviceSize cachedMaterialOffset = 0;
-    VkDescriptorSet cachedTextureSet = VK_NULL_HANDLE;
-    bool haveMaterial = false;
+    RenderShadowMaps(r, assets);
 
-    auto drawMesh = [&](const GPUMesh& gpuMesh, VkDeviceSize modelOffset, VkDeviceSize materialOffset, VkDescriptorSet textureSet)
-    {
-        BindMeshDrawDescriptors(r, modelOffset, materialOffset, textureSet);
+    KES_VK_GPU_ZONE(r, "Scene");
+    float clearColor[4] = {};
+    BuildClearColor(sceneObj, clearColor);
+    VkClearValue clearValues[3] = {};
+    clearValues[0].color = { { clearColor[0], clearColor[1], clearColor[2], clearColor[3] } };
+    clearValues[1].depthStencil = { 1.0f, 0 };
 
-        if (gpuMesh.vertexBuffer != boundVertexBuffer)
-        {
-            const VkDeviceSize vertexOffset = 0;
-            vkCmdBindVertexBuffers(r.commandBuffer, 0, 1, &gpuMesh.vertexBuffer, &vertexOffset);
-            boundVertexBuffer = gpuMesh.vertexBuffer;
-        }
-        if (gpuMesh.indexBuffer)
-        {
-            if (gpuMesh.indexBuffer != boundIndexBuffer)
-            {
-                vkCmdBindIndexBuffer(r.commandBuffer, gpuMesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                boundIndexBuffer = gpuMesh.indexBuffer;
-            }
-            vkCmdDrawIndexed(r.commandBuffer, gpuMesh.indexCount, 1, 0, 0, 0);
-        }
-        else
-        {
-            vkCmdDraw(r.commandBuffer, gpuMesh.indexCount, 1, 0, 0);
-        }
-    };
+    VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    passBegin.renderPass = r.sceneRenderPass;
+    passBegin.framebuffer = r.sceneFramebuffer;
+    passBegin.renderArea.extent = { static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight) };
+    passBegin.clearValueCount = r.msaaSamples != VK_SAMPLE_COUNT_1_BIT ? 3u : 2u;
+    passBegin.pClearValues = clearValues;
+    vkCmdBeginRenderPass(r.commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
 
-    auto drawItems = [&](const std::vector<DrawItem>& items, bool transparent)
-    {
-        for (const DrawItem& item : items)
-        {
-            const SceneObject& obj = *item.object;
-            const KModelData* model = assets.GetModel(obj.model);
-            const bool skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
+    const VkViewport viewport = BuildFlippedViewport(static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight));
+    vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
+    const VkRect2D scissor = { { 0, 0 }, passBegin.renderArea.extent };
+    vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
 
-            GPUShaderProgram* customProgram = nullptr;
-            if (item.material && item.material->shader != 0)
-                customProgram = GetOrCompileShaderProgram(r, item.material->shader, assets);
+    RenderSkyBackground(r, camera, sceneObj);
 
-            GPUShaderProgram& activeProgram = customProgram ? *customProgram : r.meshDefaultProgram;
-            const bool doubleSided = IsDoubleSidedMaterial(item.material);
-            VkPipeline pipeline = GetOrCreateMeshPipelineVariant(r, activeProgram, scene.wireframe, doubleSided, transparent);
-            if (!pipeline)
-                continue;
-
-            if (pipeline != boundPipeline)
-            {
-                vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-                boundPipeline = pipeline;
-            }
-
-            // Material constants and texture are identical for every draw of a material.
-            if (!haveMaterial || item.material != cachedMaterial)
-            {
-                cachedMaterial = item.material;
-                cachedMaterialOffset = WriteMaterialConstants(r, item.material);
-                cachedTextureSet = GetMaterialTextureDescriptor(r, item.material);
-                haveMaterial = true;
-            }
-
-            const float4x4 objectWorld = TransformToMatrix(obj.transform);
-
-            if (skinned)
-            {
-                const GPUModelRenderCache* modelRenderCache = GetOrBuildModelRenderCache(r, obj.model, assets);
-                if (!modelRenderCache)
-                    continue;
-
-                const uint32_t matrixCount = obj.skinMatrixCount > SceneObject::MaxSkinMatrices ? SceneObject::MaxSkinMatrices : obj.skinMatrixCount;
-                for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
-                {
-                    GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
-                    if (!gpuMesh)
-                        continue;
-
-                    float4x4 meshLocal = {};
-                    std::memcpy(&meshLocal, modelRenderCache->meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u, sizeof(meshLocal));
-                    const float4x4 world = Multiply(meshLocal, objectWorld);
-                    const float4x4 wvp = Multiply(world, viewProj);
-
-                    const VkDeviceSize modelOffset = WriteModelConstants(r, wvp, world, obj.skinMatrices, matrixCount);
-                    drawMesh(*gpuMesh, modelOffset, cachedMaterialOffset, cachedTextureSet);
-                }
-            }
-            else
-            {
-                GPUMesh* gpuMesh = GetOrUploadMesh(r, obj.mesh, assets);
-                if (!gpuMesh)
-                    continue;
-
-                const float4x4 wvp = Multiply(objectWorld, viewProj);
-                const VkDeviceSize modelOffset = WriteModelConstants(r, wvp, objectWorld, nullptr, 0);
-                drawMesh(*gpuMesh, modelOffset, cachedMaterialOffset, cachedTextureSet);
-            }
-        }
-    };
-
+    vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.meshPipelineLayout, 2, 1, &r.globalDescriptorSet, 0, nullptr);
+    DrawState state;
     {
         KES_ZONE(RENDER, "Draw opaque");
         KES_VK_GPU_ZONE(r, "Opaque");
-        drawItems(opaqueItems, false);
+        for (const DrawItem& item : opaqueItems)
+            DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, scene.wireframe, false);
     }
     {
         KES_ZONE(RENDER, "Draw transparent");
         KES_VK_GPU_ZONE(r, "Transparent");
-        drawItems(transparentItems, true);
+        for (const DrawItem& item : transparentItems)
+            DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, scene.wireframe, true);
     }
 
     vkCmdEndRenderPass(r.commandBuffer);
@@ -2996,16 +3029,14 @@ void RendererBeginBackbufferOverlay(Renderer& r)
     }
 
     r.haveSwapchainImage = true;
-    KES_VK_GPU_ZONE(r, "Backbuffer blit");
+    KES_VK_GPU_ZONE(r, "Tonemap");
 
-    const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     VkClearValue clearValue = {};
-    clearValue.color = { { black[0], black[1], black[2], black[3] } };
+    clearValue.color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
 
     VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
     passBegin.renderPass = r.backbufferRenderPass;
     passBegin.framebuffer = r.backbufferFramebuffers[r.currentSwapchainImageIndex];
-    passBegin.renderArea.offset = { 0, 0 };
     passBegin.renderArea.extent = r.swapchainExtent;
     passBegin.clearValueCount = 1;
     passBegin.pClearValues = &clearValue;
@@ -3013,11 +3044,15 @@ void RendererBeginBackbufferOverlay(Renderer& r)
 
     const VkViewport viewport = BuildPresentationViewport(r);
     vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
-    const VkRect2D scissor = { { 0, 0 }, r.swapchainExtent }; // no scissor test in the D3D11 path; cover the full window
+    const VkRect2D scissor = { { 0, 0 }, r.swapchainExtent };
     vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
 
-    vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.blitPipeline);
-    vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.blitPipelineLayout, 0, 1, &r.offscreenColorDescriptorSet, 0, nullptr);
+    render::TonemapCBData tonemap = {};
+    tonemap.params[0] = r.exposure;
+    tonemap.params[1] = 1.0f / 255.0f;
+    vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipeline);
+    vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &r.tonemapDescriptorSet, 0, nullptr);
+    vkCmdPushConstants(r.commandBuffer, r.tonemapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemap), &tonemap);
     vkCmdDraw(r.commandBuffer, 3, 1, 0, 0);
 
     // Left open for RendererRenderUi; RendererPresent ends it.
@@ -3068,16 +3103,12 @@ UiTextureHandle RendererCreateUiTexture(Renderer& r, int width, int height, cons
     if (!r.device || width <= 0 || height <= 0 || !rgbaPixels)
         return 0;
 
+    std::vector<render::MipLevel> levels(1);
+    levels[0].width = static_cast<uint32_t>(width);
+    levels[0].height = static_cast<uint32_t>(height);
+    levels[0].pixels.assign(rgbaPixels, rgbaPixels + static_cast<size_t>(width) * height * 4u);
     GPUTexture texture = {};
-    const uint32_t w = static_cast<uint32_t>(width);
-    const uint32_t h = static_cast<uint32_t>(height);
-    bool ok = CreateImage2D(r, w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-                            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                            texture.image, texture.memory);
-    ok = ok && UploadPixelsToImage(r, texture.image, w, h, rgbaPixels, static_cast<VkDeviceSize>(w) * h * 4u);
-    if (ok)
-        texture.view = CreateImageView2D(r, texture.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
-    if (texture.view)
+    if (CreateTexture2D(r, levels, VK_FORMAT_R8G8B8A8_UNORM, texture))
         texture.descriptorSet = AllocateTextureDescriptorSet(r, texture.view, r.uiTexSetLayout);
     if (!texture.descriptorSet)
     {
@@ -3237,8 +3268,13 @@ void RendererRender(Renderer& r, const SceneState& scene, const Camera& camera, 
 
 void RendererShutdown(Renderer& r)
 {
-    if (r.device)
-        vkDeviceWaitIdle(r.device);
+    if (!r.device)
+    {
+        if (r.surface) { SDL_Vulkan_DestroySurface(r.instance, r.surface, nullptr); r.surface = VK_NULL_HANDLE; }
+        if (r.instance) { vkDestroyInstance(r.instance, nullptr); r.instance = VK_NULL_HANDLE; }
+        return;
+    }
+    vkDeviceWaitIdle(r.device);
 
 #if KES_PROFILE_GPU
     if (r.gpuProfiler)
@@ -3261,6 +3297,11 @@ void RendererShutdown(Renderer& r)
     }
 
     DestroyGPUTexture(r, r.whiteTexture);
+    DestroyGPUTexture(r, r.environmentMap);
+    r.environment.key = 0;
+    DestroyShadowArray(r, r.cascadeShadows);
+    DestroyShadowArray(r, r.localShadows);
+    DestroyShadowArray(r, r.dummyShadows);
     DestroyRendererAssetCaches(r);
     r.assetGeneration = 0;
 
@@ -3268,12 +3309,14 @@ void RendererShutdown(Renderer& r)
     {
         DestroyStreamBuffer(r, frame.uiVertices);
         DestroyStreamBuffer(r, frame.uiIndices);
-    }
-
-    for (FrameResources& frame : r.frames)
-    {
         if (frame.inFlightFence) { vkDestroyFence(r.device, frame.inFlightFence, nullptr); frame.inFlightFence = VK_NULL_HANDLE; }
         if (frame.imageAvailableSemaphore) { vkDestroySemaphore(r.device, frame.imageAvailableSemaphore, nullptr); frame.imageAvailableSemaphore = VK_NULL_HANDLE; }
+        DestroyDynamicRingBuffer(r, frame.modelCBRing);
+        DestroyDynamicRingBuffer(r, frame.materialCBRing);
+        if (frame.sceneCBMapped) { vkUnmapMemory(r.device, frame.sceneCBMemory); frame.sceneCBMapped = nullptr; }
+        DestroyBuffer(r, frame.sceneCB, frame.sceneCBMemory);
+        if (frame.skyCBMapped) { vkUnmapMemory(r.device, frame.skyCBMemory); frame.skyCBMapped = nullptr; }
+        DestroyBuffer(r, frame.skyCB, frame.skyCBMemory);
     }
 
     if (r.transferCommandPool) { vkDestroyCommandPool(r.device, r.transferCommandPool, nullptr); r.transferCommandPool = VK_NULL_HANDLE; }
@@ -3286,52 +3329,41 @@ void RendererShutdown(Renderer& r)
             frame.commandBuffer = VK_NULL_HANDLE;
     }
 
-    for (FrameResources& frame : r.frames)
+    const struct { VkPipeline* pipeline; VkShaderModule* vs; VkShaderModule* ps; } fixedPipelines[] = {
+        { &r.uiPipeline, &r.uiVS, &r.uiPS }, { &r.tonemapPipeline, &r.tonemapVS, &r.tonemapPS }, { &r.skyPipeline, &r.skyVS, &r.skyPS } };
+    for (const auto& entry : fixedPipelines)
     {
-        DestroyDynamicRingBuffer(r, frame.modelCBRing);
-        DestroyDynamicRingBuffer(r, frame.materialCBRing);
-
-        if (frame.sceneCBMapped) { vkUnmapMemory(r.device, frame.sceneCBMemory); frame.sceneCBMapped = nullptr; }
-        DestroyBuffer(r, frame.sceneCB, frame.sceneCBMemory);
-        if (frame.skyCBMapped) { vkUnmapMemory(r.device, frame.skyCBMemory); frame.skyCBMapped = nullptr; }
-        DestroyBuffer(r, frame.skyCB, frame.skyCBMemory);
+        if (*entry.pipeline) { vkDestroyPipeline(r.device, *entry.pipeline, nullptr); *entry.pipeline = VK_NULL_HANDLE; }
+        if (*entry.vs) { vkDestroyShaderModule(r.device, *entry.vs, nullptr); *entry.vs = VK_NULL_HANDLE; }
+        if (*entry.ps) { vkDestroyShaderModule(r.device, *entry.ps, nullptr); *entry.ps = VK_NULL_HANDLE; }
     }
-
-    if (r.uiPipeline) { vkDestroyPipeline(r.device, r.uiPipeline, nullptr); r.uiPipeline = VK_NULL_HANDLE; }
-    if (r.uiPS) { vkDestroyShaderModule(r.device, r.uiPS, nullptr); r.uiPS = VK_NULL_HANDLE; }
-    if (r.uiVS) { vkDestroyShaderModule(r.device, r.uiVS, nullptr); r.uiVS = VK_NULL_HANDLE; }
-
-    if (r.blitPipeline) { vkDestroyPipeline(r.device, r.blitPipeline, nullptr); r.blitPipeline = VK_NULL_HANDLE; }
-    if (r.blitPS) { vkDestroyShaderModule(r.device, r.blitPS, nullptr); r.blitPS = VK_NULL_HANDLE; }
-    if (r.blitVS) { vkDestroyShaderModule(r.device, r.blitVS, nullptr); r.blitVS = VK_NULL_HANDLE; }
-
-    if (r.skyPipeline) { vkDestroyPipeline(r.device, r.skyPipeline, nullptr); r.skyPipeline = VK_NULL_HANDLE; }
-    if (r.skyPS) { vkDestroyShaderModule(r.device, r.skyPS, nullptr); r.skyPS = VK_NULL_HANDLE; }
-    if (r.skyVS) { vkDestroyShaderModule(r.device, r.skyVS, nullptr); r.skyVS = VK_NULL_HANDLE; }
-
     DestroyGPUShaderProgram(r, r.meshDefaultProgram);
+    DestroyGPUShaderProgram(r, r.shadowProgram);
 
     DestroyRenderTargets(r);
-    if (r.offscreenRenderPass) { vkDestroyRenderPass(r.device, r.offscreenRenderPass, nullptr); r.offscreenRenderPass = VK_NULL_HANDLE; }
-    if (r.backbufferRenderPass) { vkDestroyRenderPass(r.device, r.backbufferRenderPass, nullptr); r.backbufferRenderPass = VK_NULL_HANDLE; }
+    for (VkRenderPass* pass : { &r.sceneRenderPass, &r.shadowRenderPass, &r.backbufferRenderPass })
+    {
+        if (*pass) { vkDestroyRenderPass(r.device, *pass, nullptr); *pass = VK_NULL_HANDLE; }
+    }
 
     // Descriptor sets allocated from a FREE_DESCRIPTOR_SET_BIT pool are
-    // released with the pool itself; explicit frees above already handled
-    // the rest, so just tear down the pool and layouts.
+    // released with the pool itself.
     if (r.descriptorPool) { vkDestroyDescriptorPool(r.device, r.descriptorPool, nullptr); r.descriptorPool = VK_NULL_HANDLE; }
-    if (r.meshPipelineLayout) { vkDestroyPipelineLayout(r.device, r.meshPipelineLayout, nullptr); r.meshPipelineLayout = VK_NULL_HANDLE; }
-    if (r.skyPipelineLayout) { vkDestroyPipelineLayout(r.device, r.skyPipelineLayout, nullptr); r.skyPipelineLayout = VK_NULL_HANDLE; }
-    if (r.blitPipelineLayout) { vkDestroyPipelineLayout(r.device, r.blitPipelineLayout, nullptr); r.blitPipelineLayout = VK_NULL_HANDLE; }
-    if (r.uiPipelineLayout) { vkDestroyPipelineLayout(r.device, r.uiPipelineLayout, nullptr); r.uiPipelineLayout = VK_NULL_HANDLE; }
-    if (r.uiTexSetLayout) { vkDestroyDescriptorSetLayout(r.device, r.uiTexSetLayout, nullptr); r.uiTexSetLayout = VK_NULL_HANDLE; }
-    if (r.uboSetLayout) { vkDestroyDescriptorSetLayout(r.device, r.uboSetLayout, nullptr); r.uboSetLayout = VK_NULL_HANDLE; }
-    if (r.texSetLayout) { vkDestroyDescriptorSetLayout(r.device, r.texSetLayout, nullptr); r.texSetLayout = VK_NULL_HANDLE; }
-    if (r.skySetLayout) { vkDestroyDescriptorSetLayout(r.device, r.skySetLayout, nullptr); r.skySetLayout = VK_NULL_HANDLE; }
+    for (VkPipelineLayout* layout : { &r.meshPipelineLayout, &r.skyPipelineLayout, &r.tonemapPipelineLayout, &r.uiPipelineLayout })
+    {
+        if (*layout) { vkDestroyPipelineLayout(r.device, *layout, nullptr); *layout = VK_NULL_HANDLE; }
+    }
+    for (VkDescriptorSetLayout* layout : { &r.uiTexSetLayout, &r.uboSetLayout, &r.materialSetLayout, &r.globalSetLayout, &r.texSetLayout, &r.skySetLayout })
+    {
+        if (*layout) { vkDestroyDescriptorSetLayout(r.device, *layout, nullptr); *layout = VK_NULL_HANDLE; }
+    }
+    for (VkSampler* sampler : { &r.materialSampler, &r.linearSampler, &r.shadowSampler })
+    {
+        if (*sampler) { vkDestroySampler(r.device, *sampler, nullptr); *sampler = VK_NULL_HANDLE; }
+    }
 
-    if (r.pointSampler) { vkDestroySampler(r.device, r.pointSampler, nullptr); r.pointSampler = VK_NULL_HANDLE; }
-    if (r.linearSampler) { vkDestroySampler(r.device, r.linearSampler, nullptr); r.linearSampler = VK_NULL_HANDLE; }
-
-    if (r.device) { vkDestroyDevice(r.device, nullptr); r.device = VK_NULL_HANDLE; }
+    vkDestroyDevice(r.device, nullptr);
+    r.device = VK_NULL_HANDLE;
 
     if (r.surface) { SDL_Vulkan_DestroySurface(r.instance, r.surface, nullptr); r.surface = VK_NULL_HANDLE; }
 
@@ -3382,6 +3414,8 @@ namespace
         bool SetRenderResolution(int width, int height) override { return kes::vk::RendererSetRenderResolution(m_state, width, height); }
         void SetVSync(bool enabled) override { kes::vk::RendererSetVSync(m_state, enabled); }
         bool IsVSyncEnabled() const override { return m_state.vsync; }
+        void SetGraphicsOptions(const GraphicsOptions& options) override { kes::vk::RendererSetGraphicsOptions(m_state, options); }
+        GraphicsOptions GetGraphicsOptions() const override { return m_state.options; }
 
         void RenderScene(const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets) override
         {

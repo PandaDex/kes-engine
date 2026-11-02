@@ -80,6 +80,7 @@ private:
     }
 
     bool pendingDestroy = false;
+    bool destroyRan = false;   // OnDestroy runs once
     uint64_t entityId = 0;
     bool gravityEnabled = false;
     float verticalVelocity = 0.0f;

@@ -14,11 +14,38 @@ class AssetSystem;
 // Debug/scene toggles shared by every renderer backend.
 struct SceneState
 {
+    // Ambient environment when no sky is active (a uniform environment:
+    // diffuse and reflections). With a sky, ambient light comes from the sky.
     float ambient[3] = {0.25f, 0.25f, 0.25f};
+    float exposure = 1.0f;   // HDR exposure before tonemapping
 
     bool wireframe = false;
-    bool vertexSnap = true;
     bool animDebug = false;
+};
+
+enum class ShadowQuality
+{
+    Off = 0,
+    Low = 1,      // 2 sun cascades at 1024, 6 local shadow slices at 512
+    Medium = 2,   // 3 cascades at 2048, 8 local slices at 512
+    High = 3,     // 4 cascades at 2048, 12 local slices at 1024
+};
+
+// Player-facing quality options (GameSettings), applied with
+// IRenderer::SetGraphicsOptions. Unsupported values are clamped by the backend.
+struct GraphicsOptions
+{
+    int msaaSamples = 4;   // 1, 2, 4 or 8
+    ShadowQuality shadowQuality = ShadowQuality::High;
+    int anisotropy = 8;    // 1-16
+    float shadowDistance = 60.0f;   // meters covered by the sun cascades
+
+    bool operator==(const GraphicsOptions &other) const
+    {
+        return msaaSamples == other.msaaSamples && shadowQuality == other.shadowQuality &&
+               anisotropy == other.anisotropy && shadowDistance == other.shadowDistance;
+    }
+    bool operator!=(const GraphicsOptions &other) const { return !(*this == other); }
 };
 
 // 2D UI geometry for one frame, built by the UI system (ui_system.h) and
@@ -90,6 +117,10 @@ public:
     // (tearing allowed where the platform supports it).
     virtual void SetVSync(bool enabled) = 0;
     virtual bool IsVSyncEnabled() const = 0;
+
+    // MSAA, shadow quality, texture filtering. May recreate render targets.
+    virtual void SetGraphicsOptions(const GraphicsOptions &options) = 0;
+    virtual GraphicsOptions GetGraphicsOptions() const = 0;
 
     virtual void RenderScene(const SceneState &scene, const Camera &camera, const Scene &sceneObj, const AssetSystem &assets) = 0;
     virtual void BeginBackbufferOverlay() = 0;

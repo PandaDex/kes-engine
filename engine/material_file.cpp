@@ -81,7 +81,7 @@ bool LoadMaterialFile(const char* path, MaterialFileData& outMaterialFile, std::
     KES_ZONE_FN(ASSETS);
     KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outMaterialFile = {};
-    outMaterialFile.authorFlags = MaterialFlag_Lit;
+    outMaterialFile.authorFlags = MaterialFlag_Lit | MaterialFlag_CastShadows;
     outMaterialFile.material.flags = outMaterialFile.authorFlags;
 
     std::vector<TextBlock> blocks;
@@ -113,6 +113,37 @@ bool LoadMaterialFile(const char* path, MaterialFileData& outMaterialFile, std::
                 outMaterialFile.material.emissiveColor[1] = temp[1];
                 outMaterialFile.material.emissiveColor[2] = temp[2];
             }
+            // PBR (glTF metallic/roughness)
+            MaterialData& m = outMaterialFile.material;
+            auto readFloat = [&](const char* key, float& value)
+            {
+                if (const std::string* text = FindTextBlockProperty(block, key))
+                    value = textparse::ParseFloat(*text, value);
+            };
+            auto readPath = [&](const char* key, std::string& value)
+            {
+                if (const std::string* text = FindTextBlockProperty(block, key))
+                    value = textparse::Unquote(*text);
+            };
+            readFloat("Metallic", m.metallic);
+            readFloat("Roughness", m.roughness);
+            readFloat("NormalScale", m.normalScale);
+            readFloat("OcclusionStrength", m.occlusionStrength);
+            readFloat("EmissiveIntensity", m.emissiveIntensity);
+            readPath("NormalTexture", m.normalTexturePath);
+            readPath("MetallicRoughnessTexture", m.metallicRoughnessTexturePath);
+            readPath("OcclusionTexture", m.occlusionTexturePath);
+            readPath("EmissiveTexture", m.emissiveTexturePath);
+            m.metallic = std::clamp(m.metallic, 0.0f, 1.0f);
+            m.roughness = std::clamp(m.roughness, 0.02f, 1.0f);
+            if (const std::string* castShadows = FindTextBlockProperty(block, "CastShadows"))
+            {
+                if (textparse::ParseBool(*castShadows, true))
+                    outMaterialFile.authorFlags |= MaterialFlag_CastShadows;
+                else
+                    outMaterialFile.authorFlags &= ~MaterialFlag_CastShadows;
+            }
+
             if (const std::string* alphaCutoff = FindTextBlockProperty(block, "AlphaCutoff"))
                 outMaterialFile.material.alphaCutoff = textparse::ParseFloat(*alphaCutoff, outMaterialFile.material.alphaCutoff);
             if (const std::string* lit = FindTextBlockProperty(block, "Lit"))
@@ -190,10 +221,29 @@ bool SaveMaterialFile(const char* path, const MaterialFileData& materialFile, st
         file << "    BaseTexture = " << textparse::Quote(materialFile.material.baseTexturePath) << "\n";
     file << "    BaseColor = \"" << materialFile.material.baseColor[0] << "," << materialFile.material.baseColor[1] << "," << materialFile.material.baseColor[2] << "," << materialFile.material.baseColor[3] << "\"\n";
     file << "    Emissive = \"" << materialFile.material.emissiveColor[0] << "," << materialFile.material.emissiveColor[1] << "," << materialFile.material.emissiveColor[2] << "\"\n";
+    const MaterialData& m = materialFile.material;
+    file << "    Metallic = " << m.metallic << "\n";
+    file << "    Roughness = " << m.roughness << "\n";
+    const auto writePath = [&file](const char* key, const std::string& value)
+    {
+        if (!value.empty())
+            file << "    " << key << " = " << textparse::Quote(value) << "\n";
+    };
+    writePath("NormalTexture", m.normalTexturePath);
+    writePath("MetallicRoughnessTexture", m.metallicRoughnessTexturePath);
+    writePath("OcclusionTexture", m.occlusionTexturePath);
+    writePath("EmissiveTexture", m.emissiveTexturePath);
+    if (m.normalScale != 1.0f)
+        file << "    NormalScale = " << m.normalScale << "\n";
+    if (m.occlusionStrength != 1.0f)
+        file << "    OcclusionStrength = " << m.occlusionStrength << "\n";
+    if (m.emissiveIntensity != 1.0f)
+        file << "    EmissiveIntensity = " << m.emissiveIntensity << "\n";
     file << "    AlphaCutoff = " << materialFile.material.alphaCutoff << "\n";
     file << "    Lit = " << (((materialFile.authorFlags & MaterialFlag_Lit) != 0) ? "true" : "false") << "\n";
     file << "    Transparent = " << (((materialFile.authorFlags & MaterialFlag_Transparent) != 0) ? "true" : "false") << "\n";
     file << "    DoubleSided = " << (((materialFile.authorFlags & MaterialFlag_DoubleSided) != 0) ? "true" : "false") << "\n";
+    file << "    CastShadows = " << (((materialFile.authorFlags & MaterialFlag_CastShadows) != 0) ? "true" : "false") << "\n";
     file << "}\n";
 
     for (const MaterialNode& node : materialFile.nodes)
@@ -314,7 +364,7 @@ bool EvaluateMaterialGraph(MaterialFileData& materialFile, std::string* outError
                 materialFile.material.emissiveColor[1] = value.v[1];
                 materialFile.material.emissiveColor[2] = value.v[2];
                 if (!value.texturePath.empty())
-                    materialFile.material.baseTexturePath = value.texturePath;
+                    materialFile.material.emissiveTexturePath = value.texturePath;
             }
             else if (link.toSlot == 2)
             {
@@ -335,11 +385,6 @@ bool EvaluateMaterialGraph(MaterialFileData& materialFile, std::string* outError
 
     if ((materialFile.authorFlags & MaterialFlag_Transparent) != 0)
         materialFile.material.flags |= MaterialFlag_Transparent;
-
-    if (!materialFile.material.baseTexturePath.empty())
-        materialFile.material.flags |= MaterialFlag_Textured;
-    else
-        materialFile.material.flags &= ~MaterialFlag_Textured;
 
     (void)outError;
     return true;

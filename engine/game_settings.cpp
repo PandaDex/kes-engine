@@ -138,10 +138,22 @@ float GameSettings::GetResolutionScaleNormalized() const
 IntPoint GameSettings::GetRenderResolution() const
 {
     const float scale = std::clamp(m_resolutionScale, kMinResolutionScale, kMaxResolutionScale) / 100.0f;
-    const AppConfig &defaults = Defaults();
+    IntPoint base = {Defaults().renderWidth, Defaults().renderHeight};
+    if (m_window && m_window->pixelWidth > 0 && m_window->pixelHeight > 0)
+        base = {m_window->pixelWidth, m_window->pixelHeight};
     return {
-        std::max(1, static_cast<int>(std::lround(defaults.renderWidth * scale))),
-        std::max(1, static_cast<int>(std::lround(defaults.renderHeight * scale)))};
+        std::max(1, static_cast<int>(std::lround(base.x * scale))),
+        std::max(1, static_cast<int>(std::lround(base.y * scale)))};
+}
+
+GraphicsOptions GameSettings::GetGraphicsOptions() const
+{
+    GraphicsOptions options;
+    options.msaaSamples = m_msaaSamples;
+    options.shadowQuality = m_shadowQuality;
+    options.anisotropy = m_anisotropy;
+    options.shadowDistance = m_shadowDistance;
+    return options;
 }
 
 // Dirty state
@@ -224,6 +236,7 @@ void GameSettings::ApplyNonResolutionSettings()
 
     if (m_renderer)
     {
+        m_renderer->SetGraphicsOptions(GetGraphicsOptions());
         m_renderer->SetVSync(m_vsync);
         const IntPoint renderResolution = GetRenderResolution();
         m_renderer->SetRenderResolution(renderResolution.x, renderResolution.y);
@@ -269,6 +282,13 @@ void GameSettings::SetToDefaults()
     m_frameRateLimit = defaults.frameRateLimit;
     m_resolutionScale = 100.0f;
     m_preferredRenderer = RendererBackend::Auto;
+    m_mouseSensitivity = 1.0f;
+    m_gamepadLookSensitivity = 1.0f;
+    m_invertLookY = false;
+    m_shadowQuality = ShadowQuality::High;
+    m_msaaSamples = 4;
+    m_anisotropy = 8;
+    m_shadowDistance = 60.0f;
 }
 
 void GameSettings::ValidateSettings()
@@ -304,6 +324,21 @@ void GameSettings::ValidateSettings()
     if (!std::isfinite(m_resolutionScale))
         m_resolutionScale = 100.0f;
     m_resolutionScale = std::clamp(m_resolutionScale, kMinResolutionScale, kMaxResolutionScale);
+
+    auto fixSensitivity = [](float &value)
+    {
+        if (!std::isfinite(value))
+            value = 1.0f;
+        value = std::clamp(value, 0.05f, 10.0f);
+    };
+    m_shadowQuality = static_cast<ShadowQuality>(std::clamp(static_cast<int>(m_shadowQuality), 0, 3));
+    m_msaaSamples = m_msaaSamples >= 8 ? 8 : m_msaaSamples >= 4 ? 4 : m_msaaSamples >= 2 ? 2 : 1;
+    m_anisotropy = std::clamp(m_anisotropy, 1, 16);
+    if (!std::isfinite(m_shadowDistance))
+        m_shadowDistance = 60.0f;
+    m_shadowDistance = std::clamp(m_shadowDistance, 5.0f, 500.0f);
+    fixSensitivity(m_mouseSensitivity);
+    fixSensitivity(m_gamepadLookSensitivity);
 }
 
 // Persistence
@@ -343,6 +378,13 @@ void GameSettings::ReadFromIni(const IniFile &ini)
     m_vsync = ini.GetBool(kSection, "bUseVSync", m_vsync);
     m_frameRateLimit = ini.GetFloat(kSection, "FrameRateLimit", m_frameRateLimit);
     m_resolutionScale = ini.GetFloat(kSection, "ResolutionScale", m_resolutionScale);
+    m_shadowQuality = static_cast<ShadowQuality>(ini.GetInt(kSection, "ShadowQuality", static_cast<int>(m_shadowQuality)));
+    m_msaaSamples = ini.GetInt(kSection, "AntiAliasing", m_msaaSamples);
+    m_anisotropy = ini.GetInt(kSection, "AnisotropicFiltering", m_anisotropy);
+    m_shadowDistance = ini.GetFloat(kSection, "ShadowDistance", m_shadowDistance);
+    m_mouseSensitivity = ini.GetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
+    m_gamepadLookSensitivity = ini.GetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
+    m_invertLookY = ini.GetBool(kSection, "bInvertLookY", m_invertLookY);
 
     RendererBackend renderer = m_preferredRenderer;
     const std::string rendererName = ini.GetString(kSection, "PreferredRenderer", RendererBackendName(m_preferredRenderer));
@@ -364,6 +406,13 @@ void GameSettings::WriteToIni(IniFile &ini) const
     ini.SetBool(kSection, "bUseVSync", m_vsync);
     ini.SetFloat(kSection, "FrameRateLimit", m_frameRateLimit);
     ini.SetFloat(kSection, "ResolutionScale", m_resolutionScale);
+    ini.SetInt(kSection, "ShadowQuality", static_cast<int>(m_shadowQuality));
+    ini.SetInt(kSection, "AntiAliasing", m_msaaSamples);
+    ini.SetInt(kSection, "AnisotropicFiltering", m_anisotropy);
+    ini.SetFloat(kSection, "ShadowDistance", m_shadowDistance);
+    ini.SetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
+    ini.SetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
+    ini.SetBool(kSection, "bInvertLookY", m_invertLookY);
     ini.SetString(kSection, "PreferredRenderer", RendererBackendName(m_preferredRenderer));
 }
 

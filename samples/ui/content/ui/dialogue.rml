@@ -18,8 +18,8 @@
             <div class="choices" data-if="!dlg_typing">
                 <button class="choice" data-for="c : dlg_choices" data-event-click="dlg_choose(it_index)"><span class="num">{{ it_index + 1 }}.</span>{{ c }}</button>
             </div>
-            <div class="skip-hint" data-if="dlg_typing">Click or Space to skip</div>
-            <div class="skip-hint" data-if="!dlg_typing">Click a reply or press 1-{{ dlg_choices.size }}</div>
+            <div class="skip-hint" data-if="dlg_typing"><span class="kbm-only">Click or Space to skip</span><span class="pad-only">A to skip</span></div>
+            <div class="skip-hint" data-if="!dlg_typing"><span class="kbm-only">Click a reply or press 1-{{ dlg_choices.size }}</span><span class="pad-only">D-pad to choose  ·  A to reply  ·  B to leave</span></div>
         </div>
     </div>
 </body>

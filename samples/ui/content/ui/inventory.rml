@@ -39,6 +39,8 @@
                      data-class-dimmed="s.item >= 0 && inv_filter != 'all' && s.kind != inv_filter"
                      data-event-mouseover="inv_hover(it_index)"
                      data-event-mouseout="inv_hover(-1)"
+                     data-event-focus="inv_hover(it_index)"
+                     data-event-blur="inv_hover(-1)"
                      data-event-click="inv_select(it_index)"
                      data-event-dblclick="inv_use(it_index)"
                      data-event-dragover="drop_target = it_index"
@@ -85,7 +87,7 @@
                 </div>
             </div>
         </div>
-        <div class="window-footer">Drag to move or stack  ·  Double-click to use  ·  I or Esc to close</div>
+        <div class="window-footer"><span class="kbm-only">Drag to move or stack  ·  Double-click to use  ·  I or Esc to close</span><span class="pad-only">D-pad to browse  ·  A to select, then Use or Discard  ·  B to close</span></div>
     </div>
 </body>
 </rml>

@@ -18,18 +18,20 @@ bool AudioSystem::Init()
         return false;
     }
 
-    SDL_AudioSpec desired = {SDL_AUDIO_F32LE, 2, 48000};
-
-    device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,  &deviceSpec);
-    if (device == 0)
+    // The mixer works in one fixed format; SDL converts to whatever the
+    // hardware wants. Clips are converted to this format when loaded.
+    deviceSpec = {SDL_AUDIO_F32, 2, 48000};
+    stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &deviceSpec, &AudioSystem::SDLAudioCallback, this);
+    if (!stream)
     {
-        EngineLogf("SDL_OpenAudioDevice failed: %s", SDL_GetError());
-        SDL_DestroyMutex(mutex);
-        mutex = nullptr;
-        return false;
+        // No audio device (headless machine, no sound card, driver error):
+        // run silent instead of failing startup. Play calls return 0.
+        EngineLogf("No audio output (%s); continuing without sound.", SDL_GetError());
+        return true;
     }
 
-    SDL_PauseAudioDevice(device);
+    if (!SDL_ResumeAudioStreamDevice(stream))
+        EngineLogf("SDL_ResumeAudioStreamDevice failed: %s", SDL_GetError());
     EngineLogf("Audio system initialized. freq=%d channels=%d.", deviceSpec.freq, deviceSpec.channels);
     return true;
 }
@@ -38,11 +40,13 @@ void AudioSystem::Shutdown()
 {
     KES_ZONE_FN(AUDIO);
     EngineLog("Audio system shutdown begin.");
-    if (device != 0)
+    if (stream)
     {
-        SDL_CloseAudioDevice(device);
-        device = 0;
+        // Closes the device; the callback is not called again afterwards.
+        SDL_DestroyAudioStream(stream);
+        stream = nullptr;
     }
+    paused = false;
 
     clipCache.clear();
     voices.clear();
@@ -80,6 +84,41 @@ void AudioSystem::SetListener(const AudioListener& newListener)
     SDL_UnlockMutex(mutex);
 }
 
+void AudioSystem::SetPaused(bool pause)
+{
+    if (paused == pause)
+        return;
+    paused = pause;
+    if (!stream)
+        return;
+    if (pause)
+        SDL_PauseAudioStreamDevice(stream);
+    else
+        SDL_ResumeAudioStreamDevice(stream);
+}
+
+void AudioSystem::StopAll()
+{
+    if (!mutex)
+        return;
+    SDL_LockMutex(mutex);
+    voices.clear();
+    SDL_UnlockMutex(mutex);
+}
+
+bool AudioSystem::AddVoice(const AudioVoice& voice)
+{
+    SDL_LockMutex(mutex);
+    CleanupVoices();
+    const bool added = voices.size() < kMaxVoices;
+    if (added)
+        voices.push_back(voice);
+    SDL_UnlockMutex(mutex);
+    if (!added)
+        EngineLogf("Audio voice limit (%zu) reached; sound skipped.", kMaxVoices);
+    return added;
+}
+
 bool AudioSystem::LoadClip(const char* soundFile)
 {
     return GetOrLoadClip(soundFile) != nullptr;
@@ -87,8 +126,10 @@ bool AudioSystem::LoadClip(const char* soundFile)
 
 AudioVoiceId AudioSystem::Play2D(const char* soundFile, float volume, float pitch, bool loop)
 {
+    if (!stream || !mutex)
+        return 0;
     const AudioClip* clip = GetOrLoadClip(soundFile);
-    if (!clip || !mutex)
+    if (!clip)
         return 0;
 
     AudioVoice voice = {};
@@ -98,17 +139,15 @@ AudioVoiceId AudioSystem::Play2D(const char* soundFile, float volume, float pitc
     voice.pitch = pitch;
     voice.loop = loop;
     voice.playing = true;
-
-    SDL_LockMutex(mutex);
-    voices.push_back(voice);
-    SDL_UnlockMutex(mutex);
-    return voice.id;
+    return AddVoice(voice) ? voice.id : 0;
 }
 
 AudioVoiceId AudioSystem::Play3D(const Vector3& location, float attenuation, const char* soundFile, float volume, float pitch, bool loop)
 {
+    if (!stream || !mutex)
+        return 0;
     const AudioClip* clip = GetOrLoadClip(soundFile);
-    if (!clip || !mutex)
+    if (!clip)
         return 0;
 
     AudioVoice voice = {};
@@ -121,11 +160,7 @@ AudioVoiceId AudioSystem::Play3D(const Vector3& location, float attenuation, con
     voice.spatial = true;
     voice.attenuation = attenuation;
     voice.position = location;
-
-    SDL_LockMutex(mutex);
-    voices.push_back(voice);
-    SDL_UnlockMutex(mutex);
-    return voice.id;
+    return AddVoice(voice) ? voice.id : 0;
 }
 
 void AudioSystem::StopVoice(AudioVoiceId id)
@@ -192,19 +227,24 @@ void AudioSystem::SetVoiceVolume(AudioVoiceId id, float volume)
     SDL_UnlockMutex(mutex);
 }
 
-void AudioSystem::SDLAudioCallback(void* userdata, Uint8* stream, int len)
+// Runs on SDL's audio thread whenever the device needs more data.
+void AudioSystem::SDLAudioCallback(void* userdata, SDL_AudioStream* stream, int additionalAmount, int totalAmount)
 {
-    AudioSystem* self = (AudioSystem*)userdata;
-    if (!self)
+    (void)totalAmount;
+    AudioSystem* self = static_cast<AudioSystem*>(userdata);
+    if (!self || additionalAmount <= 0)
         return;
 
-    std::memset(stream, 0, (size_t)len);
-    if (!self->mutex)
-        return;
+    const int frameBytes = static_cast<int>(sizeof(float)) * 2;
+    const int frameCount = (additionalAmount + frameBytes - 1) / frameBytes;
+    std::vector<float>& buffer = self->mixBuffer;   // only touched on this thread
+    buffer.assign(static_cast<size_t>(frameCount) * 2, 0.0f);
 
     SDL_LockMutex(self->mutex);
-    self->MixAudio((float*)stream, len / (int)sizeof(float) / 2);
+    self->MixAudio(buffer.data(), frameCount);
     SDL_UnlockMutex(self->mutex);
+
+    SDL_PutAudioStreamData(stream, buffer.data(), frameCount * frameBytes);
 }
 
 void AudioSystem::MixAudio(float* outSamples, int frameCount)

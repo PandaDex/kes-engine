@@ -2,6 +2,7 @@
 #include <vulkan/vulkan.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
@@ -12,6 +13,7 @@
 #include "kmodel.h"
 #include "material.h"
 #include "render_backend.h"
+#include "render_common.h"
 #include "profiler.h"
 
 #if KES_PROFILE_GPU
@@ -20,6 +22,14 @@ namespace tracy { class VkCtx; }
 
 // Vulkan renderer backend. Internal to the engine: game code talks to the
 // renderer through IRenderer (render_backend.h).
+//
+// Frame: shadow depth passes (sun cascades + local lights) -> HDR scene pass
+// (RGBA16F, MSAA with resolve) -> tonemap into the swapchain image -> UI.
+//
+// Descriptor sets of mesh pipelines:
+//   set 0  SceneCB, ModelCB (dynamic), MaterialCB (dynamic)
+//   set 1  material textures (5 combined image samplers), one set per material
+//   set 2  environment cube, cascade shadows, local shadows + samplers (one set)
 
 class Scene;
 class AssetSystem;
@@ -36,6 +46,8 @@ struct GPUMesh
     VkBuffer indexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory indexMemory = VK_NULL_HANDLE;
     uint32_t indexCount = 0;
+    Vector3 boundsCenter = {};   // local-space bounding sphere
+    float boundsRadius = 0.0f;
 };
 
 struct GPUModelMeshKey
@@ -64,7 +76,6 @@ struct GPUShaderProgram
     VkShaderModule vertexShader = VK_NULL_HANDLE;
     VkShaderModule pixelShader = VK_NULL_HANDLE;
     VkPipeline pipelines[kMeshPipelineVariantCount] = {};
-    bool usesFogVarying = false; // true for the fallback (fog-capable) default shaders
 };
 
 struct GPUTexture
@@ -72,7 +83,26 @@ struct GPUTexture
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // set=1 binding=0 (combined image sampler)
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // UI textures only (set 0 of the UI pipeline)
+};
+
+// Per-material texture set (set 1) and the Has*Texture flags it implies.
+struct GPUMaterialSet
+{
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    uint32_t textureFlags = 0;
+};
+
+// Depth image array: one framebuffer per layer for rendering, one array view for sampling.
+struct GPUShadowArray
+{
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView arrayView = VK_NULL_HANDLE;
+    std::vector<VkImageView> layerViews;
+    std::vector<VkFramebuffer> framebuffers;
+    int resolution = 0;
+    int layers = 0;
 };
 
 struct GPUModelRenderCache
@@ -153,6 +183,7 @@ struct Renderer
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
     VkPhysicalDeviceProperties physicalDeviceProperties = {};
+    bool anisotropySupported = false;
 
     uint32_t graphicsQueueFamily = 0;
     uint32_t presentQueueFamily = 0;
@@ -168,44 +199,63 @@ struct Renderer
     std::vector<VkFramebuffer> backbufferFramebuffers;
 
     // Render passes
-    VkRenderPass offscreenRenderPass = VK_NULL_HANDLE;
+    VkRenderPass sceneRenderPass = VK_NULL_HANDLE;    // HDR color (+ resolve) + depth, msaaSamples
+    VkRenderPass shadowRenderPass = VK_NULL_HANDLE;   // depth only
     VkRenderPass backbufferRenderPass = VK_NULL_HANDLE;
+    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;   // of sceneRenderPass
 
-    // Depth buffer (offscreen)
+    // HDR scene targets (internal render resolution)
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkFormat shadowFormat = VK_FORMAT_UNDEFINED;
+    bool shadowLinearFilter = true;
     VkImage depthImage = VK_NULL_HANDLE;
     VkDeviceMemory depthMemory = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
+    VkImage sceneColorMSImage = VK_NULL_HANDLE;
+    VkDeviceMemory sceneColorMSMemory = VK_NULL_HANDLE;
+    VkImageView sceneColorMSView = VK_NULL_HANDLE;
+    VkImage sceneColorImage = VK_NULL_HANDLE;   // resolved, sampled by the tonemap
+    VkDeviceMemory sceneColorMemory = VK_NULL_HANDLE;
+    VkImageView sceneColorView = VK_NULL_HANDLE;
+    VkFramebuffer sceneFramebuffer = VK_NULL_HANDLE;
+    VkDescriptorSet tonemapDescriptorSet = VK_NULL_HANDLE;
 
-    // Offscreen color target (rendered scene, blitted to backbuffer)
-    VkImage offscreenColorImage = VK_NULL_HANDLE;
-    VkDeviceMemory offscreenColorMemory = VK_NULL_HANDLE;
-    VkImageView offscreenColorView = VK_NULL_HANDLE;
-    VkFramebuffer offscreenFramebuffer = VK_NULL_HANDLE;
-    VkDescriptorSet offscreenColorDescriptorSet = VK_NULL_HANDLE;
+    // Shadows and image-based ambient
+    GPUShadowArray cascadeShadows;
+    GPUShadowArray localShadows;
+    GPUShadowArray dummyShadows;   // 1x1, bound when shadows are off
+    GPUTexture environmentMap = {};
+    render::EnvironmentMaps environment;
+    render::FrameSetup frame;
+    VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE;   // set 2
+    bool globalSetDirty = true;
+    float exposure = 1.0f;
+    GraphicsOptions options = {};
 
     // Descriptor / pipeline layouts
-    VkDescriptorSetLayout uboSetLayout = VK_NULL_HANDLE;   // set 0 for mesh pipelines: SceneCB, ModelCB(dyn), MaterialCB(dyn)
-    VkDescriptorSetLayout texSetLayout = VK_NULL_HANDLE;   // set 1 for mesh pipelines / set 0 for blit: combined image sampler
-    VkDescriptorSetLayout skySetLayout = VK_NULL_HANDLE;   // set 0 for sky pipeline: SkyCB
+    VkDescriptorSetLayout uboSetLayout = VK_NULL_HANDLE;       // set 0: SceneCB, ModelCB(dyn), MaterialCB(dyn)
+    VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;  // set 1: 5 combined image samplers
+    VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE;    // set 2: env, shadows, samplers
+    VkDescriptorSetLayout texSetLayout = VK_NULL_HANDLE;       // tonemap set 0: combined image sampler (linear)
+    VkDescriptorSetLayout skySetLayout = VK_NULL_HANDLE;       // sky set 0: SkyCB
     VkPipelineLayout meshPipelineLayout = VK_NULL_HANDLE;
     VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
-    VkPipelineLayout blitPipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout tonemapPipelineLayout = VK_NULL_HANDLE;   // + push constant: exposure
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
 
-    // Default (always-resident) mesh pipeline shaders
-    GPUShaderProgram meshDefaultProgram; // r.meshVS / r.meshPS equivalent
+    GPUShaderProgram meshDefaultProgram;
+    GPUShaderProgram shadowProgram;       // pipelines[0] = the shadow pipeline
 
     VkShaderModule skyVS = VK_NULL_HANDLE;
     VkShaderModule skyPS = VK_NULL_HANDLE;
     VkPipeline skyPipeline = VK_NULL_HANDLE;
 
-    VkShaderModule blitVS = VK_NULL_HANDLE;
-    VkShaderModule blitPS = VK_NULL_HANDLE;
-    VkPipeline blitPipeline = VK_NULL_HANDLE;
+    VkShaderModule tonemapVS = VK_NULL_HANDLE;
+    VkShaderModule tonemapPS = VK_NULL_HANDLE;
+    VkPipeline tonemapPipeline = VK_NULL_HANDLE;
 
     // UI pass (ui.slang): premultiplied alpha, scissor per draw, drawn inside
-    // the backbuffer pass after the blit.
+    // the backbuffer pass after the tonemap.
     VkSampler linearSampler = VK_NULL_HANDLE;
     VkDescriptorSetLayout uiTexSetLayout = VK_NULL_HANDLE;   // set 0: combined image sampler (linear)
     VkPipelineLayout uiPipelineLayout = VK_NULL_HANDLE;      // + push constant: float4 scaleOffset
@@ -218,8 +268,9 @@ struct Renderer
     UiTextureHandle nextUiTextureHandle = 1;
     bool backbufferPassOpen = false;   // BeginBackbufferOverlay leaves it open for the UI
 
-    // Sampler / default texture
-    VkSampler pointSampler = VK_NULL_HANDLE;
+    // Samplers / default texture
+    VkSampler materialSampler = VK_NULL_HANDLE;   // anisotropic, repeat
+    VkSampler shadowSampler = VK_NULL_HANDLE;     // depth comparison
     GPUTexture whiteTexture = {};
 
     // Command submission (kMaxFramesInFlight frames in flight)
@@ -250,7 +301,8 @@ struct Renderer
     std::unordered_map<MeshHandle, GPUMesh> gpuMeshes;
     std::unordered_map<GPUModelMeshKey, GPUMesh, GPUModelMeshKeyHasher> gpuModelMeshes;
     std::unordered_map<ShaderHandle, GPUShaderProgram> gpuShaders;
-    std::unordered_map<std::string, GPUTexture> gpuTextures;
+    std::unordered_map<std::string, GPUTexture> gpuTextures;   // key: usage + resolved path
+    std::unordered_map<std::string, GPUMaterialSet> gpuMaterialSets;   // key: the five texture paths
     std::unordered_map<ModelHandle, GPUModelRenderCache> gpuModelRenderCaches;
     uint64_t assetGeneration = 0;
 
@@ -273,6 +325,7 @@ void RendererShutdown(Renderer& renderer);
 bool RendererResize(Renderer& renderer, int width, int height);
 bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
 void RendererSetVSync(Renderer& renderer, bool enabled);
+void RendererSetGraphicsOptions(Renderer& renderer, const GraphicsOptions& options);
 void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 void RendererBeginBackbufferOverlay(Renderer& renderer);
 UiTextureHandle RendererCreateUiTexture(Renderer& renderer, int width, int height, const uint8_t* rgbaPixels);

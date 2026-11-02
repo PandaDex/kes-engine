@@ -1,7 +1,7 @@
 # KES Engine
 
 ``` ⚠️ This engine isn't ready for any use. Very early work in progress. Things can and will be broken! ``` <br/>
-Lightweight game engine focused on psx style graphics with vertex lighting and performance build with modern C++ 20, SDL3 and Vulkan or DirectX 11 (selectable on Windows). Shaders are written once in Slang and compiled at build time for every renderer.
+Lightweight game engine with modern forward rendering (per-pixel PBR, HDR with MSAA, cascaded and local shadow maps, image-based ambient light from the sky) built with modern C++ 20, SDL3 and Vulkan or DirectX 11 (selectable on Windows). Shaders are written once in Slang and compiled at build time for every renderer.
 <br /> 
 Documentation is located in ```docs``` directory.
 
@@ -9,7 +9,7 @@ Documentation is located in ```docs``` directory.
 
 ### Implemented in any way: 
 
-- Lightning
+- Lighting (per-pixel PBR, up to 32 lights, shadows, sky ambient; see `docs/rendering.md`)
 - Audio System
 - Entity System
 - Material System

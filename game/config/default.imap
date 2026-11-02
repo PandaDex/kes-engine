@@ -19,10 +19,32 @@
 
 "InputAction_Look": {
 	"NativeKeys": [
-		{"key": "Mouse_2D_Axis", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Gamepad_RightAxis_2D", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+		{"key": "Mouse_2D_Axis", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
 	],
 	"ValueType": "vector2",
+}
+
+"InputAction_LookStick": {
+	"NativeKeys": [
+		{"key": "Gamepad_RightAxis_2D", "modifiers": [{"name": "InputMod_deadzone", "value": "0.15"}], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "vector2",
+}
+
+"InputAction_MoveUp": {
+	"NativeKeys": [
+		{"key": "Keyboard_Space", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Gamepad_RightBumper", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"InputAction_MoveDown": {
+	"NativeKeys": [
+		{"key": "Keyboard_Left Ctrl", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Gamepad_LeftBumper", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
 }
 
 "InputAction_Pause": {

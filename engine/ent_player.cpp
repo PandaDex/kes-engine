@@ -1,19 +1,33 @@
 #include "ent_player.h"
-#include <SDL3/SDL.h>
+#include <algorithm>
 #include <cmath>
+#include "audio_system.h"
 #include "ent_camera.h"
 #include "game_context.h"
-#include "audio_system.h"
+#include "game_settings.h"
+#include "profiler.h"
 
 namespace
 {
-    static void ApplyTransformToCamera(Camera& camera, const Vector3& position, const Vector3& rotation)
+    constexpr float kPi = 3.14159265358979f;
+    constexpr float kMaxPitch = 1.4f;   // just under straight up / down
+
+    void ApplyTransformToCamera(Camera& camera, const Vector3& position, const Vector3& rotation)
     {
         camera.x = position.x;
         camera.y = position.y;
         camera.z = position.z;
         camera.pitch = rotation.x;
         camera.yaw = rotation.y;
+    }
+
+    // Keeps yaw in (-pi, pi] so it never grows large enough to lose precision.
+    float WrapAngle(float angle)
+    {
+        angle = std::fmod(angle + kPi, 2.0f * kPi);
+        if (angle < 0.0f)
+            angle += 2.0f * kPi;
+        return angle - kPi;
     }
 }
 
@@ -27,72 +41,68 @@ void EnginePlayerEntity::Start()
     SyncEntityFromActiveCamera();
 
     if (game && game->collision)
-    {
-        collider = game->collision->AddCapsule(
-            Position,
-            colliderRadius,
-            colliderHalfHeight,
-            false);
-    }
+        collider = game->collision->AddCapsule(Position, colliderRadius, colliderHalfHeight, false);
+}
+
+Vector3 EnginePlayerEntity::GetForward() const
+{
+    const float cp = std::cos(Rotation.x);
+    const float sp = std::sin(Rotation.x);
+    const float cy = std::cos(Rotation.y);
+    const float sy = std::sin(Rotation.y);
+    return Vector3Normalize({ sy * cp, -sp, cy * cp });
+}
+
+void EnginePlayerEntity::UpdateLook(float dt)
+{
+    const GameSettings* settings = GetGameSettings();
+    const float mouseScale = mouseLookScale * (settings ? settings->GetMouseSensitivity() : 1.0f);
+    const float stickScale = stickLookSpeed * (settings ? settings->GetGamepadLookSensitivity() : 1.0f);
+    const float invert = settings && settings->IsLookYInverted() ? -1.0f : 1.0f;
+
+    // Mouse deltas are already an angle for this frame; the stick is a rate.
+    // Squaring the stick (keeping its sign) gives fine aim near the center.
+    const Vector2 mouse = InputActionValue2D(input, "InputAction_Look");
+    const Vector2 stick = InputActionValue2D(input, "InputAction_LookStick");
+    const float stickX = stick.x * std::fabs(stick.x);
+    const float stickY = stick.y * std::fabs(stick.y);
+
+    Rotation.y = WrapAngle(Rotation.y + mouse.x * mouseScale + stickX * stickScale * dt);
+    Rotation.x += (mouse.y * mouseScale + stickY * stickScale * dt) * invert;
+    Rotation.x = ClampFloat(Rotation.x, -kMaxPitch, kMaxPitch);
 }
 
 void EnginePlayerEntity::Update(float dt)
 {
+    KES_ZONE(ENTITIES, "Player update");
     const CameraEntity* activeCamera = game ? game->GetActiveCameraEntity() : nullptr;
     const uint64_t activeCameraEntityId = activeCamera && activeCamera->IsPlayerControlled() ? activeCamera->GetEntityId() : 0;
     if (activeCameraEntityId != 0 && activeCameraEntityId != lastBoundCameraEntityId)
         SyncEntityFromActiveCamera();
     lastBoundCameraEntityId = activeCameraEntityId;
 
-    const Vector2 lookInput = InputActionValue2D(input, "InputAction_Look");
+    UpdateLook(dt);
 
-    Rotation.y += lookInput.x * mouseSensitivity;
-    Rotation.x += lookInput.y * mouseSensitivity;
-    Rotation.x = ClampFloat(Rotation.x, -1.4f, 1.4f);
-
-    const float cp = std::cos(Rotation.x);
-    const float sp = std::sin(Rotation.x);
+    // Movement is relative to yaw only, so looking down doesn't slow you down.
     const float cy = std::cos(Rotation.y);
     const float sy = std::sin(Rotation.y);
-
-    const Vector3 forward = Vector3Normalize({ sy * cp, -sp, cy * cp });
-    const Vector3 worldUp = { 0.0f, 1.0f, 0.0f };
-
     const Vector3 moveInput = InputActionValue3D(input, "InputAction_Move");
-
     Vector3 moveDir = {};
     moveDir.x = cy * moveInput.x + sy * moveInput.y;
-    moveDir.y = moveInput.z;
     moveDir.z = -sy * moveInput.x + cy * moveInput.y;
-
-    if (InputKeyDown(input, SDL_SCANCODE_SPACE))
+    moveDir.y = moveInput.z;
+    if (InputActionDown(input, "InputAction_MoveUp"))
         moveDir.y += 1.0f;
-    if (InputKeyDown(input, SDL_SCANCODE_LCTRL))
+    if (InputActionDown(input, "InputAction_MoveDown"))
         moveDir.y -= 1.0f;
 
-    if (Vector3LengthSq(moveDir) > 0.000001f)
-    {
-        moveDir = Vector3Normalize(moveDir);
-        const Vector3 desired = Position + moveDir * (moveSpeed * dt);
-
-        bool blocked = false;
-        if (game && game->collision)
-        {
-            const CollisionHit hit = game->collision->SweepCapsule(
-                Position,
-                desired,
-                colliderRadius,
-                colliderHalfHeight,
-                collider,
-                6);
-            blocked = hit.hit;
-        }
-
-        if (!blocked)
-        {
-            Position = desired;
-        }
-    }
+    // Clamp instead of normalizing: a half-tilted stick moves at half speed,
+    // diagonals on the keyboard aren't faster.
+    const float length = Vector3Length(moveDir);
+    if (length > 1.0f)
+        moveDir = moveDir / length;
+    if (length > 0.0001f && dt > 0.0f)
+        MoveWithCollision(moveDir * (moveSpeed * dt));
 
     if (game && game->collision && collider != 0)
         game->collision->SetPosition(collider, Position);
@@ -101,12 +111,61 @@ void EnginePlayerEntity::Update(float dt)
     {
         AudioListener listener = {};
         listener.position = Position;
-        listener.forward = forward;
-        listener.up = worldUp;
+        listener.forward = GetForward();
+        listener.up = { 0.0f, 1.0f, 0.0f };
         game->audio->SetListener(listener);
     }
 
     SyncRuntimeCameraFromEntity();
+}
+
+bool EnginePlayerEntity::IsBlocked(const Vector3& from, const Vector3& to) const
+{
+    // Enough samples that no step is longer than half the radius: fast moves
+    // (low frame rate, high speed) can't skip through thin walls.
+    const float distance = Vector3Length(to - from);
+    const int steps = std::clamp(static_cast<int>(std::ceil(distance / (colliderRadius * 0.5f))), 1, 64);
+    return game->collision->SweepCapsule(from, to, colliderRadius, colliderHalfHeight, collider, steps).hit;
+}
+
+void EnginePlayerEntity::MoveWithCollision(const Vector3& delta)
+{
+    if (!collisionEnabled || !game || !game->collision)
+    {
+        Position += delta;
+        return;
+    }
+
+    // Started inside geometry (spawned in a wall, a brush moved into us):
+    // move freely until clear instead of being stuck forever.
+    if (game->collision->CheckCapsule(Position, colliderRadius, colliderHalfHeight, collider))
+    {
+        Position += delta;
+        return;
+    }
+
+    const Vector3 target = Position + delta;
+    if (!IsBlocked(Position, target))
+    {
+        Position = target;
+        return;
+    }
+
+    // Blocked: slide by keeping the free axis components, largest first, so
+    // running diagonally into a wall moves along it.
+    float components[3] = { delta.x, delta.y, delta.z };
+    int order[3] = { 0, 1, 2 };
+    std::sort(std::begin(order), std::end(order),
+              [&](int a, int b) { return std::fabs(components[a]) > std::fabs(components[b]); });
+    for (int axis : order)
+    {
+        if (std::fabs(components[axis]) < 0.00001f)
+            continue;
+        Vector3 step = {};
+        (axis == 0 ? step.x : axis == 1 ? step.y : step.z) = components[axis];
+        if (!IsBlocked(Position, Position + step))
+            Position += step;
+    }
 }
 
 void EnginePlayerEntity::FixedUpdate(float fixedDt)

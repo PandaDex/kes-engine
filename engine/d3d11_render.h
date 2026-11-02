@@ -1,8 +1,12 @@
 #pragma once
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <SDL3/SDL.h>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include "shared.h"
@@ -12,6 +16,7 @@
 #include "kmodel.h"
 #include "material.h"
 #include "render_backend.h"
+#include "render_common.h"
 #include "profiler.h"
 
 #if KES_PROFILE_GPU
@@ -20,6 +25,9 @@ namespace tracy { class D3D11Ctx; }
 
 // Direct3D 11 renderer backend (Windows only). Internal to the engine: game
 // code talks to the renderer through IRenderer (render_backend.h).
+//
+// Frame: shadow depth passes (sun cascades + local lights) -> HDR scene pass
+// (RGBA16F, MSAA) -> resolve -> tonemap to the backbuffer -> UI.
 
 class Scene;
 class AssetSystem;
@@ -40,6 +48,8 @@ struct GPUMesh
     ID3D11Buffer* vertexBuffer = nullptr;
     ID3D11Buffer* indexBuffer = nullptr;
     UINT indexCount = 0;
+    Vector3 boundsCenter = {};   // local-space bounding sphere
+    float boundsRadius = 0.0f;
 };
 
 struct GPUModelMeshKey
@@ -79,6 +89,15 @@ struct GPUModelRenderCache
     std::vector<float> meshBindWorldMatrices;
 };
 
+// Depth texture array with one depth view per slice (shadow maps).
+struct GPUShadowArray
+{
+    ID3D11Texture2D* texture = nullptr;
+    ID3D11ShaderResourceView* srv = nullptr;
+    std::vector<ID3D11DepthStencilView*> sliceViews;
+    int resolution = 0;
+};
+
 struct Renderer
 {
     ID3D11Device* device = nullptr;
@@ -88,22 +107,30 @@ struct Renderer
     ID3D11Texture2D* backBuffer = nullptr;
     ID3D11RenderTargetView* rtv = nullptr;
 
+    // HDR scene targets at the internal render resolution. With MSAA the
+    // scene renders into the multisampled pair and resolves into sceneColor.
+    ID3D11Texture2D* sceneColorMS = nullptr;
+    ID3D11RenderTargetView* sceneColorMSRTV = nullptr;
+    ID3D11Texture2D* sceneColor = nullptr;
+    ID3D11RenderTargetView* sceneColorRTV = nullptr;
+    ID3D11ShaderResourceView* sceneColorSRV = nullptr;
     ID3D11Texture2D* depthTexture = nullptr;
     ID3D11DepthStencilView* dsv = nullptr;
-
-    ID3D11Texture2D* offscreenColor = nullptr;
-    ID3D11RenderTargetView* offscreenRTV = nullptr;
-    ID3D11ShaderResourceView* offscreenSRV = nullptr;
+    int msaaSamples = 1;   // in effect (options clamped to device support)
 
     ID3D11VertexShader* meshVS = nullptr;
     ID3D11PixelShader* meshPS = nullptr;
     ID3D11InputLayout* meshLayout = nullptr;
 
+    ID3D11VertexShader* shadowVS = nullptr;
+    ID3D11PixelShader* shadowPS = nullptr;
+
     ID3D11VertexShader* skyVS = nullptr;
     ID3D11PixelShader* skyPS = nullptr;
 
-    ID3D11VertexShader* blitVS = nullptr;
-    ID3D11PixelShader* blitPS = nullptr;
+    ID3D11VertexShader* tonemapVS = nullptr;
+    ID3D11PixelShader* tonemapPS = nullptr;
+    ID3D11Buffer* tonemapCB = nullptr;
 
     // UI pass (ui.slang): premultiplied alpha, scissor per draw.
     ID3D11VertexShader* uiVS = nullptr;
@@ -116,7 +143,6 @@ struct Renderer
     UINT uiIndexCapacity = 0;    // in indices
     ID3D11BlendState* uiBlendState = nullptr;
     ID3D11RasterizerState* uiRS = nullptr;   // no cull, scissor enabled
-    ID3D11SamplerState* linearSampler = nullptr;
     std::unordered_map<UiTextureHandle, GPUTexture> uiTextures;
     UiTextureHandle nextUiTextureHandle = 1;
 
@@ -129,17 +155,31 @@ struct Renderer
     ID3D11RasterizerState* solidNoCullRS = nullptr;
     ID3D11RasterizerState* wireRS = nullptr;
     ID3D11RasterizerState* wireNoCullRS = nullptr;
+    ID3D11RasterizerState* shadowRS = nullptr;   // no cull, slope-scaled depth bias
     ID3D11BlendState* opaqueBlendState = nullptr;
     ID3D11BlendState* alphaBlendState = nullptr;
     ID3D11DepthStencilState* depthWriteState = nullptr;
     ID3D11DepthStencilState* depthReadState = nullptr;
-    ID3D11SamplerState* pointSampler = nullptr;
+
+    ID3D11SamplerState* materialSampler = nullptr;      // anisotropic, wrap (s0-s4)
+    ID3D11SamplerState* linearClampSampler = nullptr;   // environment, tonemap, UI (s5)
+    ID3D11SamplerState* shadowSampler = nullptr;        // comparison PCF (s6)
     GPUTexture whiteTexture = {};
+
+    // Shadows and image-based ambient
+    GPUShadowArray cascadeShadows;
+    GPUShadowArray localShadows;
+    GPUTexture environmentMap = {};   // RGBA16F cube with mips
+    render::EnvironmentMaps environment;
+    render::FrameSetup frame;
+    float exposure = 1.0f;
+
+    GraphicsOptions options = {};
 
     std::unordered_map<MeshHandle, GPUMesh> gpuMeshes;
     std::unordered_map<GPUModelMeshKey, GPUMesh, GPUModelMeshKeyHasher> gpuModelMeshes;
     std::unordered_map<ShaderHandle, GPUShaderProgram> gpuShaders;
-    std::unordered_map<std::string, GPUTexture> gpuTextures;
+    std::unordered_map<std::string, GPUTexture> gpuTextures;   // key: usage + resolved path
     std::unordered_map<ModelHandle, GPUModelRenderCache> gpuModelRenderCaches;
     uint64_t assetGeneration = 0;
 
@@ -169,6 +209,7 @@ void RendererShutdown(Renderer& renderer);
 bool RendererResize(Renderer& renderer, int width, int height);
 bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
 void RendererSetVSync(Renderer& renderer, bool enabled);
+void RendererSetGraphicsOptions(Renderer& renderer, const GraphicsOptions& options);
 void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 void RendererBeginBackbufferOverlay(Renderer& renderer);
 UiTextureHandle RendererCreateUiTexture(Renderer& renderer, int width, int height, const uint8_t* rgbaPixels);

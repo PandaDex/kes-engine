@@ -72,6 +72,8 @@ button:hover, input.submit:hover, input.button:hover { background-color: #3a4050
 button:active, input.submit:active, input.button:active { background-color: #222631; }
 button:focus-visible, input:focus-visible, select:focus-visible { border-color: #e0a040; }
 button:disabled, input:disabled, select:disabled { color: #ffffff60; cursor: unavailable; }
+/* Disabled controls are skipped by Tab, arrow-key and gamepad navigation */
+[disabled] { tab-index: none; }
 
 input.text, input.password, textarea
 {

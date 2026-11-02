@@ -1,0 +1,109 @@
+"InputAction_Interact": {
+	"NativeKeys": [
+		{"key": "Gamepad_Face_Bottom", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_E", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"InputAction_Move": {
+	"NativeKeys": [
+		{"key": "Gamepad_LeftAxis_2D", "modifiers": [{"name": "InputMod_deadzone", "value": "0.2"}, {"name": "InputMod_negate", "value": {"y": "true"}}], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_W", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_S", "modifiers": [{"name": "InputMod_negate", "value": {"y": "true"}}], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_A", "modifiers": [{"name": "InputMod_swizzle", "value": "YXZ"}, {"name": "InputMod_negate", "value": {"x": "true"}}], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_D", "modifiers": [{"name": "InputMod_swizzle", "value": "YXZ"}], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "vector2",
+}
+
+"InputAction_Look": {
+	"NativeKeys": [
+		{"key": "Mouse_2D_Axis", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "vector2",
+}
+
+"InputAction_LookStick": {
+	"NativeKeys": [
+		{"key": "Gamepad_RightAxis_2D", "modifiers": [{"name": "InputMod_deadzone", "value": "0.15"}], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "vector2",
+}
+
+"InputAction_MoveUp": {
+	"NativeKeys": [
+		{"key": "Keyboard_Space", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Gamepad_RightBumper", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"InputAction_MoveDown": {
+	"NativeKeys": [
+		{"key": "Keyboard_Left Ctrl", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Gamepad_LeftBumper", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"InputAction_Pause": {
+	"NativeKeys": [
+		{"key": "Gamepad_Special_Right", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_Escape", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"Showcase_Fire": {
+	"NativeKeys": [
+		{"key": "Gamepad_RightTrigger", "modifiers": [{"name": "InputMod_deadzone", "value": "0.3"}], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_F", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"Showcase_Reload": {
+	"NativeKeys": [
+		{"key": "Gamepad_Face_Left", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_R", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"Showcase_Damage": {
+	"NativeKeys": [
+		{"key": "Gamepad_Face_Top", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_H", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"Showcase_Inventory": {
+	"NativeKeys": [
+		{"key": "Gamepad_Special_Left", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_I", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"UI_Accept": {
+	"NativeKeys": [
+		{"key": "Gamepad_Face_Bottom", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_Return", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_Keypad Enter", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_Space", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+	"Context": "UI",
+}
+
+"UI_Back": {
+	"NativeKeys": [
+		{"key": "Gamepad_Face_Right", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Gamepad_Special_Right", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_Escape", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+	"Context": "UI",
+}
