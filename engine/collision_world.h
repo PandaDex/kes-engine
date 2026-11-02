@@ -10,7 +10,8 @@ enum class ColliderType
 {
     Box,
     Sphere,
-    Capsule
+    Capsule,
+    Convex   // convex hull from planes (map brushes)
 };
 
 struct BoxCollider
@@ -29,6 +30,20 @@ struct CapsuleCollider
     float halfHeight = 0.5f;
 };
 
+// Plane in the body's local space: dot(normal, p) == dist, normal points outward.
+struct CollisionPlane
+{
+    Vector3 normal = { 0.0f, 1.0f, 0.0f };
+    float dist = 0.0f;
+};
+
+struct ConvexCollider
+{
+    std::vector<CollisionPlane> planes;
+    Vector3 boundsMin = {};   // local AABB of the hull, used for early rejection
+    Vector3 boundsMax = {};
+};
+
 struct CollisionBody
 {
     ColliderHandle handle = 0;
@@ -38,6 +53,7 @@ struct CollisionBody
     BoxCollider box = {};
     SphereCollider sphere = {};
     CapsuleCollider capsule = {};
+    ConvexCollider convex = {};
     bool isTrigger = false;
     bool active = true;
 };
@@ -77,6 +93,11 @@ public:
     ColliderHandle AddBox(const Vector3& position, const Vector3& halfExtents, bool isTrigger = false, const Vector3& offset = {});
     ColliderHandle AddSphere(const Vector3& position, float radius, bool isTrigger = false, const Vector3& offset = {});
     ColliderHandle AddCapsule(const Vector3& position, float radius, float halfHeight, bool isTrigger = false, const Vector3& offset = {});
+    // Convex hull: the intersection of the half-spaces behind `planes` (local to `position`).
+    // boundsMin/Max is the hull's local AABB. Overlap tests against it are conservative at
+    // edges and corners (planes are expanded by the probe size), which suits brush geometry.
+    ColliderHandle AddConvex(const Vector3& position, const std::vector<CollisionPlane>& planes,
+                             const Vector3& boundsMin, const Vector3& boundsMax, bool isTrigger = false);
 
     bool Remove(ColliderHandle handle);
     CollisionBody* Find(ColliderHandle handle);

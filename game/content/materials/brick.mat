@@ -1,0 +1,10 @@
+Material {
+    Shader = "shaders/psx_default.shader"
+    BaseColor = "1,1,1,1"
+    BaseTexture = "textures/brick.bmp"
+    Emissive = "0,0,0"
+    AlphaCutoff = 0
+    Lit = true
+    Transparent = false
+    DoubleSided = false
+}

@@ -173,6 +173,36 @@ Reference the shader from a material through a `.shader` descriptor (`Source = "
 
 Note: with Visual Studio generators, the first build after adding or removing a `.slang` file regenerates the project, and after a removal it can fail once. Build again and it goes through. Ninja does not have this problem.
 
+## Map Editor: Forge
+
+`tools/forgeMapEditor` is a Qt 6 brush editor in the style of Hammer. It produces the maps the engine loads.
+
+Build it with Qt 6.4+ (it isn't part of the engine build):
+
+```txt
+cmake -S tools/forgeMapEditor -B out/build/forge -DCMAKE_PREFIX_PATH=<Qt>/msvc2022_64
+cmake --build out/build/forge --config Release
+```
+
+Workflow:
+
+1. **File > Open Project** (Ctrl+Shift+O) opens the game's `.kproject` (here `game/kes.kproject`). Forge asks for one on first start and reopens it automatically afterwards. Maps go in `<AssetRoot>/maps`, materials are listed from `<AssetRoot>/materials`, and textures resolve from `<AssetRoot>` (or `<AssetRoot>/textures`). *Tools > Set Content Directory* still works without a project.
+2. Build geometry with the Block tool and place engine entities (classes from `entities/kes.dec`).
+3. Apply materials:
+   - **Materials panel** (bottom dock): click a material to make it current; double-click applies it to the selected solids
+   - **Material tool** (Shift+A): click a face to apply, Shift+click for the whole object, Alt+click to pick a face's material, Ctrl+click to select faces
+   - **Tool Options** of the Material tool: texture scale (world units per texel), offset and rotation for the selected faces
+   - new blocks use the current material
+4. Save the `.fmap` into `content/maps/`, then **F9** to build the `.fmapc` next to it.
+
+Materials are the engine's own `.mat` files under the content folder. The editor shows their `BaseColor` and `BaseTexture` (`.ktex`, `.bmp`, `.png`, `.jpg`) in the 3D view, so what you see matches the game.
+
+Headless build, for scripts (uses the nearest `.kproject` above the map):
+
+```txt
+forge --compile game/content/maps/startup.fmap game/content/maps/startup.fmapc
+```
+
 ## Import Tool: `model-importer`
 
 `model-importer` is the current asset import CLI.

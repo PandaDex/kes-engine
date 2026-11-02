@@ -9,7 +9,7 @@
 #include "game_context.h"
 #include "entity_manager.h"
 #include "entity_factory_registry.h"
-#include "prefab_system.h"
+#include "map_file.h"
 
 struct InputState;
 class CameraEntity;
@@ -41,11 +41,7 @@ public:
 
 private:
     void ClearLevelState();
-    bool InstantiateMap(const std::vector<LevelBlock>& blocks, const Transform& rootTransform);
-    bool InstantiateObjectBlock(const LevelBlock& block, const Transform& rootTransform);
-    bool InstantiateEntityBlock(const LevelBlock& block, const Transform& rootTransform);
-    bool InstantiateColliderBlock(const LevelBlock& block, const Transform& rootTransform);
-    bool InstantiatePrefabBlock(const LevelBlock& block, const Transform& rootTransform);
+    void InstantiateMap(const CompiledMap& map);
     void RegisterBuiltInEntityClasses();
     Entity* CreatePlayerEntity();
     CameraEntity* FindStartupCameraEntity() const;
@@ -61,8 +57,6 @@ private:
     EntityManager entities;
     EntityFactoryRegistry entityFactories;
     std::vector<std::pair<std::string, EntityFactoryFunction>> customEntityFactories;
-    PrefabSystem prefabs;
     std::string pendingMapLoad;
     std::string playerClassName;
-    uint32_t mainObjectId = 0;
 };

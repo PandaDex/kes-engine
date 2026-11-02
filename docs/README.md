@@ -15,7 +15,7 @@ The goal is to describe the current runtime, asset formats, and tool workflow in
 - The default runtime content directory is `assets` via `ENGINE_CONTENT_DIRECTORY`.
 - A project now defines a single `AssetRoot`. The editor scans that root recursively and identifies assets by extension.
 - The runtime can load loose files and `.pak` archives from the content directory.
-- The main runtime asset extensions are `.kmodel`, `.ktex`, `.ksound`, `.kanim`, `.kagraph`, `.mat`, `.map`, and `.prefab`.
+- The main runtime asset extensions are `.kmodel`, `.ktex`, `.ksound`, `.kanim`, `.kagraph`, `.mat` and `.fmapc` (compiled maps from the Forge editor).
 
 ## Scope
 

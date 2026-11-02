@@ -60,7 +60,7 @@ function(_kes_make_pak source_dir pak_path)
 endfunction()
 
 # Game: content minus shader sources, plus the compiled binaries.
-file(COPY "${GAME_CONTENT_DIR}/" DESTINATION "${_work}/game" PATTERN "*.slang" EXCLUDE)
+file(COPY "${GAME_CONTENT_DIR}/" DESTINATION "${_work}/game" PATTERN "*.slang" EXCLUDE PATTERN "*.fmap" EXCLUDE)
 if(GAME_SHADERS_DIR AND EXISTS "${GAME_SHADERS_DIR}")
     file(COPY "${GAME_SHADERS_DIR}/" DESTINATION "${_work}/game")
 endif()

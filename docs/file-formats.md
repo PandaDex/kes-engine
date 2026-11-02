@@ -14,8 +14,8 @@ The editor scans `Project.AssetRoot` recursively and classifies assets by extens
 | `.kanim` | runtime animation clip | binary |
 | `.kagraph` | animation state graph | text block |
 | `.mat` | material graph and material settings | text block |
-| `.map` | level/map file | text block |
-| `.prefab` | prefab file | text block |
+| `.fmap` | map source, edited in the Forge editor | JSON |
+| `.fmapc` | compiled map loaded by the engine | binary (chunked) |
 | `.shader` | shader descriptor | text block |
 | `.kproject` | project file | text block |
 | `.kdec` | editor entity/property declarations | text block |
@@ -74,49 +74,45 @@ Project
 {
     Name = "KES"
     AssetRoot = "assets"
-    StartupMap = "startup.map"
+    StartupMap = "startup.fmapc"
 }
 ```
 
-`AssetRoot` is the root scanned by the editor and used for content-relative paths.
+`AssetRoot` is the root scanned by the editor and used for content-relative paths. Project content uses fixed folders under it: `maps/`, `materials/` and `textures/`. The Forge map editor opens the `.kproject` to find them.
 
 `StartupMap` is stored as a project-relative asset path. In practice you should treat it as pointing into the map set under the asset root.
 
-## Map and Prefab Files: `.map` and `.prefab`
+## Maps: `.fmap` and `.fmapc`
 
-Map and prefab files use level blocks, not the generic `TextBlock` structure, but the syntax is similar.
+Maps are built in the Forge editor (`tools/forgeMapEditor`), a Hammer-style brush editor.
 
-Supported block types:
+- `.fmap`: the editable source map (JSON). Keep it next to the compiled map; it isn't packaged.
+- `.fmapc`: the compiled map the engine loads (`World::LoadMap`, `map_file.h`). Build it with **F9** in the editor or `forge --compile in.fmap out.fmapc`.
 
-- `Object`
-- `Entity`
-- `Collider`
-- `Prefab`
+`.fmapc` version 2 layout (little-endian): `FORGECMP`, u32 version, u32 flags, then chunks of `{char[4] id, u32 size, data}`. Readers skip unknown chunks, so new data can be added without breaking older engines.
 
-Example:
+| Chunk | Contents |
+| --- | --- |
+| `MATL` | material paths (content-relative `.mat`, `""` = engine default material) |
+| `GEOM` | render meshes, one per material per owner: vertices (position, normal, uv) and triangle indices |
+| `ENTS` | entities: class, name, solid flag, origin, angles, bounds, keyvalues, I/O connections |
+| `BRSH` | convex collision hulls: owner, bounds, planes |
 
-```txt
-Entity {
-    Class = PlayerStartEntity
-    Position = -6.593,0.0,-1.073
-}
+Data is stored in editor space (Z-up, right-handed, editor units). World geometry is in world space; geometry and brushes owned by an entity are relative to the entity origin. The engine converts on load:
 
-Object {
-    Mesh = meshes/startup.kmodel
-    MaterialFile = materials/startup.mat
-    Position = 0,0,0
-    Rotation = 0,0,0
-    Scale = 1,1,1
-}
-```
+- axes: editor `(x, y, z)` becomes engine `(x, z, y)`; the swap also turns right-handed into left-handed
+- units: multiplied by `ENGINE_MAP_UNIT_SCALE` (default `0.0254`, so 1 unit = 1 inch, like Hammer)
+- angles: pitch and yaw in degrees become the engine's `Rotation` in radians
 
-Common conventions:
+How the engine instantiates a map:
 
-- paths are stored relative to the asset root
-- values are mostly parsed from strings by the target runtime system
-- `Prefab` blocks allow map composition from other `.prefab` assets
+- world geometry becomes static scene objects, one per material; world brushes become convex colliders
+- entities are created by class name through the entity factory (unknown classes are skipped with a warning)
+- keyvalues go to `Entity::ApplyProperty`; the entity name is added to `Tags`
+- solid entities also receive `Size` (their bounds) and `ApplyMapGeometry` (meshes and hulls); `BrushEntity` renders and collides with them
+- I/O connections are read but not used yet (the engine has no I/O system)
 
-`.prefab` uses the same block vocabulary as `.map`; it is effectively a reusable chunk of level content.
+The engine's entity classes are declared for the editor in `tools/forgeMapEditor/entities/kes.dec`.
 
 ## Shader Descriptor Files: `.shader`
 

@@ -1,0 +1,9 @@
+Material {
+    Shader = "shaders/psx_default.shader"
+    BaseColor = "0.35,0.45,0.6,1"
+    Emissive = "0,0,0"
+    AlphaCutoff = 0
+    Lit = true
+    Transparent = false
+    DoubleSided = false
+}

@@ -1,11 +1,9 @@
 #pragma once
 
-// Engine Configuration defaults
 #ifndef ENGINE_PROJECT_NAME
 #define ENGINE_PROJECT_NAME "kes"
 #endif
 
-// Used for the per-user settings folder (SDL_GetPrefPath(company, project)).
 #ifndef ENGINE_COMPANY_NAME
 #define ENGINE_COMPANY_NAME "KES"
 #endif
@@ -19,7 +17,7 @@
 #endif
 
 #ifndef ENGINE_STARTUP_MAP
-#define ENGINE_STARTUP_MAP "maps/startup.map"
+#define ENGINE_STARTUP_MAP "maps/startup.fmapc"
 #endif
 
 #ifndef ENGINE_ALLOW_DEBUG_MODE
@@ -28,4 +26,10 @@
 
 #ifndef ENGINE_DEFAULT_PLAYER_CLASS_NAME
 #define ENGINE_DEFAULT_PLAYER_CLASS_NAME "EnginePlayerEntity"
+#endif
+
+// Size of one map editor unit in engine units (meters). The default treats editor
+// units: 1 unit = 1 inch, so a 72-unit-tall player is ~1.83 m.
+#ifndef ENGINE_MAP_UNIT_SCALE
+#define ENGINE_MAP_UNIT_SCALE 0.0254f
 #endif

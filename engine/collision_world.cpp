@@ -292,6 +292,129 @@ namespace
         return true;
     }
 
+    // --- Convex hulls ------------------------------------------------------------
+    // Separating-axis style tests using the hull face planes plus the world axes
+    // (the hull AABB). Probe shapes are handled by pushing each plane out by the
+    // probe support distance, which is exact on faces and slightly conservative
+    // on edges/corners - the classic brush-collision trade-off.
+
+    static bool AabbOverlap(const Vector3& aMin, const Vector3& aMax, const Vector3& bMin, const Vector3& bMax)
+    {
+        return aMin.x <= bMax.x && aMax.x >= bMin.x &&
+               aMin.y <= bMax.y && aMax.y >= bMin.y &&
+               aMin.z <= bMax.z && aMax.z >= bMin.z;
+    }
+
+    // support(n) = how far the probe reaches along n from its center.
+    template<typename SupportFn>
+    static bool ConvexVsProbe(const CollisionBody& hull, const Vector3& hullPos, const Vector3& center,
+                              const Vector3& probeHalfExtents, SupportFn support)
+    {
+        const Vector3 hullMin = hullPos + hull.convex.boundsMin;
+        const Vector3 hullMax = hullPos + hull.convex.boundsMax;
+        if (!AabbOverlap(hullMin, hullMax, center - probeHalfExtents, center + probeHalfExtents))
+            return false;
+
+        const Vector3 local = center - hullPos;
+        for (const CollisionPlane& plane : hull.convex.planes)
+        {
+            if (Vector3Dot(plane.normal, local) - plane.dist > support(plane.normal))
+                return false;
+        }
+        return true;
+    }
+
+    static bool ConvexVsSphere(const CollisionBody& hull, const Vector3& hullPos, const Vector3& center, float radius)
+    {
+        return ConvexVsProbe(hull, hullPos, center, { radius, radius, radius },
+                             [radius](const Vector3&) { return radius; });
+    }
+
+    static bool ConvexVsBox(const CollisionBody& hull, const Vector3& hullPos, const Vector3& center, const Vector3& half)
+    {
+        return ConvexVsProbe(hull, hullPos, center, half, [&half](const Vector3& n)
+        {
+            return std::fabs(n.x) * half.x + std::fabs(n.y) * half.y + std::fabs(n.z) * half.z;
+        });
+    }
+
+    // Vertical capsule = segment along Y swept by a sphere.
+    static bool ConvexVsCapsule(const CollisionBody& hull, const Vector3& hullPos, const Vector3& center, float radius, float halfHeight)
+    {
+        return ConvexVsProbe(hull, hullPos, center, { radius, halfHeight + radius, radius },
+                             [radius, halfHeight](const Vector3& n) { return radius + std::fabs(n.y) * halfHeight; });
+    }
+
+    static bool PointInConvex(const CollisionBody& hull, const Vector3& hullPos, const Vector3& point)
+    {
+        const Vector3 local = point - hullPos;
+        for (const CollisionPlane& plane : hull.convex.planes)
+        {
+            if (Vector3Dot(plane.normal, local) - plane.dist > 0.0f)
+                return false;
+        }
+        return !hull.convex.planes.empty();
+    }
+
+    // Ray clipped against every half-space (Cyrus-Beck).
+    static bool RayVsConvex(const Ray& ray, const CollisionBody& hull, const Vector3& hullPos, float maxDistance, RaycastCandidate& outHit)
+    {
+        if (hull.convex.planes.empty())
+            return false;
+
+        if (PointInConvex(hull, hullPos, ray.origin))
+        {
+            outHit.hit = true;
+            outHit.distance = 0.0f;
+            outHit.point = ray.origin;
+            outHit.normal = ray.direction * -1.0f;
+            return true;
+        }
+
+        const Vector3 origin = ray.origin - hullPos;
+        float tEnter = 0.0f;
+        float tExit = maxDistance;
+        Vector3 enterNormal = {};
+        bool entered = false;
+
+        for (const CollisionPlane& plane : hull.convex.planes)
+        {
+            const float distance = Vector3Dot(plane.normal, origin) - plane.dist;
+            const float rate = Vector3Dot(plane.normal, ray.direction);
+            if (std::fabs(rate) <= 0.000001f)
+            {
+                if (distance > 0.0f)
+                    return false;   // parallel and outside
+                continue;
+            }
+            const float t = -distance / rate;
+            if (rate < 0.0f)
+            {
+                if (t > tEnter)
+                {
+                    tEnter = t;
+                    enterNormal = plane.normal;
+                    entered = true;
+                }
+            }
+            else if (t < tExit)
+            {
+                tExit = t;
+            }
+            if (tEnter > tExit)
+                return false;
+        }
+
+        if (!entered || tEnter > maxDistance)
+            return false;
+
+        outHit.hit = true;
+        outHit.distance = tEnter;
+        outHit.point = ray.origin + ray.direction * tEnter;
+        outHit.normal = enterNormal;
+        return true;
+    }
+
     static bool RaycastBody(const CollisionBody& body, const Ray& ray, float maxDistance, RaycastHit& outHit)
     {
         RaycastCandidate candidate = {};
@@ -310,6 +433,11 @@ namespace
         else if (body.type == ColliderType::Capsule)
         {
             if (!RayVsCapsule(ray, bodyPosition, body.capsule.radius, body.capsule.halfHeight, maxDistance, candidate))
+                return false;
+        }
+        else if (body.type == ColliderType::Convex)
+        {
+            if (!RayVsConvex(ray, body, bodyPosition, maxDistance, candidate))
                 return false;
         }
         else
@@ -365,6 +493,21 @@ ColliderHandle CollisionWorld::AddCapsule(const Vector3& position, float radius,
     body.isTrigger = isTrigger;
     bodies.push_back(body);
     return body.handle;
+}
+
+ColliderHandle CollisionWorld::AddConvex(const Vector3& position, const std::vector<CollisionPlane>& planes,
+                                         const Vector3& boundsMin, const Vector3& boundsMax, bool isTrigger)
+{
+    CollisionBody body = {};
+    body.handle = nextHandle++;
+    body.type = ColliderType::Convex;
+    body.position = position;
+    body.convex.planes = planes;
+    body.convex.boundsMin = boundsMin;
+    body.convex.boundsMax = boundsMax;
+    body.isTrigger = isTrigger;
+    bodies.push_back(std::move(body));
+    return bodies.back().handle;
 }
 
 bool CollisionWorld::Remove(ColliderHandle handle)
@@ -588,6 +731,25 @@ bool CollisionWorld::OverlapsPair(const CollisionBody& a, const CollisionBody& b
 
     if (a.type == ColliderType::Capsule && b.type == ColliderType::Capsule)
         return CapsuleVsCapsule(aPos, a.capsule.radius, a.capsule.halfHeight, bPos, b.capsule.radius, b.capsule.halfHeight);
+
+    // Convex hulls (map brushes) against the primitive shapes.
+    if (a.type == ColliderType::Convex || b.type == ColliderType::Convex)
+    {
+        if (a.type == ColliderType::Convex && b.type == ColliderType::Convex)
+            return false;   // brush vs brush: both static, never needed
+        const bool aIsHull = a.type == ColliderType::Convex;
+        const CollisionBody& hull = aIsHull ? a : b;
+        const CollisionBody& other = aIsHull ? b : a;
+        const Vector3 hullPos = aIsHull ? aPos : bPos;
+        const Vector3 otherPos = aIsHull ? bPos : aPos;
+        switch (other.type)
+        {
+        case ColliderType::Box:     return ConvexVsBox(hull, hullPos, otherPos, other.box.halfExtents);
+        case ColliderType::Sphere:  return ConvexVsSphere(hull, hullPos, otherPos, other.sphere.radius);
+        case ColliderType::Capsule: return ConvexVsCapsule(hull, hullPos, otherPos, other.capsule.radius, other.capsule.halfHeight);
+        default:                    return false;
+        }
+    }
 
     return false;
 }

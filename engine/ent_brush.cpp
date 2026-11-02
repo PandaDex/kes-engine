@@ -1,0 +1,124 @@
+#include "ent_brush.h"
+#include "collision_world.h"
+#include "entity_property_utils.h"
+#include "game_context.h"
+#include "scene.h"
+
+void BrushEntity::ApplyMapGeometry(const MapEntityGeometry& mapGeometry)
+{
+    geometry = mapGeometry;
+}
+
+void BrushEntity::Start()
+{
+    started = true;
+    if (!game)
+        return;
+
+    if (game->scene)
+    {
+        for (const MapEntityGeometry::Mesh& mesh : geometry.meshes)
+        {
+            SceneObject object = {};
+            object.mesh = mesh.mesh;
+            object.material = mesh.material;
+            object.transform.position = Position;
+            object.transform.scale = { 1.0f, 1.0f, 1.0f };
+            object.active = visible;
+            objectIds.push_back(game->scene->CreateObject(object));
+        }
+    }
+
+    if (game->collision)
+    {
+        for (const MapEntityGeometry::Hull& hull : geometry.hulls)
+        {
+            const ColliderHandle handle = game->collision->AddConvex(Position, hull.planes, hull.boundsMin, hull.boundsMax);
+            if (CollisionBody* body = game->collision->Find(handle))
+                body->active = solid;
+            colliders.push_back(handle);
+        }
+    }
+}
+
+void BrushEntity::Teleport(const Vector3& newPosition)
+{
+    Entity::Teleport(newPosition);
+    SyncTransforms();
+}
+
+bool BrushEntity::ApplyProperty(const std::string& name, const std::string& value)
+{
+    if (name == "Solid")
+    {
+        SetSolid(entityprops::ParseBool(value, solid));
+        return true;
+    }
+    if (name == "Visible")
+    {
+        SetVisible(entityprops::ParseBool(value, visible));
+        return true;
+    }
+    return Entity::ApplyProperty(name, value);
+}
+
+void BrushEntity::SetVisible(bool value)
+{
+    visible = value;
+    if (!started || !game || !game->scene)
+        return;
+    for (uint32_t id : objectIds)
+    {
+        if (SceneObject* object = game->scene->FindObject(id))
+            object->active = visible;
+    }
+}
+
+void BrushEntity::SetSolid(bool value)
+{
+    solid = value;
+    if (!started || !game || !game->collision)
+        return;
+    for (ColliderHandle handle : colliders)
+    {
+        if (CollisionBody* body = game->collision->Find(handle))
+            body->active = solid;
+    }
+}
+
+void BrushEntity::SyncTransforms()
+{
+    if (!started || !game)
+        return;
+    if (game->scene)
+    {
+        for (uint32_t id : objectIds)
+        {
+            if (SceneObject* object = game->scene->FindObject(id))
+                object->transform.position = Position;
+        }
+    }
+    if (game->collision)
+    {
+        for (ColliderHandle handle : colliders)
+            game->collision->SetPosition(handle, Position);
+    }
+}
+
+void BrushEntity::OnDestroy()
+{
+    if (!game)
+        return;
+    if (game->scene)
+    {
+        for (uint32_t id : objectIds)
+            game->scene->RemoveObject(id);
+    }
+    if (game->collision)
+    {
+        for (ColliderHandle handle : colliders)
+            game->collision->Remove(handle);
+    }
+    objectIds.clear();
+    colliders.clear();
+}
