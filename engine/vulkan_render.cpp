@@ -1098,6 +1098,14 @@ static bool CreateDescriptorSetLayouts(Renderer& r)
     texLayoutInfo.pBindings = &texBinding;
     VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &texLayoutInfo, nullptr, &r.texSetLayout), "vkCreateDescriptorSetLayout (tex)", false);
 
+    // set 0 for the UI pipeline: same shape, linear immutable sampler.
+    VkDescriptorSetLayoutBinding uiTexBinding = texBinding;
+    uiTexBinding.pImmutableSamplers = &r.linearSampler;
+    VkDescriptorSetLayoutCreateInfo uiTexLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    uiTexLayoutInfo.bindingCount = 1;
+    uiTexLayoutInfo.pBindings = &uiTexBinding;
+    VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &uiTexLayoutInfo, nullptr, &r.uiTexSetLayout), "vkCreateDescriptorSetLayout (ui tex)", false);
+
     // set 0 for the sky pipeline: SkyCB only.
     VkDescriptorSetLayoutBinding skyBinding = {};
     skyBinding.binding = 0;
@@ -1131,6 +1139,17 @@ static bool CreatePipelineLayouts(Renderer& r)
     blitLayoutInfo.pSetLayouts = &r.texSetLayout;
     VK_CHECK_RET(vkCreatePipelineLayout(r.device, &blitLayoutInfo, nullptr, &r.blitPipelineLayout), "vkCreatePipelineLayout (blit)", false);
 
+    VkPushConstantRange uiPushRange = {};
+    uiPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uiPushRange.offset = 0;
+    uiPushRange.size = sizeof(float) * 4;   // ui.slang UiConstants
+    VkPipelineLayoutCreateInfo uiLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    uiLayoutInfo.setLayoutCount = 1;
+    uiLayoutInfo.pSetLayouts = &r.uiTexSetLayout;
+    uiLayoutInfo.pushConstantRangeCount = 1;
+    uiLayoutInfo.pPushConstantRanges = &uiPushRange;
+    VK_CHECK_RET(vkCreatePipelineLayout(r.device, &uiLayoutInfo, nullptr, &r.uiPipelineLayout), "vkCreatePipelineLayout (ui)", false);
+
     return true;
 }
 
@@ -1157,12 +1176,15 @@ static bool CreateDescriptorPool(Renderer& r)
     return true;
 }
 
-static VkDescriptorSet AllocateTextureDescriptorSet(Renderer& r, VkImageView view)
+static VkDescriptorSet AllocateTextureDescriptorSet(Renderer& r, VkImageView view, VkDescriptorSetLayout layout = VK_NULL_HANDLE)
 {
+    if (!layout)
+        layout = r.texSetLayout;
+
     VkDescriptorSetAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     allocInfo.descriptorPool = r.descriptorPool;
     allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &r.texSetLayout;
+    allocInfo.pSetLayouts = &layout;
 
     VkDescriptorSet set = VK_NULL_HANDLE;
     if (vkAllocateDescriptorSets(r.device, &allocInfo, &set) != VK_SUCCESS)
@@ -1174,7 +1196,7 @@ static VkDescriptorSet AllocateTextureDescriptorSet(Renderer& r, VkImageView vie
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     imageInfo.imageView = view;
-    imageInfo.sampler = r.pointSampler; // ignored (immutable sampler), set for clarity/validation
+    imageInfo.sampler = layout == r.uiTexSetLayout ? r.linearSampler : r.pointSampler; // ignored (immutable sampler), set for clarity/validation
 
     VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     write.dstSet = set;
@@ -1357,6 +1379,12 @@ static bool CreateSampler(Renderer& r)
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
 
     VK_CHECK_RET(vkCreateSampler(r.device, &samplerInfo, nullptr, &r.pointSampler), "vkCreateSampler", false);
+
+    // UI images and transformed text (ui.slang) use bilinear filtering.
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    VK_CHECK_RET(vkCreateSampler(r.device, &samplerInfo, nullptr, &r.linearSampler), "vkCreateSampler (linear)", false);
     return true;
 }
 
@@ -1773,6 +1801,98 @@ static bool CreateBlitPipeline(Renderer& r)
     // Matches the D3D11 overlay draw: solidRS, opaque blend, no depth buffer bound.
     r.blitPipeline = CreateFullscreenTrianglePipeline(r, r.blitVS, r.blitPS, r.blitPipelineLayout, r.backbufferRenderPass, /*depthTestReadOnly=*/false, /*hasDepthAttachment=*/false);
     return r.blitPipeline != VK_NULL_HANDLE;
+}
+
+// UI pipeline (ui.slang): UiVertex input, premultiplied alpha, dynamic scissor.
+static bool CreateUiPipeline(Renderer& r)
+{
+    r.uiVS = CreateShaderModuleFromBinary(r, kEngineShaderUi, ShaderStage::Vertex);
+    if (!r.uiVS)
+        return false;
+    r.uiPS = CreateShaderModuleFromBinary(r, kEngineShaderUi, ShaderStage::Pixel);
+    if (!r.uiPS)
+        return false;
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = r.uiVS;
+    stages[0].pName = "main";
+    stages[1] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = r.uiPS;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription binding = {};
+    binding.binding = 0;
+    binding.stride = sizeof(UiVertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attributes[3] = {};
+    attributes[0] = { 0, 0, VK_FORMAT_R32G32_SFLOAT, static_cast<uint32_t>(offsetof(UiVertex, x)) };
+    attributes[1] = { 1, 0, VK_FORMAT_R8G8B8A8_UNORM, static_cast<uint32_t>(offsetof(UiVertex, color)) };
+    attributes[2] = { 2, 0, VK_FORMAT_R32G32_SFLOAT, static_cast<uint32_t>(offsetof(UiVertex, u)) };
+
+    VkPipelineVertexInputStateCreateInfo vertexInput = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.pVertexAttributeDescriptions = attributes;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisample = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+
+    VkPipelineColorBlendAttachmentState blendAttachment = {};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendAttachment.blendEnable = VK_TRUE;
+    blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo colorBlend = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments = &blendAttachment;
+
+    const VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicState = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisample;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = r.uiPipelineLayout;
+    pipelineInfo.renderPass = r.backbufferRenderPass;
+    pipelineInfo.subpass = 0;
+
+    VK_CHECK_RET(vkCreateGraphicsPipelines(r.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &r.uiPipeline), "vkCreateGraphicsPipelines (ui)", false);
+    return true;
 }
 
 static bool CreateConstantBuffers(Renderer& r)
@@ -2228,6 +2348,7 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
     if (!CreateMeshDefaultProgram(r)) { RendererShutdown(r); return false; }
     if (!CreateSkyPipeline(r)) { RendererShutdown(r); return false; }
     if (!CreateBlitPipeline(r)) { RendererShutdown(r); return false; }
+    if (!CreateUiPipeline(r)) { RendererShutdown(r); return false; }
 
     if (!CreateConstantBuffers(r)) { RendererShutdown(r); return false; }
     if (!CreateCommandObjects(r)) { RendererShutdown(r); return false; }
@@ -2239,6 +2360,8 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
     TracyVkContextName(r.gpuProfiler, "Vulkan", 6);
 #endif
     if (!CreateWhiteTexture(r)) { RendererShutdown(r); return false; }
+    r.uiWhiteDescriptorSet = AllocateTextureDescriptorSet(r, r.whiteTexture.view, r.uiTexSetLayout);
+    if (!r.uiWhiteDescriptorSet) { RendererShutdown(r); return false; }
 
     EngineLogf("Renderer initialized successfully (Vulkan). window=%dx%d render=%dx%d.", r.windowWidth, r.windowHeight, r.renderWidth, r.renderHeight);
     return true;
@@ -2529,6 +2652,21 @@ static void BeginFrameIfNeeded(Renderer& r)
         }
     }
     vkResetFences(r.device, 1, &frame.inFlightFence);
+
+    // The fence wait above means every frame before frameNumber - (kMaxFramesInFlight - 1)
+    // has finished on the GPU, so UI textures released by then are unused.
+    if (!r.retiredUiTextures.empty())
+    {
+        auto finished = [&r](const RetiredUiTexture& retired)
+        { return retired.lastUsableFrame + kMaxFramesInFlight <= r.frameNumber; };
+        for (RetiredUiTexture& retired : r.retiredUiTextures)
+        {
+            if (finished(retired))
+                DestroyGPUTexture(r, retired.texture);
+        }
+        r.retiredUiTextures.erase(std::remove_if(r.retiredUiTextures.begin(), r.retiredUiTextures.end(), finished),
+                                  r.retiredUiTextures.end());
+    }
 
     r.commandBuffer = frame.commandBuffer;
     r.uboDescriptorSet = frame.uboDescriptorSet;
@@ -2882,13 +3020,166 @@ void RendererBeginBackbufferOverlay(Renderer& r)
     vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.blitPipelineLayout, 0, 1, &r.offscreenColorDescriptorSet, 0, nullptr);
     vkCmdDraw(r.commandBuffer, 3, 1, 0, 0);
 
-    vkCmdEndRenderPass(r.commandBuffer);
+    // Left open for RendererRenderUi; RendererPresent ends it.
+    r.backbufferPassOpen = true;
+}
+
+static bool EnsureStreamBuffer(Renderer& r, GPUStreamBuffer& stream, VkDeviceSize requiredSize, VkBufferUsageFlags usage)
+{
+    if (stream.buffer && stream.size >= requiredSize)
+        return true;
+
+    // Only this frame's copy is replaced; the GPU finished with it before
+    // BeginFrameIfNeeded's fence wait returned.
+    if (stream.mapped)
+        vkUnmapMemory(r.device, stream.memory);
+    stream.mapped = nullptr;
+    DestroyBuffer(r, stream.buffer, stream.memory);
+
+    VkDeviceSize size = std::max<VkDeviceSize>(stream.size * 2, 64 * 1024);
+    while (size < requiredSize)
+        size *= 2;
+    stream.size = 0;
+
+    if (!CreateBuffer(r, size, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stream.buffer, stream.memory))
+        return false;
+    if (vkMapMemory(r.device, stream.memory, 0, size, 0, &stream.mapped) != VK_SUCCESS)
+    {
+        stream.mapped = nullptr;
+        DestroyBuffer(r, stream.buffer, stream.memory);
+        return false;
+    }
+    stream.size = size;
+    return true;
+}
+
+static void DestroyStreamBuffer(Renderer& r, GPUStreamBuffer& stream)
+{
+    if (stream.mapped)
+        vkUnmapMemory(r.device, stream.memory);
+    stream.mapped = nullptr;
+    DestroyBuffer(r, stream.buffer, stream.memory);
+    stream.size = 0;
+}
+
+UiTextureHandle RendererCreateUiTexture(Renderer& r, int width, int height, const uint8_t* rgbaPixels)
+{
+    KES_ZONE_FN(RENDER);
+    if (!r.device || width <= 0 || height <= 0 || !rgbaPixels)
+        return 0;
+
+    GPUTexture texture = {};
+    const uint32_t w = static_cast<uint32_t>(width);
+    const uint32_t h = static_cast<uint32_t>(height);
+    bool ok = CreateImage2D(r, w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+                            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                            texture.image, texture.memory);
+    ok = ok && UploadPixelsToImage(r, texture.image, w, h, rgbaPixels, static_cast<VkDeviceSize>(w) * h * 4u);
+    if (ok)
+        texture.view = CreateImageView2D(r, texture.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
+    if (texture.view)
+        texture.descriptorSet = AllocateTextureDescriptorSet(r, texture.view, r.uiTexSetLayout);
+    if (!texture.descriptorSet)
+    {
+        EngineLogf("UI texture creation failed (%dx%d).", width, height);
+        DestroyGPUTexture(r, texture);
+        return 0;
+    }
+
+    const UiTextureHandle handle = r.nextUiTextureHandle++;
+    r.uiTextures.emplace(handle, texture);
+    return handle;
+}
+
+void RendererDestroyUiTexture(Renderer& r, UiTextureHandle handle)
+{
+    auto it = r.uiTextures.find(handle);
+    if (it == r.uiTextures.end())
+        return;
+    r.retiredUiTextures.push_back({ it->second, r.frameNumber });
+    r.uiTextures.erase(it);
+}
+
+void RendererRenderUi(Renderer& r, const UiDrawList& drawList)
+{
+    if (!r.backbufferPassOpen || drawList.Empty() || drawList.vertices.empty() || drawList.indices.empty())
+        return;
+
+    KES_ZONE_FN(RENDER);
+    KES_VK_GPU_ZONE(r, "UI");
+
+    FrameResources& frame = r.frames[r.frameIndex];
+    const VkDeviceSize vertexBytes = drawList.vertices.size() * sizeof(UiVertex);
+    const VkDeviceSize indexBytes = drawList.indices.size() * sizeof(uint32_t);
+    if (!EnsureStreamBuffer(r, frame.uiVertices, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+        !EnsureStreamBuffer(r, frame.uiIndices, indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT))
+        return;
+    std::memcpy(frame.uiVertices.mapped, drawList.vertices.data(), static_cast<size_t>(vertexBytes));
+    std::memcpy(frame.uiIndices.mapped, drawList.indices.data(), static_cast<size_t>(indexBytes));
+
+    const VkExtent2D extent = r.swapchainExtent;
+    VkViewport viewport = {};
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
+
+    vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.uiPipeline);
+    const VkDeviceSize vertexOffset = 0;
+    vkCmdBindVertexBuffers(r.commandBuffer, 0, 1, &frame.uiVertices.buffer, &vertexOffset);
+    vkCmdBindIndexBuffer(r.commandBuffer, frame.uiIndices.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // Pixels -> clip space; Vulkan clip Y points down like UI coordinates.
+    const float scaleOffset[4] = { 2.0f / viewport.width, 2.0f / viewport.height, -1.0f, -1.0f };
+    vkCmdPushConstants(r.commandBuffer, r.uiPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(scaleOffset), scaleOffset);
+
+    VkDescriptorSet boundSet = VK_NULL_HANDLE;
+    for (const UiDrawCommand& command : drawList.commands)
+    {
+        if (command.indexCount == 0)
+            continue;
+
+        VkRect2D scissor = { { 0, 0 }, extent };
+        if (command.scissorEnabled)
+        {
+            const int x0 = std::clamp(command.scissor.x, 0, static_cast<int>(extent.width));
+            const int y0 = std::clamp(command.scissor.y, 0, static_cast<int>(extent.height));
+            const int x1 = std::clamp(command.scissor.x + command.scissor.width, x0, static_cast<int>(extent.width));
+            const int y1 = std::clamp(command.scissor.y + command.scissor.height, y0, static_cast<int>(extent.height));
+            if (x1 <= x0 || y1 <= y0)
+                continue;
+            scissor.offset = { x0, y0 };
+            scissor.extent = { static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0) };
+        }
+        vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
+
+        VkDescriptorSet set = r.uiWhiteDescriptorSet;
+        if (command.texture != 0)
+        {
+            auto it = r.uiTextures.find(command.texture);
+            if (it != r.uiTextures.end())
+                set = it->second.descriptorSet;
+        }
+        if (set != boundSet)
+        {
+            vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.uiPipelineLayout, 0, 1, &set, 0, nullptr);
+            boundSet = set;
+        }
+
+        vkCmdDrawIndexed(r.commandBuffer, command.indexCount, 1, command.firstIndex, 0, 0);
+    }
 }
 
 void RendererPresent(Renderer& r)
 {
     if (!r.frameActive)
         return;
+
+    if (r.backbufferPassOpen)
+    {
+        vkCmdEndRenderPass(r.commandBuffer);
+        r.backbufferPassOpen = false;
+    }
 
     vkEndCommandBuffer(r.commandBuffer);
 
@@ -2934,6 +3225,7 @@ void RendererPresent(Renderer& r)
     r.frameActive = false;
     r.haveSwapchainImage = false;
     r.frameIndex = (r.frameIndex + 1) % kMaxFramesInFlight;
+    ++r.frameNumber;
 }
 
 void RendererRender(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
@@ -2956,9 +3248,27 @@ void RendererShutdown(Renderer& r)
     }
 #endif
 
+    for (auto& [handle, texture] : r.uiTextures)
+        DestroyGPUTexture(r, texture);
+    r.uiTextures.clear();
+    for (RetiredUiTexture& retired : r.retiredUiTextures)
+        DestroyGPUTexture(r, retired.texture);
+    r.retiredUiTextures.clear();
+    if (r.uiWhiteDescriptorSet)
+    {
+        vkFreeDescriptorSets(r.device, r.descriptorPool, 1, &r.uiWhiteDescriptorSet);
+        r.uiWhiteDescriptorSet = VK_NULL_HANDLE;
+    }
+
     DestroyGPUTexture(r, r.whiteTexture);
     DestroyRendererAssetCaches(r);
     r.assetGeneration = 0;
+
+    for (FrameResources& frame : r.frames)
+    {
+        DestroyStreamBuffer(r, frame.uiVertices);
+        DestroyStreamBuffer(r, frame.uiIndices);
+    }
 
     for (FrameResources& frame : r.frames)
     {
@@ -2987,6 +3297,10 @@ void RendererShutdown(Renderer& r)
         DestroyBuffer(r, frame.skyCB, frame.skyCBMemory);
     }
 
+    if (r.uiPipeline) { vkDestroyPipeline(r.device, r.uiPipeline, nullptr); r.uiPipeline = VK_NULL_HANDLE; }
+    if (r.uiPS) { vkDestroyShaderModule(r.device, r.uiPS, nullptr); r.uiPS = VK_NULL_HANDLE; }
+    if (r.uiVS) { vkDestroyShaderModule(r.device, r.uiVS, nullptr); r.uiVS = VK_NULL_HANDLE; }
+
     if (r.blitPipeline) { vkDestroyPipeline(r.device, r.blitPipeline, nullptr); r.blitPipeline = VK_NULL_HANDLE; }
     if (r.blitPS) { vkDestroyShaderModule(r.device, r.blitPS, nullptr); r.blitPS = VK_NULL_HANDLE; }
     if (r.blitVS) { vkDestroyShaderModule(r.device, r.blitVS, nullptr); r.blitVS = VK_NULL_HANDLE; }
@@ -3008,11 +3322,14 @@ void RendererShutdown(Renderer& r)
     if (r.meshPipelineLayout) { vkDestroyPipelineLayout(r.device, r.meshPipelineLayout, nullptr); r.meshPipelineLayout = VK_NULL_HANDLE; }
     if (r.skyPipelineLayout) { vkDestroyPipelineLayout(r.device, r.skyPipelineLayout, nullptr); r.skyPipelineLayout = VK_NULL_HANDLE; }
     if (r.blitPipelineLayout) { vkDestroyPipelineLayout(r.device, r.blitPipelineLayout, nullptr); r.blitPipelineLayout = VK_NULL_HANDLE; }
+    if (r.uiPipelineLayout) { vkDestroyPipelineLayout(r.device, r.uiPipelineLayout, nullptr); r.uiPipelineLayout = VK_NULL_HANDLE; }
+    if (r.uiTexSetLayout) { vkDestroyDescriptorSetLayout(r.device, r.uiTexSetLayout, nullptr); r.uiTexSetLayout = VK_NULL_HANDLE; }
     if (r.uboSetLayout) { vkDestroyDescriptorSetLayout(r.device, r.uboSetLayout, nullptr); r.uboSetLayout = VK_NULL_HANDLE; }
     if (r.texSetLayout) { vkDestroyDescriptorSetLayout(r.device, r.texSetLayout, nullptr); r.texSetLayout = VK_NULL_HANDLE; }
     if (r.skySetLayout) { vkDestroyDescriptorSetLayout(r.device, r.skySetLayout, nullptr); r.skySetLayout = VK_NULL_HANDLE; }
 
     if (r.pointSampler) { vkDestroySampler(r.device, r.pointSampler, nullptr); r.pointSampler = VK_NULL_HANDLE; }
+    if (r.linearSampler) { vkDestroySampler(r.device, r.linearSampler, nullptr); r.linearSampler = VK_NULL_HANDLE; }
 
     if (r.device) { vkDestroyDevice(r.device, nullptr); r.device = VK_NULL_HANDLE; }
 
@@ -3072,6 +3389,14 @@ namespace
         }
 
         void BeginBackbufferOverlay() override { kes::vk::RendererBeginBackbufferOverlay(m_state); }
+
+        UiTextureHandle CreateUiTexture(int width, int height, const uint8_t* rgbaPixels) override
+        {
+            return kes::vk::RendererCreateUiTexture(m_state, width, height, rgbaPixels);
+        }
+        void DestroyUiTexture(UiTextureHandle texture) override { kes::vk::RendererDestroyUiTexture(m_state, texture); }
+        void RenderUi(const UiDrawList& drawList) override { kes::vk::RendererRenderUi(m_state, drawList); }
+
         void Present() override { kes::vk::RendererPresent(m_state); }
 
     private:

@@ -271,15 +271,25 @@ static const D3D11_INPUT_ELEMENT_DESC kMeshInputLayout[] = {
     { "BLENDWEIGHT",  0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 56, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 };
 
+// ui.slang UiVertexInput, matches UiVertex (render_backend.h).
+static const D3D11_INPUT_ELEMENT_DESC kUiInputLayout[] = {
+    { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,   0, 0,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 8,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,   0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+};
+
 // Creates a VS/PS pair from precompiled DXBC. When outLayout is non-null the
-// mesh input layout is created against the vertex shader's signature.
+// input layout (mesh layout by default) is created against the vertex
+// shader's signature.
 static bool CreateShaderPairFromBinaries(
     Renderer& r,
     const std::string& vsSource,
     const std::string& psSource,
     ID3D11VertexShader** outVS,
     ID3D11PixelShader** outPS,
-    ID3D11InputLayout** outLayout)
+    ID3D11InputLayout** outLayout,
+    const D3D11_INPUT_ELEMENT_DESC* layoutElements = kMeshInputLayout,
+    UINT layoutElementCount = ARRAYSIZE(kMeshInputLayout))
 {
     std::vector<uint8_t> vsBytes;
     std::vector<uint8_t> psBytes;
@@ -308,7 +318,7 @@ static bool CreateShaderPairFromBinaries(
 
     if (outLayout)
     {
-        hr = r.device->CreateInputLayout(kMeshInputLayout, ARRAYSIZE(kMeshInputLayout), vsBytes.data(), vsBytes.size(), outLayout);
+        hr = r.device->CreateInputLayout(layoutElements, layoutElementCount, vsBytes.data(), vsBytes.size(), outLayout);
         if (FAILED(hr))
         {
             EngineLogf("CreateInputLayout failed for %s: 0x%08X", vsSource.c_str(), static_cast<unsigned>(hr));
@@ -702,6 +712,104 @@ static bool CreateBlitPipeline(Renderer& r)
     return CreateShaderPairFromBinaries(r, kEngineShaderBlit, kEngineShaderBlit, &r.blitVS, &r.blitPS, nullptr);
 }
 
+static bool CreateUiPipeline(Renderer& r)
+{
+    if (!CreateShaderPairFromBinaries(r, kEngineShaderUi, kEngineShaderUi, &r.uiVS, &r.uiPS, &r.uiLayout,
+                                      kUiInputLayout, ARRAYSIZE(kUiInputLayout)))
+        return false;
+
+    D3D11_BUFFER_DESC cbDesc = {};
+    cbDesc.ByteWidth = 16;   // float4 scaleOffset
+    cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    HRESULT hr = r.device->CreateBuffer(&cbDesc, nullptr, &r.uiCB);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create UI constant buffer failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+
+    D3D11_BLEND_DESC blend = {};
+    blend.RenderTarget[0].BlendEnable = TRUE;
+    blend.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+    blend.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    blend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    blend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    hr = r.device->CreateBlendState(&blend, &r.uiBlendState);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create UI blend state failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+
+    D3D11_RASTERIZER_DESC raster = {};
+    raster.FillMode = D3D11_FILL_SOLID;
+    raster.CullMode = D3D11_CULL_NONE;
+    raster.DepthClipEnable = TRUE;
+    raster.ScissorEnable = TRUE;
+    hr = r.device->CreateRasterizerState(&raster, &r.uiRS);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create UI rasterizer state failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+
+    D3D11_SAMPLER_DESC samp = {};
+    samp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    samp.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samp.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samp.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samp.MaxLOD = D3D11_FLOAT32_MAX;
+    hr = r.device->CreateSamplerState(&samp, &r.linearSampler);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create UI sampler failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+    return true;
+}
+
+// Dynamic buffer holding at least `required` elements of `stride` bytes.
+static bool EnsureUiBuffer(Renderer& r, ID3D11Buffer*& buffer, UINT& capacity, size_t required, UINT stride, UINT bindFlags)
+{
+    if (buffer && capacity >= required)
+        return true;
+
+    SafeRelease(buffer);
+    capacity = 0;
+    UINT newCapacity = 4096;
+    while (newCapacity < required)
+        newCapacity *= 2;
+
+    D3D11_BUFFER_DESC desc = {};
+    desc.ByteWidth = newCapacity * stride;
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = bindFlags;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    const HRESULT hr = r.device->CreateBuffer(&desc, nullptr, &buffer);
+    if (FAILED(hr))
+    {
+        EngineLogf("Create UI buffer failed: 0x%08X", static_cast<unsigned>(hr));
+        return false;
+    }
+    capacity = newCapacity;
+    return true;
+}
+
+static bool UploadDynamic(Renderer& r, ID3D11Buffer* buffer, const void* data, size_t bytes)
+{
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    if (FAILED(r.context->Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+        return false;
+    std::memcpy(mapped.pData, data, bytes);
+    r.context->Unmap(buffer, 0);
+    return true;
+}
+
 static bool CreateConstantBuffers(Renderer& r)
 {
     D3D11_BUFFER_DESC cb = {};
@@ -822,6 +930,11 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
         return false;
     }
 
+    if (!CreateUiPipeline(r))
+    {
+        RendererShutdown(r);
+        return false;
+    }
     if (!CreateBlitPipeline(r))
     {
         RendererShutdown(r);
@@ -1716,6 +1829,136 @@ void RendererBeginBackbufferOverlay(Renderer& r)
     r.context->PSSetShaderResources(0, 1, &nullSRV);
 }
 
+UiTextureHandle RendererCreateUiTexture(Renderer& r, int width, int height, const uint8_t* rgbaPixels)
+{
+    KES_ZONE_FN(RENDER);
+    if (!r.device || width <= 0 || height <= 0 || !rgbaPixels)
+        return 0;
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = static_cast<UINT>(width);
+    desc.Height = static_cast<UINT>(height);
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA init = {};
+    init.pSysMem = rgbaPixels;
+    init.SysMemPitch = static_cast<UINT>(width) * 4u;
+
+    GPUTexture texture = {};
+    HRESULT hr = r.device->CreateTexture2D(&desc, &init, &texture.texture);
+    if (SUCCEEDED(hr))
+        hr = r.device->CreateShaderResourceView(texture.texture, nullptr, &texture.srv);
+    if (FAILED(hr))
+    {
+        EngineLogf("UI texture creation failed (%dx%d): 0x%08X", width, height, static_cast<unsigned>(hr));
+        DestroyGPUTexture(texture);
+        return 0;
+    }
+
+    const UiTextureHandle handle = r.nextUiTextureHandle++;
+    r.uiTextures.emplace(handle, texture);
+    return handle;
+}
+
+void RendererDestroyUiTexture(Renderer& r, UiTextureHandle handle)
+{
+    // The driver keeps resources alive while queued GPU work still uses them.
+    auto it = r.uiTextures.find(handle);
+    if (it == r.uiTextures.end())
+        return;
+    DestroyGPUTexture(it->second);
+    r.uiTextures.erase(it);
+}
+
+void RendererRenderUi(Renderer& r, const UiDrawList& drawList)
+{
+    if (!r.rtv || drawList.Empty() || drawList.vertices.empty() || drawList.indices.empty())
+        return;
+
+    KES_ZONE_FN(RENDER);
+    KES_D3D11_GPU_ZONE(r, "UI");
+
+    if (!EnsureUiBuffer(r, r.uiVertexBuffer, r.uiVertexCapacity, drawList.vertices.size(), sizeof(UiVertex), D3D11_BIND_VERTEX_BUFFER) ||
+        !EnsureUiBuffer(r, r.uiIndexBuffer, r.uiIndexCapacity, drawList.indices.size(), sizeof(uint32_t), D3D11_BIND_INDEX_BUFFER))
+        return;
+    if (!UploadDynamic(r, r.uiVertexBuffer, drawList.vertices.data(), drawList.vertices.size() * sizeof(UiVertex)) ||
+        !UploadDynamic(r, r.uiIndexBuffer, drawList.indices.data(), drawList.indices.size() * sizeof(uint32_t)))
+        return;
+
+    // Pixels -> clip space; D3D clip Y points up, UI coordinates point down.
+    const float width = static_cast<float>(r.windowWidth);
+    const float height = static_cast<float>(r.windowHeight);
+    const float scaleOffset[4] = { 2.0f / width, -2.0f / height, -1.0f, 1.0f };
+    if (!UploadDynamic(r, r.uiCB, scaleOffset, sizeof(scaleOffset)))
+        return;
+
+    r.context->OMSetRenderTargets(1, &r.rtv, nullptr);
+    D3D11_VIEWPORT vp = {};
+    vp.Width = width;
+    vp.Height = height;
+    vp.MaxDepth = 1.0f;
+    r.context->RSSetViewports(1, &vp);
+    r.context->RSSetState(r.uiRS);
+    const float blendFactor[4] = { 0, 0, 0, 0 };
+    r.context->OMSetBlendState(r.uiBlendState, blendFactor, 0xFFFFFFFF);
+    r.context->OMSetDepthStencilState(nullptr, 0);
+
+    const UINT stride = sizeof(UiVertex);
+    const UINT offset = 0;
+    r.context->IASetInputLayout(r.uiLayout);
+    r.context->IASetVertexBuffers(0, 1, &r.uiVertexBuffer, &stride, &offset);
+    r.context->IASetIndexBuffer(r.uiIndexBuffer, DXGI_FORMAT_R32_UINT, 0);
+    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    r.context->VSSetShader(r.uiVS, nullptr, 0);
+    r.context->VSSetConstantBuffers(0, 1, &r.uiCB);
+    r.context->PSSetShader(r.uiPS, nullptr, 0);
+    r.context->PSSetSamplers(0, 1, &r.linearSampler);
+
+    const LONG maxX = static_cast<LONG>(r.windowWidth);
+    const LONG maxY = static_cast<LONG>(r.windowHeight);
+    ID3D11ShaderResourceView* boundSRV = nullptr;
+    for (const UiDrawCommand& command : drawList.commands)
+    {
+        if (command.indexCount == 0)
+            continue;
+
+        D3D11_RECT scissor = { 0, 0, maxX, maxY };
+        if (command.scissorEnabled)
+        {
+            scissor.left = std::clamp<LONG>(command.scissor.x, 0, maxX);
+            scissor.top = std::clamp<LONG>(command.scissor.y, 0, maxY);
+            scissor.right = std::clamp<LONG>(command.scissor.x + command.scissor.width, scissor.left, maxX);
+            scissor.bottom = std::clamp<LONG>(command.scissor.y + command.scissor.height, scissor.top, maxY);
+            if (scissor.right <= scissor.left || scissor.bottom <= scissor.top)
+                continue;
+        }
+        r.context->RSSetScissorRects(1, &scissor);
+
+        ID3D11ShaderResourceView* srv = r.whiteTexture.srv;
+        if (command.texture != 0)
+        {
+            auto it = r.uiTextures.find(command.texture);
+            if (it != r.uiTextures.end())
+                srv = it->second.srv;
+        }
+        if (srv != boundSRV)
+        {
+            r.context->PSSetShaderResources(0, 1, &srv);
+            boundSRV = srv;
+        }
+
+        r.context->DrawIndexed(command.indexCount, command.firstIndex, 0);
+    }
+
+    ID3D11ShaderResourceView* nullSRV = nullptr;
+    r.context->PSSetShaderResources(0, 1, &nullSRV);
+}
+
 void RendererPresent(Renderer& r)
 {
     // Vsync off: present immediately; ALLOW_TEARING lets flip-model swapchains
@@ -1751,6 +1994,21 @@ void RendererShutdown(Renderer& r)
         r.gpuProfiler = nullptr;
     }
 #endif
+
+    for (auto& [handle, texture] : r.uiTextures)
+        DestroyGPUTexture(texture);
+    r.uiTextures.clear();
+    SafeRelease(r.linearSampler);
+    SafeRelease(r.uiRS);
+    SafeRelease(r.uiBlendState);
+    SafeRelease(r.uiIndexBuffer);
+    SafeRelease(r.uiVertexBuffer);
+    r.uiIndexCapacity = 0;
+    r.uiVertexCapacity = 0;
+    SafeRelease(r.uiCB);
+    SafeRelease(r.uiLayout);
+    SafeRelease(r.uiPS);
+    SafeRelease(r.uiVS);
 
     DestroyGPUTexture(r.whiteTexture);
     DestroyRendererAssetCaches(r);
@@ -1828,6 +2086,14 @@ namespace
         }
 
         void BeginBackbufferOverlay() override { kes::d3d11::RendererBeginBackbufferOverlay(m_state); }
+
+        UiTextureHandle CreateUiTexture(int width, int height, const uint8_t* rgbaPixels) override
+        {
+            return kes::d3d11::RendererCreateUiTexture(m_state, width, height, rgbaPixels);
+        }
+        void DestroyUiTexture(UiTextureHandle texture) override { kes::d3d11::RendererDestroyUiTexture(m_state, texture); }
+        void RenderUi(const UiDrawList& drawList) override { kes::d3d11::RendererRenderUi(m_state, drawList); }
+
         void Present() override { kes::d3d11::RendererPresent(m_state); }
 
     private:

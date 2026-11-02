@@ -37,6 +37,7 @@ Each category is a separate preprocessor define (`KES_PROFILE_RENDER=0/1`, ...) 
 | `ASSETS` | asset loads (models, meshes, textures, materials, shaders, sounds, clips, maps), tagged with the path |
 | `AUDIO` | audio update, mixing, clip loading |
 | `IO` | pak mounting, asset file reads, log writes |
+| `UI` | RmlUi event handling, layout/update, draw list building |
 
 `ENTITIES` adds one zone per entity per frame. Turn it off (`-DKES_PROFILE_ENTITIES=OFF`) when a map has thousands of entities.
 
@@ -78,7 +79,7 @@ void MyThing::Update(float dt)
 ```
 
 Only one `KES_ZONE` per C++ scope. Open a `{ }` block for the next one.
-Category arguments are bare names: `CORE`, `INPUT`, `WINDOW`, `RENDER`, `GPU`, `WORLD`, `ENTITIES`, `PHYSICS`, `ASSETS`, `AUDIO`, `IO`.
+Category arguments are bare names: `CORE`, `INPUT`, `WINDOW`, `RENDER`, `GPU`, `WORLD`, `ENTITIES`, `PHYSICS`, `ASSETS`, `AUDIO`, `IO`, `UI`.
 
 Other macros: `KES_PROFILE_FRAME()` (the engine already calls it once per tick), `KES_PROFILE_MESSAGE(txt, len)`, `KES_PROFILE_MESSAGE_L("literal")`, `KES_PROFILE_THREAD_NAME("name")`, `KES_PROFILE_IS_CONNECTED()`.
 

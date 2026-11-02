@@ -1,0 +1,64 @@
+/* Example game UI styles (hud.rml, pause_menu.rml). */
+
+/* HUD: full-screen, transparent; empty areas don't block game clicks. */
+#hud-stats
+{
+    position: absolute;
+    top: 12dp;
+    left: 12dp;
+    font-size: 14dp;
+    color: #ffffffd0;
+    font-effect: shadow(1dp 1dp #000000c0);
+}
+
+#hud-hint
+{
+    position: absolute;
+    right: 12dp;
+    bottom: 12dp;
+    font-size: 13dp;
+    color: #ffffff90;
+    font-effect: shadow(1dp 1dp #000000c0);
+}
+
+/* Pause menu */
+body.menu
+{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #000000a0;
+}
+
+.panel
+{
+    display: flex;
+    flex-direction: column;
+    width: 320dp;
+    padding: 24dp;
+    background-color: #1b1e26f0;
+    border: 1dp #5a6070;
+    border-radius: 6dp;
+}
+
+.panel h1
+{
+    margin: 0 0 8dp 0;
+    text-align: center;
+    color: #e0a040;
+}
+
+.panel button
+{
+    display: block;
+    margin-top: 10dp;
+    padding: 10dp 14dp;
+}
+
+.panel .footer
+{
+    margin-top: 16dp;
+    font-size: 12dp;
+    text-align: center;
+    color: #ffffff70;
+}

@@ -10,6 +10,7 @@
 #include "entity.h"
 #include "input.h"
 #include "shared.h"
+#include "ui_system.h"
 #include "window.h"
 #include "world.h"
 #include "platform/platform.h"
@@ -19,6 +20,7 @@
 //   GameAndUI  cursor visible and free, game still gets keyboard/gamepad/buttons, no mouse look
 //   UIOnly     cursor visible, game input actions read as idle (menus)
 // The cursor is always released while the window is unfocused or minimized.
+// The UI (app.ui) receives mouse and keyboard input in GameAndUI and UIOnly.
 enum class InputMode
 {
     GameOnly,
@@ -32,6 +34,7 @@ struct EngineApp
     AppWindow window = {};
     InputState input = {};
     std::unique_ptr<IRenderer> renderer;   // active backend, created in EngineStart
+    UiSystem ui;                           // HTML/CSS UI (ui_system.h), drawn over the scene
     Camera camera = {};
     SceneState sceneState = {};
     Platform* platform = nullptr;
@@ -75,6 +78,9 @@ void EngineSetWindowTitle(EngineApp& app, const char* title);
 void EngineToggleFullscreen(EngineApp& app);
 
 GameSettings& EngineGetGameSettings(EngineApp& app);
+
+// HTML/CSS UI: load documents, register onclick actions, data models...
+UiSystem& EngineGetUi(EngineApp& app);
 
 // Use a game specific GameSettings subclass. Call before EngineStart.
 template<typename T>

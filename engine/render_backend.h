@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -18,6 +19,54 @@ struct SceneState
     bool wireframe = false;
     bool vertexSnap = true;
     bool animDebug = false;
+};
+
+// 2D UI geometry for one frame, built by the UI system (ui_system.h) and
+// drawn by the renderer on top of the backbuffer. Positions are backbuffer
+// pixels with the origin top-left; colors and textures use premultiplied alpha.
+struct UiVertex
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    uint8_t color[4] = {255, 255, 255, 255};   // RGBA8, premultiplied
+    float u = 0.0f;
+    float v = 0.0f;
+};
+static_assert(sizeof(UiVertex) == 20, "UiVertex must match the ui.slang vertex input");
+
+// 0 = no texture (draws with a white texture)
+using UiTextureHandle = uint64_t;
+
+struct UiScissorRect
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+struct UiDrawCommand
+{
+    UiTextureHandle texture = 0;
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = 0;
+    bool scissorEnabled = false;
+    UiScissorRect scissor = {};   // backbuffer pixels, used when scissorEnabled
+};
+
+struct UiDrawList
+{
+    std::vector<UiVertex> vertices;
+    std::vector<uint32_t> indices;    // absolute indices into vertices
+    std::vector<UiDrawCommand> commands;
+
+    void Clear()
+    {
+        vertices.clear();
+        indices.clear();
+        commands.clear();
+    }
+    bool Empty() const { return commands.empty(); }
 };
 
 class IRenderer
@@ -44,6 +93,17 @@ public:
 
     virtual void RenderScene(const SceneState &scene, const Camera &camera, const Scene &sceneObj, const AssetSystem &assets) = 0;
     virtual void BeginBackbufferOverlay() = 0;
+
+    // UI textures (fonts, images). Pixels are tightly packed RGBA8 with
+    // premultiplied alpha. Safe to call at any time; destruction is deferred
+    // until the GPU no longer uses the texture.
+    virtual UiTextureHandle CreateUiTexture(int width, int height, const uint8_t *rgbaPixels) = 0;
+    virtual void DestroyUiTexture(UiTextureHandle texture) = 0;
+
+    // Draws the UI over the full backbuffer (not the letterboxed scene
+    // viewport). Call between BeginBackbufferOverlay and Present.
+    virtual void RenderUi(const UiDrawList &drawList) = 0;
+
     virtual void Present() = 0;
 };
 

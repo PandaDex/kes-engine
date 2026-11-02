@@ -99,10 +99,12 @@ namespace
             return;
         if (app.renderer->Resize(size.x, size.y))
             app.rendererSize = size;
+        app.ui.SetViewportSize(size.x, size.y);
     }
 
     void ApplyInputMode(EngineApp &app)
     {
+        app.ui.SetInputEnabled(app.inputMode != InputMode::GameOnly);
         switch (app.inputMode)
         {
         case InputMode::GameOnly:
@@ -154,6 +156,11 @@ namespace
         return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
                (event.key.scancode == SDL_SCANCODE_RETURN || event.key.scancode == SDL_SCANCODE_KP_ENTER) &&
                (event.key.mod & SDL_KMOD_ALT) != 0;
+    }
+
+    bool IsKeyPress(const SDL_Event &event, SDL_Scancode scancode)
+    {
+        return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == scancode;
     }
 }
 
@@ -241,6 +248,11 @@ bool EngineStart(EngineApp &app)
     }
     ResizeRendererToWindow(app);
 
+    // Non-fatal: the game still runs without UI (e.g. missing fonts are only
+    // a warning, a failed RmlUi init just logs).
+    if (!app.ui.Init(app.window.handle, app.renderer.get(), app.window.pixelWidth, app.window.pixelHeight))
+        EngineLog("UI system failed to initialize; continuing without UI.");
+
     EngineLogf("Main camera initialized at position (%.2f, %.2f, %.2f).", app.camera.x, app.camera.y, app.camera.z);
 
     bool worldInitOk = false;
@@ -296,7 +308,11 @@ bool EngineTick(EngineApp &app)
                 break;
             ++eventCount;
 
-            InputProcessEvent(app.input, event);
+            // UI first: a click on a button or typing into a text field
+            // doesn't also reach game input.
+            const bool uiConsumed = app.ui.ProcessEvent(event);
+            if (!uiConsumed)
+                InputProcessEvent(app.input, event);
 
             const uint32_t windowEvents = AppWindowHandleEvent(app.window, event);
             if (windowEvents & AppWindowEvent_PixelSizeChanged)
@@ -310,8 +326,18 @@ bool EngineTick(EngineApp &app)
                 EngineToggleFullscreen(app);
 
 #if ENGINE_ALLOW_DEBUG_MODE
-            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F4)
+            if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F4))
                 EngineSetInputMode(app, app.inputMode == InputMode::GameOnly ? InputMode::GameAndUI : InputMode::GameOnly);
+            // F7: reload UI documents and style sheets, F8: RmlUi debugger
+            if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F7))
+                app.ui.ReloadDocuments();
+            if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F8))
+            {
+                const bool show = !app.ui.IsDebuggerVisible();
+                app.ui.SetDebuggerVisible(show);
+                if (show && app.inputMode == InputMode::GameOnly)
+                    EngineSetInputMode(app, InputMode::GameAndUI);   // the debugger needs the cursor
+            }
 #endif
         }
         InputEndFrame(app.input);
@@ -344,6 +370,7 @@ bool EngineTick(EngineApp &app)
     }
 
     app.world.Update(dt);
+    app.ui.Update();
 
     if (IsAppWindowRenderable(app.window))
     {
@@ -355,6 +382,10 @@ bool EngineTick(EngineApp &app)
         {
             KES_ZONE(RENDER, "BeginBackbufferOverlay");
             app.renderer->BeginBackbufferOverlay();
+        }
+        {
+            KES_ZONE(UI, "Render UI");
+            app.ui.Render();
         }
         {
             KES_ZONE(RENDER, "Present");
@@ -421,12 +452,21 @@ GameSettings &EngineGetGameSettings(EngineApp &app)
     return *app.settings;
 }
 
+UiSystem &EngineGetUi(EngineApp &app)
+{
+    return app.ui;
+}
+
 void EngineShutdown(EngineApp &app)
 {
     KES_ZONE(CORE, "Engine shutdown");
     EngineLog("Engine shutdown begin.");
     app.running = false;
     InputShutdown(app.input);
+
+    // Before the world (documents may call into game code) and before the
+    // renderer (RmlUi releases its textures through it).
+    app.ui.Shutdown();
 
     if (app.settings)
     {

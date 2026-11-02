@@ -4,7 +4,7 @@
 #                                 engine and defines KES_PROFILING=1.
 #   KES_PROFILE_<CATEGORY>   ON   per-subsystem zones (only used with KES_PROFILING):
 #                                 CORE INPUT WINDOW RENDER GPU WORLD ENTITIES
-#                                 PHYSICS ASSETS AUDIO IO
+#                                 PHYSICS ASSETS AUDIO IO UI
 #   KES_PROFILER_ON_DEMAND   OFF  ON: collect only while the Tracy viewer is
 #                                 connected (startup/map load is missed unless you
 #                                 connect first). OFF: data is buffered from launch.
@@ -20,7 +20,7 @@ include_guard(GLOBAL)
 option(KES_PROFILING "Build with the Tracy profiler (external/tracy)" OFF)
 option(KES_PROFILER_ON_DEMAND "Tracy: only collect while a viewer is connected" OFF)
 
-set(KES_PROFILE_CATEGORIES CORE INPUT WINDOW RENDER GPU WORLD ENTITIES PHYSICS ASSETS AUDIO IO)
+set(KES_PROFILE_CATEGORIES CORE INPUT WINDOW RENDER GPU WORLD ENTITIES PHYSICS ASSETS AUDIO IO UI)
 foreach(_kes_cat IN LISTS KES_PROFILE_CATEGORIES)
     option(KES_PROFILE_${_kes_cat} "Profiler zones for ${_kes_cat} (needs KES_PROFILING)" ON)
 endforeach()

@@ -1,0 +1,12 @@
+<rml>
+<head>
+    <title>HUD</title>
+    <link type="text/rcss" href="/engine/ui/kes.rcss"/>
+    <link type="text/rcss" href="game_ui.rcss"/>
+</head>
+<!-- data-model="hud" binds {{ ... }} to the "hud" data model created in game/src/main.cpp -->
+<body data-model="hud">
+    <div id="hud-stats">{{ fps }} FPS</div>
+    <div id="hud-hint">Esc: menu</div>
+</body>
+</rml>

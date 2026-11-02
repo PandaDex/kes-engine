@@ -49,6 +49,7 @@ include(KesRenderers)   # KES_RENDERERS_<PLATFORM>: which renderer backends are 
 include(KesShaders)     # Slang -> SPIR-V / DXBC at build time
 include(KesPackage)     # "package" target: staged folder + archive / MSIXVC
 include(KesProfiler)    # KES_PROFILING: Tracy profiler zones (engine/profiler.h)
+include(KesUi)          # RmlUi + FreeType (HTML/CSS UI, engine/ui_system.h)
 
 # Include sub-projects.
 add_subdirectory ("engine")

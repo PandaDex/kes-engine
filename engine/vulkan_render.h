@@ -96,6 +96,23 @@ struct GPUDynamicRingBuffer
 // (D3D11 drivers queue frames the same way behind the immediate context).
 static constexpr uint32_t kMaxFramesInFlight = 2;
 
+// Host-visible buffer rewritten every frame (UI vertices / indices). Grown
+// when a frame needs more room; safe because the frame's fence was waited.
+struct GPUStreamBuffer
+{
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    void* mapped = nullptr;
+    VkDeviceSize size = 0;
+};
+
+// UI texture waiting for the frames that may still sample it to finish.
+struct RetiredUiTexture
+{
+    GPUTexture texture;
+    uint64_t lastUsableFrame = 0;   // frameNumber when it was released
+};
+
 struct FrameResources
 {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
@@ -115,6 +132,9 @@ struct FrameResources
 
     VkDescriptorSet uboDescriptorSet = VK_NULL_HANDLE; // points at this frame's sceneCB + rings
     VkDescriptorSet skyDescriptorSet = VK_NULL_HANDLE; // points at this frame's skyCB
+
+    GPUStreamBuffer uiVertices;
+    GPUStreamBuffer uiIndices;
 };
 
 struct DrawItem
@@ -184,6 +204,20 @@ struct Renderer
     VkShaderModule blitPS = VK_NULL_HANDLE;
     VkPipeline blitPipeline = VK_NULL_HANDLE;
 
+    // UI pass (ui.slang): premultiplied alpha, scissor per draw, drawn inside
+    // the backbuffer pass after the blit.
+    VkSampler linearSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout uiTexSetLayout = VK_NULL_HANDLE;   // set 0: combined image sampler (linear)
+    VkPipelineLayout uiPipelineLayout = VK_NULL_HANDLE;      // + push constant: float4 scaleOffset
+    VkShaderModule uiVS = VK_NULL_HANDLE;
+    VkShaderModule uiPS = VK_NULL_HANDLE;
+    VkPipeline uiPipeline = VK_NULL_HANDLE;
+    VkDescriptorSet uiWhiteDescriptorSet = VK_NULL_HANDLE;   // whiteTexture through the UI layout
+    std::unordered_map<UiTextureHandle, GPUTexture> uiTextures;
+    std::vector<RetiredUiTexture> retiredUiTextures;
+    UiTextureHandle nextUiTextureHandle = 1;
+    bool backbufferPassOpen = false;   // BeginBackbufferOverlay leaves it open for the UI
+
     // Sampler / default texture
     VkSampler pointSampler = VK_NULL_HANDLE;
     GPUTexture whiteTexture = {};
@@ -193,6 +227,7 @@ struct Renderer
     VkCommandPool transferCommandPool = VK_NULL_HANDLE;
     FrameResources frames[kMaxFramesInFlight];
     uint32_t frameIndex = 0;   // frames[frameIndex] is the frame being recorded
+    uint64_t frameNumber = 0;  // frames submitted so far (deferred UI texture deletion)
 
     // Aliases of frames[frameIndex]'s handles, refreshed when a frame begins,
     // so recording code doesn't have to look up the current frame everywhere.
@@ -240,6 +275,9 @@ bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
 void RendererSetVSync(Renderer& renderer, bool enabled);
 void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 void RendererBeginBackbufferOverlay(Renderer& renderer);
+UiTextureHandle RendererCreateUiTexture(Renderer& renderer, int width, int height, const uint8_t* rgbaPixels);
+void RendererDestroyUiTexture(Renderer& renderer, UiTextureHandle texture);
+void RendererRenderUi(Renderer& renderer, const UiDrawList& drawList);
 void RendererPresent(Renderer& renderer);
 void RendererRender(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 

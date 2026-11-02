@@ -107,6 +107,8 @@ add_library(engine STATIC
     "collision_world.cpp"
     "audio_system.h"
     "audio_system.cpp"
+    "ui_system.h"
+    "ui_system.cpp"
     "platform/platform.h"
     "profiler.h"
         reflection.h
@@ -115,6 +117,16 @@ target_include_directories(engine PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_link_libraries(engine PUBLIC SDL3::SDL3)
+
+# UI (cmake/KesUi.cmake). RmlUi is PUBLIC: game code uses the Rml API on the
+# documents and elements UiSystem hands out.
+target_sources(engine PRIVATE
+        "${KES_RMLUI_BACKENDS_DIR}/RmlUi_Platform_SDL.h"
+        "${KES_RMLUI_BACKENDS_DIR}/RmlUi_Platform_SDL.cpp"
+)
+target_include_directories(engine PRIVATE "${KES_RMLUI_BACKENDS_DIR}")
+target_compile_definitions(engine PRIVATE RMLUI_SDL_VERSION_MAJOR=3)
+target_link_libraries(engine PUBLIC RmlUi::RmlUi)
 
 # Profiler (KES_PROFILING, cmake/KesProfiler.cmake)
 kes_target_profiler(engine)

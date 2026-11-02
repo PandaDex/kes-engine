@@ -105,6 +105,21 @@ struct Renderer
     ID3D11VertexShader* blitVS = nullptr;
     ID3D11PixelShader* blitPS = nullptr;
 
+    // UI pass (ui.slang): premultiplied alpha, scissor per draw.
+    ID3D11VertexShader* uiVS = nullptr;
+    ID3D11PixelShader* uiPS = nullptr;
+    ID3D11InputLayout* uiLayout = nullptr;
+    ID3D11Buffer* uiCB = nullptr;
+    ID3D11Buffer* uiVertexBuffer = nullptr;
+    ID3D11Buffer* uiIndexBuffer = nullptr;
+    UINT uiVertexCapacity = 0;   // in vertices
+    UINT uiIndexCapacity = 0;    // in indices
+    ID3D11BlendState* uiBlendState = nullptr;
+    ID3D11RasterizerState* uiRS = nullptr;   // no cull, scissor enabled
+    ID3D11SamplerState* linearSampler = nullptr;
+    std::unordered_map<UiTextureHandle, GPUTexture> uiTextures;
+    UiTextureHandle nextUiTextureHandle = 1;
+
     ID3D11Buffer* sceneCB = nullptr;
     ID3D11Buffer* skyCB = nullptr;
     ID3D11Buffer* modelCB = nullptr;
@@ -156,6 +171,9 @@ bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
 void RendererSetVSync(Renderer& renderer, bool enabled);
 void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 void RendererBeginBackbufferOverlay(Renderer& renderer);
+UiTextureHandle RendererCreateUiTexture(Renderer& renderer, int width, int height, const uint8_t* rgbaPixels);
+void RendererDestroyUiTexture(Renderer& renderer, UiTextureHandle texture);
+void RendererRenderUi(Renderer& renderer, const UiDrawList& drawList);
 void RendererPresent(Renderer& renderer);
 void RendererRender(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 

@@ -26,6 +26,7 @@ inline constexpr const char* kEngineShaderMeshDefault = "engine/shaders/mesh_def
 inline constexpr const char* kEngineShaderMeshFallback = "engine/shaders/mesh_fallback.slang";
 inline constexpr const char* kEngineShaderSky = "engine/shaders/sky.slang";
 inline constexpr const char* kEngineShaderBlit = "engine/shaders/blit.slang";
+inline constexpr const char* kEngineShaderUi = "engine/shaders/ui.slang";
 
 // "shaders/foo.slang" + Vertex + Vulkan -> "shaders/foo.vs.spv"
 std::string BuildCompiledShaderPath(const std::string& sourcePath, ShaderStage stage, RendererBackend backend);

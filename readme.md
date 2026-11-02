@@ -24,13 +24,10 @@ Documentation is located in ```docs``` directory.
 - Animation System
 - Graph-based Animation Editor
 - Fog
+- UI System (HTML/CSS via RmlUi: `.rml` documents, `.rcss` style sheets, data binding, no scripting)
 
 ### Remaining to be implemented (random order):
 
-- UI System 
-- - striped HTML-based
-- - limited CSS 
-- - zero JS
 - LOD
 - Particle system
 - Interface System
@@ -39,6 +36,10 @@ Documentation is located in ```docs``` directory.
 
 
 # Building 
+## Submodules
+Tracy, RmlUi and FreeType are git submodules. Clone with `--recursive`, or fetch them afterwards: <br/>
+```git submodule update --init --recursive``` <br/>
+
 ## External binaries
 Prebuilt tools (Slang shader compiler, FBX2glTF) are not stored in git. Download them once (and again whenever `external/external_version` changes): <br/>
 Windows: ```powershell -ExecutionPolicy Bypass -File external/download_external.ps1``` <br/>

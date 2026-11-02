@@ -1,0 +1,17 @@
+<rml>
+<head>
+    <title>Pause menu</title>
+    <link type="text/rcss" href="/engine/ui/kes.rcss"/>
+    <link type="text/rcss" href="game_ui.rcss"/>
+</head>
+<!-- onclick values are UI actions registered in C++ (UiSystem::RegisterAction). -->
+<body class="menu">
+    <div class="panel">
+        <h1>Paused</h1>
+        <button onclick="resume">Resume</button>
+        <button onclick="toggle_fullscreen">Toggle fullscreen</button>
+        <button onclick="quit">Quit</button>
+        <div class="footer">F8: UI debugger, F7: reload UI</div>
+    </div>
+</body>
+</rml>

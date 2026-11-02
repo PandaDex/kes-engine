@@ -13,6 +13,7 @@ The public entry point today is intentionally small. Most game code interacts wi
 - `Scene`
 - `AudioSystem`
 - `InputState`
+- `UiSystem` (HTML/CSS UI, see [ui-system.md](ui-system.md))
 
 ## Minimal Bootstrap
 
@@ -68,6 +69,7 @@ Important fields:
 - `camera`
 - `sceneState`
 - `world`
+- `ui` (`UiSystem`, also via `EngineGetUi(app)`)
 - `console`
 
 Main lifecycle functions:
@@ -108,7 +110,7 @@ Input modes control the mouse (`EngineSetInputMode`, like Unreal's `SetInputMode
 | `InputMode::GameAndUI` | visible, free | keys, buttons and gamepad; no mouse look |
 | `InputMode::UIOnly` | visible, free | input actions read as idle (menus) |
 
-`EngineSetShowMouseCursor(app, false)` hides the cursor in the two UI modes. In debug builds (`ENGINE_ALLOW_DEBUG_MODE`), **F4** switches between GameOnly and GameAndUI.
+`EngineSetShowMouseCursor(app, false)` hides the cursor in the two UI modes, which are also the modes where UI documents get mouse and keyboard input (see [ui-system.md](ui-system.md#input)). In debug builds (`ENGINE_ALLOW_DEBUG_MODE`), **F4** switches between GameOnly and GameAndUI, **F7** reloads UI documents and **F8** toggles the UI debugger.
 
 Display helpers in `window.h`: `GetDisplayCount()`, `GetDesktopResolution(display)`, `GetSupportedFullscreenResolutions(display)`.
 
@@ -386,6 +388,17 @@ Current behavior:
 - caches clips by path
 - supports 2D and simple positional playback
 - mixes to the current SDL audio device format
+
+## `UiSystem`
+
+HTML/CSS user interface (RmlUi). The engine owns it in `EngineApp::ui` and drives its lifecycle; game code loads documents and reacts to them:
+
+- `Rml::ElementDocument* LoadDocument(const std::string& path, bool show = true);`
+- `void CloseDocument(Rml::ElementDocument* document);`
+- `void RegisterAction(const std::string& name, UiActionCallback callback);` for `onclick="name args"`
+- `Rml::Context* GetContext() const;` for data models and the rest of the Rml API
+
+Full guide: [ui-system.md](ui-system.md).
 
 ## `InputState`
 

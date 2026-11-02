@@ -41,6 +41,9 @@
 #ifndef KES_PROFILE_IO
 #define KES_PROFILE_IO 1
 #endif
+#ifndef KES_PROFILE_UI
+#define KES_PROFILE_UI 1
+#endif
 #else
 #undef KES_PROFILE_CORE
 #undef KES_PROFILE_INPUT
@@ -53,6 +56,7 @@
 #undef KES_PROFILE_ASSETS
 #undef KES_PROFILE_AUDIO
 #undef KES_PROFILE_IO
+#undef KES_PROFILE_UI
 #define KES_PROFILE_CORE 0
 #define KES_PROFILE_INPUT 0
 #define KES_PROFILE_WINDOW 0
@@ -64,6 +68,7 @@
 #define KES_PROFILE_ASSETS 0
 #define KES_PROFILE_AUDIO 0
 #define KES_PROFILE_IO 0
+#define KES_PROFILE_UI 0
 #endif
 
 #define KES_PROFILE_COLOR_CORE     0x9E9E9E
@@ -77,6 +82,7 @@
 #define KES_PROFILE_COLOR_ASSETS   0x00ACC1
 #define KES_PROFILE_COLOR_AUDIO    0xD81B60
 #define KES_PROFILE_COLOR_IO       0x546E7A
+#define KES_PROFILE_COLOR_UI       0xF4511E
 
 #if KES_PROFILING
 #define KES__PROF_ZONE_ON(name, color) ZoneScopedNC(name, color)
