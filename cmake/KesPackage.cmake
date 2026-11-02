@@ -3,7 +3,10 @@
 #   kes_add_game(<target>
 #       CONTENT_DIR <dir>        # game content (maps, meshes, *.slang, ...)
 #       [CONFIG_DIR <dir>]       # shipped next to the exe as config/ (input maps, ...)
-#       [GDK_DIR <dir>])         # MicrosoftGame.config.in + logos (KES_PLATFORM=GDK)
+#       [GDK_DIR <dir>]          # MicrosoftGame.config.in + logos (KES_PLATFORM=GDK)
+#       [EXTRA_CONTENT_DIRS <dir>...]  # copied under CONTENT_DIR first (dev layout only,
+#                                      # no shader compile), e.g. to share another game's maps
+#       [NO_PACKAGE])            # no kes_package target (samples, extra game targets)
 #
 # Development builds (every normal build of <target>):
 #   <exe dir>/content/              loose game content + compiled game shaders
@@ -41,7 +44,7 @@ set(KES_GDK_TITLE_ID      "FFFFFFFF"      CACHE STRING "GDK TitleId from Partner
 set(_KES_PACKAGE_STAGE_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/KesPackageStage.cmake")
 
 function(kes_add_game target)
-    cmake_parse_arguments(ARG "" "CONTENT_DIR;CONFIG_DIR;GDK_DIR" "" ${ARGN})
+    cmake_parse_arguments(ARG "NO_PACKAGE" "CONTENT_DIR;CONFIG_DIR;GDK_DIR" "EXTRA_CONTENT_DIRS" ${ARGN})
     if(NOT ARG_CONTENT_DIR)
         message(FATAL_ERROR "kes_add_game(${target}): CONTENT_DIR is required")
     endif()
@@ -56,8 +59,14 @@ function(kes_add_game target)
         INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/engine/shaders")
 
     # Development layout next to the exe
+    set(_extra_content_commands "")
+    foreach(_extra_dir IN LISTS ARG_EXTRA_CONTENT_DIRS)
+        list(APPEND _extra_content_commands
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_extra_dir}" "${_exe_dir}/content")
+    endforeach()
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E remove_directory "${_exe_dir}/content"
+        ${_extra_content_commands}
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ARG_CONTENT_DIR}" "${_exe_dir}/content"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_engine_assets}" "${_exe_dir}/content"
         COMMENT "Copying content for ${target}"
@@ -96,6 +105,10 @@ function(kes_add_game target)
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${_platform_files} "${_exe_dir}"
             COMMENT "Copying MicrosoftGame.config and logos"
             VERBATIM)
+    endif()
+
+    if(ARG_NO_PACKAGE)
+        return()
     endif()
 
     # kes_package 

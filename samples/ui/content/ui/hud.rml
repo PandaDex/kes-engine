@@ -1,0 +1,118 @@
+<rml>
+<head>
+    <title>HUD</title>
+    <link type="text/rcss" href="/engine/ui/kes.rcss"/>
+    <link type="text/rcss" href="showcase.rcss"/>
+</head>
+<!--
+    In-game HUD. Everything here is bound to the "game" data model:
+    - bars:        data-style-width, with a lagging "ghost" bar done purely by a CSS transition delay
+    - compass:     data-for over markers whose position C++ derives from the camera yaw
+    - objectives:  data-for + data-class-done, toasts: data-for + a slide-in animation
+    - chat:        scrollable log, text input handled by data-event-change / keydown
+    The empty body never blocks game clicks (UiSystem::IsPointerOverUi).
+-->
+<body id="hud" class="hud" data-model="game">
+<div id="hud-root" data-style-opacity="set_hud_opacity / 100">
+    <div id="hurt-flash" data-if="hurt_flash > 0" data-style-opacity="hurt_flash"/>
+    <div class="vignette" data-if="health < 30"><div class="t"/><div class="b"/><div class="l"/><div class="r"/></div>
+
+    <div id="player-card" class="panel">
+        <div class="name">{{ player_name }}</div>
+        <div class="rank">LVL {{ level }}  ·  {{ difficulty_label }}</div>
+        <div class="stat-row">
+            <span class="label">HEALTH</span>
+            <div class="bar health" data-class-critical="health < 30">
+                <div class="ghost" data-style-width="health_pct + '%'"/>
+                <div class="fill" data-style-width="health_pct + '%'"/>
+            </div>
+            <span class="value">{{ health }}</span>
+        </div>
+        <div class="stat-row">
+            <span class="label">SHIELD</span>
+            <div class="bar shield">
+                <div class="ghost" data-style-width="shield_pct + '%'"/>
+                <div class="fill" data-style-width="shield_pct + '%'"/>
+            </div>
+            <span class="value">{{ shield }}</span>
+        </div>
+        <div class="stat-row">
+            <span class="label">XP</span>
+            <div class="bar xp"><div class="fill" data-style-width="xp_pct + '%'"/></div>
+            <span class="value">{{ score }}</span>
+        </div>
+    </div>
+
+    <div id="compass">
+        <div class="half-l"/>
+        <div class="half-r"/>
+        <div class="needle"/>
+        <div class="marker" data-for="m : compass" data-if="m.visible"
+             data-class-major="m.major" data-class-north="m.label == 'N'"
+             data-style-left="m.x + '%'">{{ m.label }}</div>
+    </div>
+    <div id="heading">{{ heading }}</div>
+
+    <div id="objectives" class="panel">
+        <div class="panel-title">Objectives  ·  {{ objectives_done }}/{{ objectives.size }}</div>
+        <div class="objective" data-for="o : objectives" data-class-done="o.done">
+            <div class="box"/>
+            <div class="text">{{ o.text }}<span class="progress" data-if="!o.done && o.progress != ''">{{ o.progress }}</span></div>
+        </div>
+    </div>
+
+    <div id="toasts">
+        <!-- data-for sits on a bare wrapper: views on the repeated element itself could
+             otherwise read a removed index for one update when the list shrinks. -->
+        <div data-for="t : toasts">
+            <div data-attr-class="'toast ' + t.kind" data-style-opacity="t.alpha">
+                <img data-if="t.icon != ''" data-attr-src="t.icon"/>
+                <span>{{ t.text }}</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="banner" data-if="banner_time > 0">
+        <div class="big">MISSION COMPLETE</div>
+        <div class="small">ALL OBJECTIVES DONE  ·  +500 XP</div>
+    </div>
+
+    <div id="crosshair">
+        <div class="h l" data-style-background-color="set_crosshair"/>
+        <div class="h r" data-style-background-color="set_crosshair"/>
+        <div class="v u" data-style-background-color="set_crosshair"/>
+        <div class="v d" data-style-background-color="set_crosshair"/>
+        <div class="dot" data-style-background-color="set_crosshair"/>
+    </div>
+    <div id="hitmarker" data-if="hit_flash > 0" data-style-opacity="hit_flash"/>
+
+    <div id="interact" data-if="!chat_open">Press <span class="key">E</span> to talk to Vex</div>
+
+    <div id="weapon" class="panel">
+        <img src="icons/blaster.bmp"/>
+        <div class="info">
+            <div class="wname">M-7 BLASTER</div>
+            <div><span class="ammo" data-class-empty="ammo == 0">{{ ammo }}</span><span class="reserve"> / {{ reserve }}</span></div>
+            <div class="bar" data-if="reloading"><div class="fill" data-style-width="reload_pct + '%'"/></div>
+        </div>
+    </div>
+
+    <div id="chat" data-class-open="chat_open">
+        <div id="chat-log">
+            <div data-for="l : chat"><div data-attr-class="'line ' + l.kind"><span class="who" data-if="l.who != ''">{{ l.who }}:</span>{{ l.text }}</div></div>
+        </div>
+        <div id="chat-row">
+            <span class="prompt">SAY</span>
+            <input id="chat-input" type="text" maxlength="80" data-event-change="chat_change" data-event-keydown="chat_key"/>
+        </div>
+    </div>
+
+    <div id="hints">
+        <span class="key">WASD</span> move  <span class="key">F</span> fire  <span class="key">R</span> reload
+        <span class="key">H</span> take damage  <span class="key">E</span> talk  <span class="key">I</span> inventory
+        <span class="key">T</span> chat  <span class="key">Esc</span> pause
+    </div>
+    <div id="debug-line" data-if="set_show_fps">{{ fps }} FPS  ·  {{ position }}</div>
+</div>
+</body>
+</rml>

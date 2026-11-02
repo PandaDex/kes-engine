@@ -1,0 +1,26 @@
+<rml>
+<head>
+    <title>Dialogue</title>
+    <link type="text/rcss" href="/engine/ui/kes.rcss"/>
+    <link type="text/rcss" href="showcase.rcss"/>
+</head>
+<!--
+    Branching dialogue. C++ reveals dlg_text a few characters per frame
+    (typewriter effect); the choices are a data-for over dlg_choices and call
+    the dlg_choose data event with the clicked index.
+-->
+<body id="dialogue" class="dialogue" data-model="game">
+    <div class="dlg panel">
+        <div class="portrait"><img src="icons/portrait_vex.bmp"/></div>
+        <div class="dlg-main">
+            <div class="speaker">{{ dlg_speaker }}</div>
+            <div class="dlg-text" data-event-click="dlg_skip">{{ dlg_text }}<span class="caret" data-if="dlg_typing">_</span></div>
+            <div class="choices" data-if="!dlg_typing">
+                <button class="choice" data-for="c : dlg_choices" data-event-click="dlg_choose(it_index)"><span class="num">{{ it_index + 1 }}.</span>{{ c }}</button>
+            </div>
+            <div class="skip-hint" data-if="dlg_typing">Click or Space to skip</div>
+            <div class="skip-hint" data-if="!dlg_typing">Click a reply or press 1-{{ dlg_choices.size }}</div>
+        </div>
+    </div>
+</body>
+</rml>

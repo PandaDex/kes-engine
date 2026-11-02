@@ -54,3 +54,8 @@ include(KesUi)          # RmlUi + FreeType (HTML/CSS UI, engine/ui_system.h)
 # Include sub-projects.
 add_subdirectory ("engine")
 add_subdirectory ("game")
+
+option(KES_BUILD_SAMPLES "Build the sample programs in samples/" ON)
+if(KES_BUILD_SAMPLES)
+    add_subdirectory ("samples")
+endif()

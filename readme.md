@@ -24,7 +24,7 @@ Documentation is located in ```docs``` directory.
 - Animation System
 - Graph-based Animation Editor
 - Fog
-- UI System (HTML/CSS via RmlUi: `.rml` documents, `.rcss` style sheets, data binding, no scripting)
+- UI System (HTML/CSS via RmlUi: `.rml` documents, `.rcss` style sheets, data binding, no scripting; showcase sample in `samples/ui`)
 
 ### Remaining to be implemented (random order):
 

@@ -26,6 +26,7 @@ Path rules inside documents:
 
 - relative paths (`href="game_ui.rcss"`, `src="icons/heart.ktex"`) resolve against the document
 - paths starting with `/` resolve against the content root (`href="/engine/ui/kes.rcss"`)
+- elements dragged with `drag: clone` are copied into a document that has no path, so images inside them need root paths (`/ui/icons/medkit.bmp`). With a relative path the image fails to load and is drawn as a white box
 
 RmlUi has no built-in browser defaults: every element starts out inline and unstyled. Link `kes.rcss` first to get HTML-like block elements, headings, form controls and scrollbars:
 
@@ -153,6 +154,8 @@ Debug builds (`ENGINE_ALLOW_DEBUG_MODE`) add:
 - `hud.rml`: an FPS counter bound to the `hud` data model
 - `pause_menu.rml`: a modal menu opened with `InputAction_Pause` (Escape / gamepad Start), with buttons wired to the `resume`, `toggle_fullscreen` and `quit` actions
 
+`samples/ui` (target `ui_showcase`) is a bigger example: a small game with a main menu, loading screen, HUD, inventory with drag and drop, branching dialogue, a chat console, pause menu and tabbed settings, all driven by one data model. See [samples/ui/README.md](../samples/ui/README.md).
+
 ## Rendering Details
 
 - The UI is drawn after the scene blit, inside the backbuffer pass, at native window resolution (`IRenderer::RenderUi`).
@@ -161,6 +164,7 @@ Debug builds (`ENGINE_ALLOW_DEBUG_MODE`) add:
 - Textures (font atlases, images) go through `IRenderer::CreateUiTexture` / `DestroyUiTexture`. On Vulkan, destruction is deferred until frames in flight no longer use the texture.
 - Supported decorators: `image`, `tiled-*`, `ninepatch`, `text`, and straight gradients (`horizontal-gradient`, `vertical-gradient`).
 - Not supported yet, because they need render layers or custom shaders in the render interface: `linear-gradient` / `radial-gradient` / `conic-gradient` decorators, `box-shadow`, `filter` / `backdrop-filter`, `mask-image`, and overflow clipping of *transformed* elements (clip masks). RmlUi skips these silently, and the rest of the element still renders.
+- Because clip masks aren't supported, an `overflow: hidden` box only clips with its scissor rectangle, and RmlUi only sets that when it detects overflowing content. Absolutely positioned or animated children may not count, so add `clip: always` to boxes that must always clip (see `#credits` in `samples/ui/content/ui/showcase.rcss`).
 
 ## Profiling
 

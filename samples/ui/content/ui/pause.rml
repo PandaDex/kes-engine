@@ -1,0 +1,23 @@
+<rml>
+<head>
+    <title>Pause</title>
+    <link type="text/rcss" href="/engine/ui/kes.rcss"/>
+    <link type="text/rcss" href="showcase.rcss"/>
+</head>
+<body id="pause" class="overlay" data-model="game">
+    <div class="window panel pause-window">
+        <h1>PAUSED</h1>
+        <div class="stats">
+            <div class="stat"><div class="num">{{ score }}</div><div class="lbl">SCORE</div></div>
+            <div class="stat"><div class="num">{{ shots_fired }}</div><div class="lbl">SHOTS</div></div>
+            <div class="stat"><div class="num">{{ objectives_done }}/{{ objectives.size }}</div><div class="lbl">OBJECTIVES</div></div>
+            <div class="stat"><div class="num">{{ play_time }}</div><div class="lbl">TIME</div></div>
+        </div>
+        <button class="neon" onclick="resume"><span class="idx">01</span>Resume</button>
+        <button class="neon" onclick="open_settings"><span class="idx">02</span>Settings</button>
+        <button class="neon" onclick="to_main_menu"><span class="idx">03</span>Main menu</button>
+        <button class="neon" onclick="quit"><span class="idx">04</span>Quit to desktop</button>
+        <div class="window-footer">Esc to resume</div>
+    </div>
+</body>
+</rml>

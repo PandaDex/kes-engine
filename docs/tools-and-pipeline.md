@@ -311,6 +311,8 @@ kes_add_game(game
     GDK_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/platform/gdk")
 ```
 
+Extra executables (samples, test games) use the same call with two more options. `EXTRA_CONTENT_DIRS` copies other content folders first, so they can reuse another game's maps (development layout only, and their shaders aren't compiled). `NO_PACKAGE` skips the `kes_package` target, which only one game per build can own. See `samples/ui/CMakeLists.txt`.
+
 ## Pak Encryption
 
 Pak encryption is optional.

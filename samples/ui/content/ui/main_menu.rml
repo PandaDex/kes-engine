@@ -1,0 +1,60 @@
+<rml>
+<head>
+    <title>Main menu</title>
+    <link type="text/rcss" href="/engine/ui/kes.rcss"/>
+    <link type="text/rcss" href="showcase.rcss"/>
+</head>
+<!--
+    Main menu, drawn over the live 3D scene.
+    - onclick="..."     UI actions registered in C++ (UiSystem::RegisterAction)
+    - data-value        two-way binding: typing here renames the pilot everywhere
+    - data-if           the credits panel only exists while credits_open is true
+    - @keyframes        pulsing title, staggered button slide-in, credits roll
+-->
+<body id="main_menu" class="main-menu" data-model="game">
+    <div id="menu-left">
+        <div class="game-title">KES ENGINE</div>
+        <div class="subtitle">UI SHOWCASE</div>
+
+        <div class="menu-buttons">
+            <button class="neon" onclick="menu_play"><span class="idx">01</span><span data-if="!has_started">Deploy</span><span data-if="has_started">Resume mission</span></button>
+            <button class="neon b2" onclick="open_settings"><span class="idx">02</span>Settings</button>
+            <button class="neon b3" onclick="toggle_credits"><span class="idx">03</span>Credits</button>
+            <button class="neon b4" onclick="quit"><span class="idx">04</span>Quit</button>
+        </div>
+
+        <div class="callsign">
+            <span>username</span>
+            <input type="text" maxlength="16" data-value="player_name"/>
+        </div>
+    </div>
+
+    <div id="menu-right" class="panel" data-if="!credits_open">
+        <div class="panel-title">What this sample shows</div>
+        <div class="feature"><span class="tag">MARKUP</span><span class="text">HTML-like .rml documents and CSS-like .rcss style sheets</span></div>
+        <div class="feature"><span class="tag">LAYOUT</span><span class="text">Flexbox, absolute positioning, tables, scroll areas, dp units</span></div>
+        <div class="feature"><span class="tag m">MOTION</span><span class="text">Transitions, keyframe animations and transforms</span></div>
+        <div class="feature"><span class="tag m">STYLE</span><span class="text">Gradients, glow / shadow / outline text effects, images</span></div>
+        <div class="feature"><span class="tag a">BINDING</span><span class="text">One C++ data model drives every screen: text bindings, data-for, data-if, data-class, data-style</span></div>
+        <div class="feature"><span class="tag a">EVENTS</span><span class="text">C++ actions, data events, drag and drop, text input</span></div>
+        <div class="feature"><span class="tag">FORMS</span><span class="text">Tabs, sliders, checkboxes, radios, selects, text fields</span></div>
+    </div>
+
+    <div id="credits" class="panel" data-if="credits_open">
+        <div class="roll">
+            <h3>KES ENGING UI SAMPLE</h3>
+            <h3>UI SYSTEM</h3>
+            <p>RmlUi 6.3</p>
+            <p>FreeType 2.14</p>
+            <h3>FONT</h3>
+            <p>Lato by Lukasz Dziedzic</p>
+            <h3>RENDERING</h3>
+            <p>{{ renderer_name }}</p>
+            <h3>STARRING</h3>
+            <p>{{ player_name }}</p>
+            <p>Vex</p>
+        </div>
+    </div>
+    <div class="menu-footer">v1.0  ·  {{ renderer_name }}  ·  F8 element inspector  ·  F7 reload UI from disk  ·  Alt+Enter fullscreen</div>
+</body>
+</rml>

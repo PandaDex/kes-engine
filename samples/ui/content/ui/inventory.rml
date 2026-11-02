@@ -1,0 +1,91 @@
+<rml>
+<head>
+    <title>Inventory</title>
+    <link type="text/rcss" href="/engine/ui/kes.rcss"/>
+    <link type="text/rcss" href="showcase.rcss"/>
+</head>
+<!--
+    Inventory grid: data-for over 24 slots.
+    - drag: clone (in the style sheet) makes slots draggable; data-event-dragdrop
+      swaps or merges stacks in C++, data-event-dragover highlights the target
+    - the filter buttons assign the variable straight from markup (inv_filter = 'weapon')
+    - the detail panel shows the hovered slot, or the selected one
+-->
+<body id="inventory" class="overlay" data-model="game">
+    <div class="window panel inv-window">
+        <div class="window-header">
+            <h1>INVENTORY</h1>
+            <div class="filters">
+                <button data-class-active="inv_filter == 'all'" data-event-click="inv_filter = 'all'">All</button>
+                <button data-class-active="inv_filter == 'weapon'" data-event-click="inv_filter = 'weapon'">Weapons</button>
+                <button data-class-active="inv_filter == 'consumable'" data-event-click="inv_filter = 'consumable'">Consumables</button>
+                <button data-class-active="inv_filter == 'material'" data-event-click="inv_filter = 'material'">Materials</button>
+                <button data-class-active="inv_filter == 'misc'" data-event-click="inv_filter = 'misc'">Misc</button>
+            </div>
+            <div class="credits"><img src="icons/credits.bmp"/>{{ credits }}</div>
+        </div>
+
+        <div class="inv-body">
+            <div class="inv-grid">
+                <div class="slot" data-for="s : slots"
+                     data-attr-slot="it_index"
+                     data-class-empty="s.item < 0"
+                     data-class-common="s.rarity == 'common'"
+                     data-class-rare="s.rarity == 'rare'"
+                     data-class-epic="s.rarity == 'epic'"
+                     data-class-legendary="s.rarity == 'legendary'"
+                     data-class-selected="it_index == selected_slot"
+                     data-class-drop-target="it_index == drop_target"
+                     data-class-dimmed="s.item >= 0 && inv_filter != 'all' && s.kind != inv_filter"
+                     data-event-mouseover="inv_hover(it_index)"
+                     data-event-mouseout="inv_hover(-1)"
+                     data-event-click="inv_select(it_index)"
+                     data-event-dblclick="inv_use(it_index)"
+                     data-event-dragover="drop_target = it_index"
+                     data-event-dragout="drop_target = -1"
+                     data-event-dragdrop="inv_drop(it_index)">
+                    <img data-if="s.item >= 0" data-attr-src="s.icon"/>
+                    <span class="count" data-if="s.count > 1">{{ s.count }}</span>
+                </div>
+            </div>
+
+            <div class="inv-side">
+                <div class="panel detail">
+                    <div data-if="detail.has">
+                        <div class="top">
+                            <img data-attr-src="detail.icon"/>
+                            <div>
+                                <div data-attr-class="'iname rarity-' + detail.rarity">{{ detail.name }}</div>
+                                <div class="ikind">{{ detail.rarity }} {{ detail.kind }}<span data-if="detail.count > 1">  ·  x{{ detail.count }}</span></div>
+                            </div>
+                        </div>
+                        <div class="istat">{{ detail.stat }}</div>
+                        <div class="idesc">{{ detail.desc }}</div>
+                        <div class="actions" data-if="detail.slot == selected_slot">
+                            <button class="small primary" data-if="detail.usable" data-event-click="inv_use(selected_slot)">Use</button>
+                            <button class="small danger" data-event-click="inv_discard(selected_slot)">Discard</button>
+                        </div>
+                    </div>
+                    <div class="placeholder" data-if="!detail.has">Hover or select an item</div>
+                </div>
+
+                <div class="panel weight" data-class-heavy="weight_pct > 85">
+                    <div>CARRY WEIGHT  <span class="accent">{{ weight }} / {{ weight_max }} kg</span></div>
+                    <div class="bar"><div class="fill" data-style-width="weight_pct + '%'"/></div>
+                </div>
+
+                <div class="trash" data-class-hot="drop_target == 100"
+                     data-event-dragover="drop_target = 100"
+                     data-event-dragout="drop_target = -1"
+                     data-event-dragdrop="inv_discard_drag">Drag an item here to discard it</div>
+
+                <div style="margin-top: 10dp; display: flex;">
+                    <button class="small" data-event-click="inv_sort">Sort</button>
+                    <button class="small" style="margin-left: 8dp;" onclick="close_overlay">Close</button>
+                </div>
+            </div>
+        </div>
+        <div class="window-footer">Drag to move or stack  ·  Double-click to use  ·  I or Esc to close</div>
+    </div>
+</body>
+</rml>

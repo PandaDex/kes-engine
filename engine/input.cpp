@@ -879,6 +879,10 @@ bool InputLoadActionMap(InputState& input, const char* path, std::string* outErr
 void InputEvaluateActions(InputState& input)
 {
     KES_ZONE_FN(INPUT);
+    // Keys held while game input was off (e.g. the Escape that closed a menu)
+    // read as down when it comes back on, but not as a fresh press.
+    const bool justEnabled = input.gameInputEnabled && !input.gameInputWasEnabled;
+    input.gameInputWasEnabled = input.gameInputEnabled;
     for (const InputAction& action : input.actions)
     {
         InputActionState& state = input.actionStates[action.name];
@@ -897,7 +901,7 @@ void InputEvaluateActions(InputState& input)
         state.value2 = { accumulated.x, accumulated.y };
 
         state.down = IsNonZero(accumulated);
-        state.pressed = state.down && !wasDown;
+        state.pressed = state.down && !wasDown && !justEnabled;
         state.released = !state.down && wasDown;
     }
 }

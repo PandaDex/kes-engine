@@ -1,0 +1,136 @@
+<rml>
+<head>
+    <title>Settings</title>
+    <link type="text/rcss" href="/engine/ui/kes.rcss"/>
+    <link type="text/rcss" href="showcase.rcss"/>
+</head>
+<!--
+    Settings: a <tabset> with form controls bound two-way to the data model
+    (data-value, data-checked). Video settings go to the engine's GameSettings
+    on Apply; gameplay settings (crosshair color, HUD opacity...) change the HUD
+    live, because the HUD reads the same variables.
+-->
+<body id="settings" class="overlay" data-model="game">
+    <div class="window panel settings-window">
+        <div class="window-header"><h1>SETTINGS</h1></div>
+        <tabset>
+            <tab>Video</tab>
+            <panel>
+                <div class="row">
+                    <div class="name">Fullscreen<span class="hint">Uses PreferredFullscreenMode from the settings</span></div>
+                    <div class="ctrl"><input type="checkbox" data-checked="set_fullscreen"/></div>
+                </div>
+                <div class="row">
+                    <div class="name">Vertical sync</div>
+                    <div class="ctrl"><input type="checkbox" data-checked="set_vsync"/></div>
+                </div>
+                <div class="row">
+                    <div class="name">Frame rate limit</div>
+                    <div class="ctrl">
+                        <select data-value="set_fps_limit">
+                            <option value="0">Unlimited</option>
+                            <option value="30">30 FPS</option>
+                            <option value="60">60 FPS</option>
+                            <option value="120">120 FPS</option>
+                            <option value="144">144 FPS</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="name">Resolution scale<span class="hint">3D scene only, the UI always renders at native resolution</span></div>
+                    <div class="ctrl"><input type="range" min="25" max="100" step="5" data-value="set_res_scale"/><span class="val">{{ set_res_scale }}%</span></div>
+                </div>
+                <div class="row">
+                    <div class="name">UI scale<span class="hint">Scales every dp unit</span></div>
+                    <div class="ctrl"><input type="range" min="75" max="150" step="5" data-value="set_ui_scale"/><span class="val">{{ set_ui_scale }}%</span></div>
+                </div>
+            </panel>
+
+            <tab>Audio</tab>
+            <panel>
+                <div class="row">
+                    <div class="name">Master volume</div>
+                    <div class="ctrl"><input type="range" min="0" max="100" data-value="set_master"/><span class="val">{{ set_master }}</span>
+                        <div class="bar meter"><div class="fill" data-style-width="set_master + '%'"/></div></div>
+                </div>
+                <div class="row">
+                    <div class="name">Music<span class="hint">Meter shows the effective level (music x master)</span></div>
+                    <div class="ctrl"><input type="range" min="0" max="100" data-value="set_music"/><span class="val">{{ set_music }}</span>
+                        <div class="bar meter"><div class="fill" data-style-width="set_music * set_master / 100 + '%'"/></div></div>
+                </div>
+                <div class="row">
+                    <div class="name">Effects</div>
+                    <div class="ctrl"><input type="range" min="0" max="100" data-value="set_sfx"/><span class="val">{{ set_sfx }}</span>
+                        <div class="bar meter"><div class="fill" data-style-width="set_sfx * set_master / 100 + '%'"/></div></div>
+                </div>
+                <div class="row">
+                    <div class="name">Subtitles</div>
+                    <div class="ctrl"><input type="checkbox" data-checked="set_subtitles"/></div>
+                </div>
+                <div class="row">
+                    <div class="name muted">Saved as custom values (GameSettings::SetCustomInt)</div>
+                </div>
+            </panel>
+
+            <tab>Gameplay</tab>
+            <panel>
+                <div class="row">
+                    <div class="name">Username<span class="hint">Shared with the main menu and the HUD</span></div>
+                    <div class="ctrl"><input type="text" maxlength="16" data-value="player_name"/></div>
+                </div>
+                <div class="row">
+                    <div class="name">Difficulty</div>
+                    <div class="ctrl">
+                        <label><input type="radio" name="difficulty" value="story" data-checked="set_difficulty"/>Story</label>
+                        <label><input type="radio" name="difficulty" value="normal" data-checked="set_difficulty"/>Normal</label>
+                        <label><input type="radio" name="difficulty" value="hard" data-checked="set_difficulty"/>Hard</label>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="name">Crosshair color</div>
+                    <div class="ctrl">
+                        <select data-value="set_crosshair">
+                            <option value="#4ef2ff">Cyan</option>
+                            <option value="#4dff9a">Green</option>
+                            <option value="#ff4fd8">Magenta</option>
+                            <option value="#ffd23f">Yellow</option>
+                            <option value="#ffffff">White</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="name">HUD opacity</div>
+                    <div class="ctrl"><input type="range" min="20" max="100" step="5" data-value="set_hud_opacity"/><span class="val">{{ set_hud_opacity }}%</span></div>
+                </div>
+                <div class="row">
+                    <div class="name">Show FPS and position</div>
+                    <div class="ctrl"><input type="checkbox" data-checked="set_show_fps"/></div>
+                </div>
+            </panel>
+
+            <tab>Controls</tab>
+            <panel>
+                <table class="bindings">
+                    <tr><td>Move</td><td class="k"><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span></td></tr>
+                    <tr><td>Look</td><td class="k"><span class="key">Mouse</span></td></tr>
+                    <tr><td>Fire</td><td class="k"><span class="key">F</span><span class="key">LMB</span></td></tr>
+                    <tr><td>Reload</td><td class="k"><span class="key">R</span></td></tr>
+                    <tr><td>Take damage (demo)</td><td class="k"><span class="key">H</span></td></tr>
+                    <tr><td>Talk</td><td class="k"><span class="key">E</span></td></tr>
+                    <tr><td>Inventory</td><td class="k"><span class="key">I</span></td></tr>
+                    <tr><td>Chat / console</td><td class="k"><span class="key">T</span><span class="key">Enter</span></td></tr>
+                    <tr><td>Pause / back</td><td class="k"><span class="key">Esc</span></td></tr>
+                    <tr><td>Fullscreen</td><td class="k"><span class="key">Alt</span><span class="key">Enter</span></td></tr>
+                    <tr><td>Reload UI / inspector (debug builds)</td><td class="k"><span class="key">F7</span><span class="key">F8</span></td></tr>
+                </table>
+            </panel>
+        </tabset>
+        <div class="settings-footer">
+            <span class="note" data-if="settings_dirty">Video changes not applied yet</span>
+            <button class="small" onclick="settings_defaults">Defaults</button>
+            <button class="small" onclick="close_overlay">Back</button>
+            <button class="small primary" onclick="settings_apply">Apply</button>
+        </div>
+    </div>
+</body>
+</rml>

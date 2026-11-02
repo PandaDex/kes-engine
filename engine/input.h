@@ -106,6 +106,7 @@ struct InputState
     //   mouseLookEnabled = false -> mouse motion doesn't feed Mouse2DAxis bindings
     //                               (the cursor is free, so its motion isn't "look")
     bool gameInputEnabled = true;
+    bool gameInputWasEnabled = true;   // last InputEvaluateActions: suppresses "pressed" for keys held while re-enabling
     bool mouseLookEnabled = true;
 };
 
