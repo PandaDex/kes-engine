@@ -2,8 +2,8 @@
 #include "engine.h"
 #include "file_paths.h"
 
-//This file is the start of everything, engine initialization etc.
-//You should hook up things like steam API or discord's RPC here instead of engine.
+// Game entry point. Hook up things like the Steam API or Discord RPC here,
+// not in the engine.
 
 int main(int argc, char* argv[])
 {
@@ -12,13 +12,12 @@ int main(int argc, char* argv[])
     // -windowed / -fullscreen / -borderless, -ResX= -ResY=, -vsync / -novsync, ...
     EngineSetCommandLine(argc, argv);
 
-    //Initialize engine
     EngineApp app = {};
 
-    //Preferred renderer for this game (Auto = platform default)
+    // Preferred renderer for this game (Auto = platform default)
     // app.config.renderer = RendererBackend::D3D11;
 
-    //You can override a default player class like that
+    // Override the default player class:
     // EngineRegisterPlayerClass<CLASS_NAME>(app, "CLASS_NAME");
     if (!EngineStart(app))
     {
@@ -28,10 +27,8 @@ int main(int argc, char* argv[])
 
     while (EngineTick(app))
     {
-        //Main loop
     }
 
-    //shutdown
     EngineShutdown(app);
     return 0;
 }

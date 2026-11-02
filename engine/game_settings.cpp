@@ -81,7 +81,7 @@ const AppConfig &GameSettings::Defaults() const
     return m_defaults ? *m_defaults : fallback;
 }
 
-// --- Screen -----------------
+// Screen
 
 void GameSettings::SetScreenResolution(IntPoint resolution)
 {
@@ -144,7 +144,7 @@ IntPoint GameSettings::GetRenderResolution() const
         std::max(1, static_cast<int>(std::lround(defaults.renderHeight * scale)))};
 }
 
-// --- Dirty state --------------
+// Dirty state
 
 bool GameSettings::IsScreenResolutionDirty() const
 {
@@ -166,7 +166,7 @@ bool GameSettings::IsDirty() const
     return IsScreenResolutionDirty() || IsFullscreenModeDirty() || IsVSyncDirty();
 }
 
-// --- Apply
+// Apply
 
 void GameSettings::ApplySettings(bool checkForCommandLineOverrides)
 {
@@ -254,7 +254,7 @@ void GameSettings::ResetToCurrentSettings()
     m_vsync = m_applied.vsync;
 }
 
-// --- Defaults / validation ------
+// Defaults / validation
 
 void GameSettings::SetToDefaults()
 {
@@ -306,7 +306,7 @@ void GameSettings::ValidateSettings()
     m_resolutionScale = std::clamp(m_resolutionScale, kMinResolutionScale, kMaxResolutionScale);
 }
 
-// --- Persistence ----------------
+// Persistence
 
 std::string GameSettings::GetSettingsFilePath() const
 {
@@ -415,7 +415,7 @@ void GameSettings::SaveSettings()
         EngineLogf("Failed to save game settings to %s.", path.c_str());
 }
 
-// --- Custom values -----------------
+// Custom values
 
 void GameSettings::SetCustomString(std::string_view key, std::string_view value) { m_ini.SetString(kCustomSection, key, value); }
 void GameSettings::SetCustomFloat(std::string_view key, float value) { m_ini.SetFloat(kCustomSection, key, value); }

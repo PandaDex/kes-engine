@@ -293,7 +293,7 @@ namespace
         return true;
     }
 
-    // --- Convex hulls ------------------------------------------------------------
+    // Convex hulls
     // Separating-axis style tests using the hull face planes plus the world axes
     // (the hull AABB). Probe shapes are handled by pushing each plane out by the
     // probe support distance, which is exact on faces and slightly conservative

@@ -53,7 +53,7 @@ public:
     // Engine-owned instance, valid between EngineStart and EngineShutdown.
     static GameSettings *GetGameSettings();
 
-    // --- Screen -------------
+    // Screen
     void SetScreenResolution(IntPoint resolution);
     IntPoint GetScreenResolution() const { return m_resolution; }
     IntPoint GetLastConfirmedScreenResolution() const { return m_lastConfirmedResolution; }
@@ -89,13 +89,13 @@ public:
     void SetPreferredRenderer(RendererBackend backend) { m_preferredRenderer = backend; }
     RendererBackend GetPreferredRenderer() const { return m_preferredRenderer; }
 
-    // --- Dirty state (compared with what is currently applied) ----------------
+    // Dirty state (compared with what is currently applied)
     bool IsDirty() const;
     bool IsScreenResolutionDirty() const;
     bool IsFullscreenModeDirty() const;
     bool IsVSyncDirty() const;
 
-    // --- Apply / persistence --
+    // Apply / persistence
     // ApplySettings = ApplyResolutionSettings + ApplyNonResolutionSettings + SaveSettings.
     // Command line overrides (-ResX= -ResY= -windowed -fullscreen -borderless
     // -vsync -novsync -fps=) affect what is applied but are never saved.
@@ -117,7 +117,7 @@ public:
     std::string GetSettingsFilePath() const;
     std::string GetDefaultSettingsFilePath() const;
 
-    // --- Custom key/value settings, saved in [CustomSettings]
+    // Custom key/value settings, saved in [CustomSettings]
     void SetCustomString(std::string_view key, std::string_view value);
     void SetCustomFloat(std::string_view key, float value);
     void SetCustomInt(std::string_view key, int value);
@@ -127,7 +127,7 @@ public:
     int GetCustomInt(std::string_view key, int fallback) const;
     bool GetCustomBool(std::string_view key, bool fallback) const;
 
-    // --- Engine wiring (called by the engine, not by game code) ------------------
+    // Engine wiring (called by the engine, not by game code)
     void AttachEngine(AppWindow *window, IRenderer *renderer, const AppConfig *defaults);
     void SetActiveInstance(bool active);
 

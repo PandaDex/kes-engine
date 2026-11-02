@@ -91,6 +91,32 @@ struct GPUDynamicRingBuffer
     uint32_t cursor = 0;           // next free slot this frame
 };
 
+// Everything the CPU writes or records for one frame. kMaxFramesInFlight
+// copies let the CPU record frame N+1 while the GPU still executes frame N
+// (D3D11 drivers queue frames the same way behind the immediate context).
+static constexpr uint32_t kMaxFramesInFlight = 2;
+
+struct FrameResources
+{
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
+    VkFence inFlightFence = VK_NULL_HANDLE;
+
+    VkBuffer sceneCB = VK_NULL_HANDLE;
+    VkDeviceMemory sceneCBMemory = VK_NULL_HANDLE;
+    void* sceneCBMapped = nullptr;
+
+    VkBuffer skyCB = VK_NULL_HANDLE;
+    VkDeviceMemory skyCBMemory = VK_NULL_HANDLE;
+    void* skyCBMapped = nullptr;
+
+    GPUDynamicRingBuffer modelCBRing;
+    GPUDynamicRingBuffer materialCBRing;
+
+    VkDescriptorSet uboDescriptorSet = VK_NULL_HANDLE; // points at this frame's sceneCB + rings
+    VkDescriptorSet skyDescriptorSet = VK_NULL_HANDLE; // points at this frame's skyCB
+};
+
 struct DrawItem
 {
     const SceneObject* object = nullptr;
@@ -100,7 +126,7 @@ struct DrawItem
 
 struct Renderer
 {
-    // --- Core objects ---
+    // Core objects
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -113,7 +139,7 @@ struct Renderer
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     VkQueue presentQueue = VK_NULL_HANDLE;
 
-    // --- Swap chain / presentation ---
+    // Swap chain / presentation
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D swapchainExtent = {};
@@ -121,24 +147,24 @@ struct Renderer
     std::vector<VkImageView> swapchainImageViews;
     std::vector<VkFramebuffer> backbufferFramebuffers;
 
-    // --- Render passes ---
+    // Render passes
     VkRenderPass offscreenRenderPass = VK_NULL_HANDLE;
     VkRenderPass backbufferRenderPass = VK_NULL_HANDLE;
 
-    // --- Depth buffer (offscreen) ---
+    // Depth buffer (offscreen)
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkImage depthImage = VK_NULL_HANDLE;
     VkDeviceMemory depthMemory = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
 
-    // --- Offscreen color target (rendered scene, blitted to backbuffer) ---
+    // Offscreen color target (rendered scene, blitted to backbuffer)
     VkImage offscreenColorImage = VK_NULL_HANDLE;
     VkDeviceMemory offscreenColorMemory = VK_NULL_HANDLE;
     VkImageView offscreenColorView = VK_NULL_HANDLE;
     VkFramebuffer offscreenFramebuffer = VK_NULL_HANDLE;
     VkDescriptorSet offscreenColorDescriptorSet = VK_NULL_HANDLE;
 
-    // --- Descriptor / pipeline layouts ---
+    // Descriptor / pipeline layouts
     VkDescriptorSetLayout uboSetLayout = VK_NULL_HANDLE;   // set 0 for mesh pipelines: SceneCB, ModelCB(dyn), MaterialCB(dyn)
     VkDescriptorSetLayout texSetLayout = VK_NULL_HANDLE;   // set 1 for mesh pipelines / set 0 for blit: combined image sampler
     VkDescriptorSetLayout skySetLayout = VK_NULL_HANDLE;   // set 0 for sky pipeline: SkyCB
@@ -146,10 +172,8 @@ struct Renderer
     VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
     VkPipelineLayout blitPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet uboDescriptorSet = VK_NULL_HANDLE;
-    VkDescriptorSet skyDescriptorSet = VK_NULL_HANDLE;
 
-    // --- Default (always-resident) mesh pipeline shaders ---
+    // Default (always-resident) mesh pipeline shaders
     GPUShaderProgram meshDefaultProgram; // r.meshVS / r.meshPS equivalent
 
     VkShaderModule skyVS = VK_NULL_HANDLE;
@@ -160,31 +184,23 @@ struct Renderer
     VkShaderModule blitPS = VK_NULL_HANDLE;
     VkPipeline blitPipeline = VK_NULL_HANDLE;
 
-    // --- Uniform buffers ---
-    VkBuffer sceneCB = VK_NULL_HANDLE;
-    VkDeviceMemory sceneCBMemory = VK_NULL_HANDLE;
-    void* sceneCBMapped = nullptr;
-
-    VkBuffer skyCB = VK_NULL_HANDLE;
-    VkDeviceMemory skyCBMemory = VK_NULL_HANDLE;
-    void* skyCBMapped = nullptr;
-
-    GPUDynamicRingBuffer modelCBRing;
-    GPUDynamicRingBuffer materialCBRing;
-
-    // --- Sampler / default texture ---
+    // Sampler / default texture
     VkSampler pointSampler = VK_NULL_HANDLE;
     GPUTexture whiteTexture = {};
 
-    // --- Command submission (single frame in flight, mirrors the D3D11
-    //     immediate-context / single-buffered swap chain used here) ---
+    // Command submission (kMaxFramesInFlight frames in flight)
     VkCommandPool commandPool = VK_NULL_HANDLE;
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     VkCommandPool transferCommandPool = VK_NULL_HANDLE;
+    FrameResources frames[kMaxFramesInFlight];
+    uint32_t frameIndex = 0;   // frames[frameIndex] is the frame being recorded
 
-    VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
+    // Aliases of frames[frameIndex]'s handles, refreshed when a frame begins,
+    // so recording code doesn't have to look up the current frame everywhere.
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    VkDescriptorSet uboDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSet skyDescriptorSet = VK_NULL_HANDLE;
+
     std::vector<VkSemaphore> renderFinishedSemaphores;   // one per swapchain image
-    VkFence inFlightFence = VK_NULL_HANDLE;
 
     bool frameActive = false;       // between "start of frame" and RendererPresent
 
@@ -195,7 +211,7 @@ struct Renderer
     bool swapchainNeedsRecreate = false;
     uint32_t currentSwapchainImageIndex = 0;
 
-    // --- Asset caches ---
+    // Asset caches
     std::unordered_map<MeshHandle, GPUMesh> gpuMeshes;
     std::unordered_map<GPUModelMeshKey, GPUMesh, GPUModelMeshKeyHasher> gpuModelMeshes;
     std::unordered_map<ShaderHandle, GPUShaderProgram> gpuShaders;

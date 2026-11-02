@@ -705,8 +705,7 @@ bool MountContentPakFiles(std::string* outError, String executablePath)
 {
     KES_ZONE_FN(IO);
     ClearMountedPakFiles();
-    // <exe dir>/<content dir>. (Was a plain string append, which produced
-    // "...\\Releasecontent" and never found any pak.)
+    // <exe dir>/<content dir>
     const fs::path pakRoot = executablePath.value.empty()
         ? fs::path(ENGINE_CONTENT_DIRECTORY)
         : fs::path(executablePath.value) / ENGINE_CONTENT_DIRECTORY;

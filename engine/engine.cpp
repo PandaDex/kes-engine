@@ -25,7 +25,6 @@
 
 namespace
 {
-    // I FUCKING HATE THIS BUT
     // Tries each candidate backend in order (requested one first, then the
     // platform priority list). The window is recreated per attempt because
     // backends need different window flags (e.g. SDL_WINDOW_VULKAN).

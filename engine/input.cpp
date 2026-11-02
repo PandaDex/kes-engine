@@ -253,11 +253,6 @@ namespace
             return binding.keyboardKey != SDL_SCANCODE_UNKNOWN;
         }
 
-        // if (key.rfind("Mouse_", 0) == 0)
-        // {
-        //
-        // }
-
         if (key.rfind("Gamepad_", 0) == 0)
         {
             for (const GamepadKeyDef& def : kGamepadKeys)

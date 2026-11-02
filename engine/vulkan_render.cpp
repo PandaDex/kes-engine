@@ -28,10 +28,8 @@ namespace kes::vk
 {
 
 
-// Math helpers - identical to d3d11_render.cpp. Kept byte-for-byte the same
-// so that both backends compute identical world/view/projection matrices;
-// only the upload path (and the row_major GLSL qualifier used in the
-// shaders below, matching HLSL's row_major/mul(v,M) convention) differs.
+// Math helpers, kept identical to d3d11_render.cpp so both backends compute
+// the same world/view/projection matrices.
 
 
 static float Clamp01(float v)
@@ -229,8 +227,6 @@ static float4x4 ArrayToMatrix(const float in[16])
     return m;
 }
 
-
-// Forward declarations
 
 
 static bool CreateWhiteTexture(Renderer& r);
@@ -992,9 +988,11 @@ static bool CreateOffscreenRenderPass(Renderer& r)
     VkSubpassDependency dependencies[2] = {};
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    // Previous frame's blit read of the color target (WAR) and its depth
+    // writes (WAW): with several frames in flight, frames overlap on the GPU.
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     dependencies[1].srcSubpass = 0;
@@ -1140,7 +1138,7 @@ static bool CreateDescriptorPool(Renderer& r)
 {
     // Sized generously: texSetLayout sets are allocated per unique texture
     // (materials, white texture, offscreen color), uboSetLayout/skySetLayout
-    // are allocated once each.
+    // once per frame in flight.
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = 8;
@@ -1191,36 +1189,39 @@ static VkDescriptorSet AllocateTextureDescriptorSet(Renderer& r, VkImageView vie
 
 static bool CreateUboDescriptorSets(Renderer& r)
 {
-    VkDescriptorSetAllocateInfo uboAllocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-    uboAllocInfo.descriptorPool = r.descriptorPool;
-    uboAllocInfo.descriptorSetCount = 1;
-    uboAllocInfo.pSetLayouts = &r.uboSetLayout;
-    VK_CHECK_RET(vkAllocateDescriptorSets(r.device, &uboAllocInfo, &r.uboDescriptorSet), "vkAllocateDescriptorSets (ubo)", false);
+    for (FrameResources& frame : r.frames)
+    {
+        VkDescriptorSetAllocateInfo uboAllocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        uboAllocInfo.descriptorPool = r.descriptorPool;
+        uboAllocInfo.descriptorSetCount = 1;
+        uboAllocInfo.pSetLayouts = &r.uboSetLayout;
+        VK_CHECK_RET(vkAllocateDescriptorSets(r.device, &uboAllocInfo, &frame.uboDescriptorSet), "vkAllocateDescriptorSets (ubo)", false);
 
-    VkDescriptorSetAllocateInfo skyAllocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-    skyAllocInfo.descriptorPool = r.descriptorPool;
-    skyAllocInfo.descriptorSetCount = 1;
-    skyAllocInfo.pSetLayouts = &r.skySetLayout;
-    VK_CHECK_RET(vkAllocateDescriptorSets(r.device, &skyAllocInfo, &r.skyDescriptorSet), "vkAllocateDescriptorSets (sky)", false);
+        VkDescriptorSetAllocateInfo skyAllocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        skyAllocInfo.descriptorPool = r.descriptorPool;
+        skyAllocInfo.descriptorSetCount = 1;
+        skyAllocInfo.pSetLayouts = &r.skySetLayout;
+        VK_CHECK_RET(vkAllocateDescriptorSets(r.device, &skyAllocInfo, &frame.skyDescriptorSet), "vkAllocateDescriptorSets (sky)", false);
+    }
 
     return true;
 }
 
-static void UpdateSceneAndSkyDescriptorBindings(Renderer& r)
+static void UpdateSceneAndSkyDescriptorBindings(Renderer& r, const FrameResources& frame)
 {
-    VkDescriptorBufferInfo sceneInfo = { r.sceneCB, 0, sizeof(SceneCBData) };
-    VkDescriptorBufferInfo skyInfo = { r.skyCB, 0, sizeof(SkyCBData) };
+    VkDescriptorBufferInfo sceneInfo = { frame.sceneCB, 0, sizeof(SceneCBData) };
+    VkDescriptorBufferInfo skyInfo = { frame.skyCB, 0, sizeof(SkyCBData) };
 
     VkWriteDescriptorSet writes[2] = {};
     writes[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-    writes[0].dstSet = r.uboDescriptorSet;
+    writes[0].dstSet = frame.uboDescriptorSet;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[0].pBufferInfo = &sceneInfo;
 
     writes[1] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-    writes[1].dstSet = r.skyDescriptorSet;
+    writes[1].dstSet = frame.skyDescriptorSet;
     writes[1].dstBinding = 0;
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1230,14 +1231,14 @@ static void UpdateSceneAndSkyDescriptorBindings(Renderer& r)
 }
 
 // Updates just the ModelCB or MaterialCB dynamic-buffer binding on the
-// persistent uboDescriptorSet; called once at creation and again whenever
+// frame's uboDescriptorSet; called once at creation and again whenever
 // a ring buffer grows and gets a new underlying VkBuffer.
-static void UpdateDynamicRingDescriptorBinding(Renderer& r, uint32_t binding, const GPUDynamicRingBuffer& ring)
+static void UpdateDynamicRingDescriptorBinding(Renderer& r, VkDescriptorSet set, uint32_t binding, const GPUDynamicRingBuffer& ring)
 {
     VkDescriptorBufferInfo info = { ring.buffer, 0, ring.slotDataSize };
 
     VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-    write.dstSet = r.uboDescriptorSet;
+    write.dstSet = set;
     write.dstBinding = binding;
     write.descriptorCount = 1;
     write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
@@ -1314,7 +1315,7 @@ static bool GrowDynamicRingBuffer(Renderer& r, GPUDynamicRingBuffer& ring, uint3
     ring.mapped = newMapped;
     ring.slotCapacity = newCapacity;
 
-    UpdateDynamicRingDescriptorBinding(r, descriptorBinding, ring);
+    UpdateDynamicRingDescriptorBinding(r, r.frames[r.frameIndex].uboDescriptorSet, descriptorBinding, ring);
     return true;
 }
 
@@ -1776,24 +1777,27 @@ static bool CreateBlitPipeline(Renderer& r)
 
 static bool CreateConstantBuffers(Renderer& r)
 {
-    if (!CreateBuffer(r, sizeof(SceneCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, r.sceneCB, r.sceneCBMemory))
-        return false;
-    VK_CHECK_RET(vkMapMemory(r.device, r.sceneCBMemory, 0, sizeof(SceneCBData), 0, &r.sceneCBMapped), "vkMapMemory (sceneCB)", false);
+    for (FrameResources& frame : r.frames)
+    {
+        if (!CreateBuffer(r, sizeof(SceneCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, frame.sceneCB, frame.sceneCBMemory))
+            return false;
+        VK_CHECK_RET(vkMapMemory(r.device, frame.sceneCBMemory, 0, sizeof(SceneCBData), 0, &frame.sceneCBMapped), "vkMapMemory (sceneCB)", false);
 
-    if (!CreateBuffer(r, sizeof(SkyCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, r.skyCB, r.skyCBMemory))
-        return false;
-    VK_CHECK_RET(vkMapMemory(r.device, r.skyCBMemory, 0, sizeof(SkyCBData), 0, &r.skyCBMapped), "vkMapMemory (skyCB)", false);
+        if (!CreateBuffer(r, sizeof(SkyCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, frame.skyCB, frame.skyCBMemory))
+            return false;
+        VK_CHECK_RET(vkMapMemory(r.device, frame.skyCBMemory, 0, sizeof(SkyCBData), 0, &frame.skyCBMapped), "vkMapMemory (skyCB)", false);
 
-    if (!CreateDynamicRingBuffer(r, r.modelCBRing, sizeof(ModelCBData), kInitialDynamicSlotCapacity))
-        return false;
-    if (!CreateDynamicRingBuffer(r, r.materialCBRing, sizeof(MaterialCBData), kInitialDynamicSlotCapacity))
-        return false;
+        if (!CreateDynamicRingBuffer(r, frame.modelCBRing, sizeof(ModelCBData), kInitialDynamicSlotCapacity))
+            return false;
+        if (!CreateDynamicRingBuffer(r, frame.materialCBRing, sizeof(MaterialCBData), kInitialDynamicSlotCapacity))
+            return false;
 
-    UpdateSceneAndSkyDescriptorBindings(r);
-    UpdateDynamicRingDescriptorBinding(r, 1, r.modelCBRing);
-    UpdateDynamicRingDescriptorBinding(r, 2, r.materialCBRing);
+        UpdateSceneAndSkyDescriptorBindings(r, frame);
+        UpdateDynamicRingDescriptorBinding(r, frame.uboDescriptorSet, 1, frame.modelCBRing);
+        UpdateDynamicRingDescriptorBinding(r, frame.uboDescriptorSet, 2, frame.materialCBRing);
+    }
     return true;
 }
 
@@ -2173,23 +2177,30 @@ static bool CreateCommandObjects(Renderer& r)
     transferPoolInfo.queueFamilyIndex = r.graphicsQueueFamily;
     VK_CHECK_RET(vkCreateCommandPool(r.device, &transferPoolInfo, nullptr, &r.transferCommandPool), "vkCreateCommandPool (transfer)", false);
 
-    VkCommandBufferAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
-    allocInfo.commandPool = r.commandPool;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
-    VK_CHECK_RET(vkAllocateCommandBuffers(r.device, &allocInfo, &r.commandBuffer), "vkAllocateCommandBuffers", false);
+    for (FrameResources& frame : r.frames)
+    {
+        VkCommandBufferAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+        allocInfo.commandPool = r.commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+        VK_CHECK_RET(vkAllocateCommandBuffers(r.device, &allocInfo, &frame.commandBuffer), "vkAllocateCommandBuffers", false);
 
-    VkSemaphoreCreateInfo semInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-    VK_CHECK_RET(vkCreateSemaphore(r.device, &semInfo, nullptr, &r.imageAvailableSemaphore), "vkCreateSemaphore (imageAvailable)", false);
+        VkSemaphoreCreateInfo semInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+        VK_CHECK_RET(vkCreateSemaphore(r.device, &semInfo, nullptr, &frame.imageAvailableSemaphore), "vkCreateSemaphore (imageAvailable)", false);
 
-    VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // start signaled so the first frame doesn't block
-    VK_CHECK_RET(vkCreateFence(r.device, &fenceInfo, nullptr, &r.inFlightFence), "vkCreateFence", false);
+        VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // start signaled so the first frames do not block
+        VK_CHECK_RET(vkCreateFence(r.device, &fenceInfo, nullptr, &frame.inFlightFence), "vkCreateFence", false);
+    }
 
+    r.frameIndex = 0;
+    r.commandBuffer = r.frames[0].commandBuffer;
+    r.uboDescriptorSet = r.frames[0].uboDescriptorSet;
+    r.skyDescriptorSet = r.frames[0].skyDescriptorSet;
     return true;
 }
 
-//Begin Init / shutdown / resize
+// Init / shutdown / resize
 bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
 {
     r.windowWidth = config.windowWidth;
@@ -2278,17 +2289,15 @@ void RendererSetVSync(Renderer& r, bool enabled)
     r.swapchainNeedsRecreate = true;   // present mode is a swapchain property
 }
 
-//End Init / shutdown / resize
 
 // Per-draw dynamic constant writes
 // Writes only what the shader reads: the two matrices, the skin info and the
 // skin matrices that are actually used. ModelCBData is ~8 KB because of the
-// 128-matrix skin palette; copying (and zeroing) all of it for every static
-// mesh draw was the single largest per-draw cost.
+// 128-matrix skin palette, too much to copy for every static mesh draw.
 static VkDeviceSize WriteModelConstants(Renderer& r, const float4x4& wvp, const float4x4& world, const float* skinMatrices, uint32_t skinMatrixCount)
 {
-    const VkDeviceSize offset = AcquireDynamicSlot(r, r.modelCBRing, 1);
-    uint8_t* dst = r.modelCBRing.mapped + offset;
+    const VkDeviceSize offset = AcquireDynamicSlot(r, r.frames[r.frameIndex].modelCBRing, 1);
+    uint8_t* dst = r.frames[r.frameIndex].modelCBRing.mapped + offset;
 
     float matrix[16];
     MatrixToArrayRowMajor(wvp, matrix);
@@ -2326,8 +2335,8 @@ static VkDeviceSize WriteMaterialConstants(Renderer& r, const MaterialData* mate
         matcb.flags[0] = material->flags;
     }
 
-    const VkDeviceSize offset = AcquireDynamicSlot(r, r.materialCBRing, 2);
-    std::memcpy(r.materialCBRing.mapped + offset, &matcb, sizeof(matcb));
+    const VkDeviceSize offset = AcquireDynamicSlot(r, r.frames[r.frameIndex].materialCBRing, 2);
+    std::memcpy(r.frames[r.frameIndex].materialCBRing.mapped + offset, &matcb, sizeof(matcb));
     return offset;
 }
 
@@ -2481,7 +2490,7 @@ static void RenderSkyBackground(Renderer& r, const Camera& camera, const Scene& 
     skyCB.skyParams[1] = sky.horizonExponent;
     skyCB.skyParams[2] = 1.0f;
     skyCB.skyParams[3] = 0.0f;
-    std::memcpy(r.skyCBMapped, &skyCB, sizeof(skyCB));
+    std::memcpy(r.frames[r.frameIndex].skyCBMapped, &skyCB, sizeof(skyCB));
 
     vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.skyPipeline);
     vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.skyPipelineLayout, 0, 1, &r.skyDescriptorSet, 0, nullptr);
@@ -2503,12 +2512,27 @@ static void BeginFrameIfNeeded(Renderer& r)
         return;
 
     KES_ZONE_FN(RENDER);
+    FrameResources& frame = r.frames[r.frameIndex];
     {
-        // Time blocked here = CPU waiting on the GPU to finish the previous frame.
+        // Time blocked here = CPU waiting on the GPU (or on vsync).
         KES_ZONE(RENDER, "Wait for GPU (in-flight fence)");
-        vkWaitForFences(r.device, 1, &r.inFlightFence, VK_TRUE, UINT64_MAX);
+        vkWaitForFences(r.device, 1, &frame.inFlightFence, VK_TRUE, UINT64_MAX);
+
+        // Under vsync, running a frame ahead only makes the CPU wait in bursts
+        // (alternating ~0 ms and two refresh intervals), and the uneven frame
+        // deltas show up as judder. Wait for the previous frame too, so vsync
+        // gets one frame in flight; without vsync frames overlap for throughput.
+        if (r.vsync)
+        {
+            const FrameResources& previous = r.frames[(r.frameIndex + kMaxFramesInFlight - 1) % kMaxFramesInFlight];
+            vkWaitForFences(r.device, 1, &previous.inFlightFence, VK_TRUE, UINT64_MAX);
+        }
     }
-    vkResetFences(r.device, 1, &r.inFlightFence);
+    vkResetFences(r.device, 1, &frame.inFlightFence);
+
+    r.commandBuffer = frame.commandBuffer;
+    r.uboDescriptorSet = frame.uboDescriptorSet;
+    r.skyDescriptorSet = frame.skyDescriptorSet;
 
     vkResetCommandBuffer(r.commandBuffer, 0);
     VkCommandBufferBeginInfo beginInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -2522,8 +2546,8 @@ static void BeginFrameIfNeeded(Renderer& r)
     }
 #endif
 
-    r.modelCBRing.cursor = 0;
-    r.materialCBRing.cursor = 0;
+    r.frames[r.frameIndex].modelCBRing.cursor = 0;
+    r.frames[r.frameIndex].materialCBRing.cursor = 0;
     r.frameActive = true;
     r.haveSwapchainImage = false;
 }
@@ -2532,12 +2556,8 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
 {
     if (r.assetGeneration != assets.GetGeneration())
     {
-        // Asset caches may only be torn down when nothing references them
-        // from a pending command buffer; since this only happens at the
-        // start of a frame (before BeginFrameIfNeeded touches anything new)
-        // and the previous frame's fence has already been waited on by the
-        // time we get here on every path that reaches this function, it is
-        // safe to do this before BeginFrameIfNeeded.
+        // No pending command buffer may still reference the caches, and this
+        // must run before BeginFrameIfNeeded records anything that uses them.
         KES_ZONE(RENDER, "Asset generation changed (device wait idle)");
         vkDeviceWaitIdle(r.device);
         DestroyRendererAssetCaches(r);
@@ -2550,7 +2570,6 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
     if (r.swapchainNeedsRecreate && !r.frameActive)
     {
         KES_ZONE(RENDER, "Recreate swapchain");
-        vkWaitForFences(r.device, 1, &r.inFlightFence, VK_TRUE, UINT64_MAX);
         vkDeviceWaitIdle(r.device);
         DestroyRenderTargets(r);
         if (CreateRenderTargets(r))
@@ -2639,7 +2658,7 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
     scb.fogParams[2] = fog.active ? 1.0f : 0.0f;
     scb.fogParams[3] = fog.stepCount;
 
-    std::memcpy(r.sceneCBMapped, &scb, sizeof(scb));
+    std::memcpy(r.frames[r.frameIndex].sceneCBMapped, &scb, sizeof(scb));
 
     // Draw lists live in the renderer so their storage is reused every frame.
     std::vector<DrawItem>& opaqueItems = r.opaqueDrawItems;
@@ -2823,7 +2842,7 @@ void RendererBeginBackbufferOverlay(Renderer& r)
     {
         // Can block when every swapchain image is still queued for display (vsync).
         KES_ZONE(RENDER, "vkAcquireNextImageKHR");
-        acquireResult = vkAcquireNextImageKHR(r.device, r.swapchain, UINT64_MAX, r.imageAvailableSemaphore, VK_NULL_HANDLE, &r.currentSwapchainImageIndex);
+        acquireResult = vkAcquireNextImageKHR(r.device, r.swapchain, UINT64_MAX, r.frames[r.frameIndex].imageAvailableSemaphore, VK_NULL_HANDLE, &r.currentSwapchainImageIndex);
     }
     if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR)
     {
@@ -2881,7 +2900,7 @@ void RendererPresent(Renderer& r)
     if (r.haveSwapchainImage)
     {
         submitInfo.waitSemaphoreCount = 1;
-        submitInfo.pWaitSemaphores = &r.imageAvailableSemaphore;
+        submitInfo.pWaitSemaphores = &r.frames[r.frameIndex].imageAvailableSemaphore;
         submitInfo.pWaitDstStageMask = &waitStage;
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = &r.renderFinishedSemaphores[r.currentSwapchainImageIndex];
@@ -2889,7 +2908,7 @@ void RendererPresent(Renderer& r)
 
     {
         KES_ZONE(RENDER, "vkQueueSubmit");
-        vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, r.inFlightFence);
+        vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, r.frames[r.frameIndex].inFlightFence);
     }
 
     if (r.haveSwapchainImage)
@@ -2914,6 +2933,7 @@ void RendererPresent(Renderer& r)
 
     r.frameActive = false;
     r.haveSwapchainImage = false;
+    r.frameIndex = (r.frameIndex + 1) % kMaxFramesInFlight;
 }
 
 void RendererRender(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
@@ -2940,19 +2960,32 @@ void RendererShutdown(Renderer& r)
     DestroyRendererAssetCaches(r);
     r.assetGeneration = 0;
 
-    if (r.inFlightFence) { vkDestroyFence(r.device, r.inFlightFence, nullptr); r.inFlightFence = VK_NULL_HANDLE; }
-    if (r.imageAvailableSemaphore) { vkDestroySemaphore(r.device, r.imageAvailableSemaphore, nullptr); r.imageAvailableSemaphore = VK_NULL_HANDLE; }
+    for (FrameResources& frame : r.frames)
+    {
+        if (frame.inFlightFence) { vkDestroyFence(r.device, frame.inFlightFence, nullptr); frame.inFlightFence = VK_NULL_HANDLE; }
+        if (frame.imageAvailableSemaphore) { vkDestroySemaphore(r.device, frame.imageAvailableSemaphore, nullptr); frame.imageAvailableSemaphore = VK_NULL_HANDLE; }
+    }
 
     if (r.transferCommandPool) { vkDestroyCommandPool(r.device, r.transferCommandPool, nullptr); r.transferCommandPool = VK_NULL_HANDLE; }
-    if (r.commandPool) { vkDestroyCommandPool(r.device, r.commandPool, nullptr); r.commandPool = VK_NULL_HANDLE; r.commandBuffer = VK_NULL_HANDLE; }
+    if (r.commandPool)
+    {
+        vkDestroyCommandPool(r.device, r.commandPool, nullptr);
+        r.commandPool = VK_NULL_HANDLE;
+        r.commandBuffer = VK_NULL_HANDLE;
+        for (FrameResources& frame : r.frames)
+            frame.commandBuffer = VK_NULL_HANDLE;
+    }
 
-    DestroyDynamicRingBuffer(r, r.modelCBRing);
-    DestroyDynamicRingBuffer(r, r.materialCBRing);
+    for (FrameResources& frame : r.frames)
+    {
+        DestroyDynamicRingBuffer(r, frame.modelCBRing);
+        DestroyDynamicRingBuffer(r, frame.materialCBRing);
 
-    if (r.sceneCBMapped) { vkUnmapMemory(r.device, r.sceneCBMemory); r.sceneCBMapped = nullptr; }
-    DestroyBuffer(r, r.sceneCB, r.sceneCBMemory);
-    if (r.skyCBMapped) { vkUnmapMemory(r.device, r.skyCBMemory); r.skyCBMapped = nullptr; }
-    DestroyBuffer(r, r.skyCB, r.skyCBMemory);
+        if (frame.sceneCBMapped) { vkUnmapMemory(r.device, frame.sceneCBMemory); frame.sceneCBMapped = nullptr; }
+        DestroyBuffer(r, frame.sceneCB, frame.sceneCBMemory);
+        if (frame.skyCBMapped) { vkUnmapMemory(r.device, frame.skyCBMemory); frame.skyCBMapped = nullptr; }
+        DestroyBuffer(r, frame.skyCB, frame.skyCBMemory);
+    }
 
     if (r.blitPipeline) { vkDestroyPipeline(r.device, r.blitPipeline, nullptr); r.blitPipeline = VK_NULL_HANDLE; }
     if (r.blitPS) { vkDestroyShaderModule(r.device, r.blitPS, nullptr); r.blitPS = VK_NULL_HANDLE; }
