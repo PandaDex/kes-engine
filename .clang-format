@@ -1,0 +1,105 @@
+# KES Engine C/C++ style. Requires clang-format 19+ (bundled with Visual Studio 2022).
+---
+Language: Cpp
+BasedOnStyle: Microsoft
+Standard: c++20
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+NamespaceIndentation: All
+IndentCaseLabels: false
+IndentCaseBlocks: false
+IndentPPDirectives: None
+IndentWrappedFunctionNames: false
+LambdaBodyIndentation: Signature
+
+# Braces: Allman everywhere, including lambdas
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterExternBlock: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: true
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# Line length: 0 = keep the author's line breaks instead of reflowing
+ColumnLimit: 0
+ReflowComments: false
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# Short constructs
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: true
+AlignConsecutiveShortCaseStatements:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+AllowShortEnumsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+
+# Breaking
+AlwaysBreakTemplateDeclarations: Yes
+BreakConstructorInitializers: BeforeComma
+BreakInheritanceList: BeforeComma
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+AlignAfterOpenBracket: DontAlign
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+BinPackArguments: true
+BinPackParameters: true
+PackConstructorInitializers: CurrentLine
+
+# Alignment
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveMacros: Consecutive
+AlignEscapedNewlines: Left
+AlignOperands: DontAlign
+AlignTrailingComments:
+  Kind: Never
+
+# Pointers / references: `const char* name`, `Foo& out`
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+DerivePointerAlignment: false
+
+# Spacing
+Cpp11BracedListStyle: false          # `{ 0.0f, 1.0f }`
+SpaceAfterCStyleCast: false          # `(int32_t)index`
+SpaceAfterTemplateKeyword: false     # `template<typename T>`
+SpaceBeforeParens: ControlStatements
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceInEmptyBlock: false
+SpacesBeforeTrailingComments: 1
+SpacesInAngles: Never
+EmptyLineBeforeAccessModifier: LogicalBlock
+
+# Includes: order is meaningful in places (platform headers), so don't reorder
+SortIncludes: Never
+IncludeBlocks: Preserve
+
+# Misc
+FixNamespaceComments: false
+InsertNewlineAtEOF: true
+LineEnding: DeriveCRLF
