@@ -68,5 +68,6 @@ generated/
 external/slang
 external/FBX2glTF
 external/external.zip
+external/tracy-bin
 external/.external_installed
 TODO.txt

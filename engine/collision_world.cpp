@@ -1,6 +1,7 @@
 #include "collision_world.h"
 #include <algorithm>
 #include <cmath>
+#include "profiler.h"
 
 namespace
 {
@@ -560,6 +561,7 @@ Vector3 CollisionWorld::GetWorldPosition(ColliderHandle handle) const
 
 bool CollisionWorld::CheckBox(const Vector3& position, const Vector3& halfExtents, ColliderHandle ignore) const
 {
+    KES_ZONE_FN(PHYSICS);
     CollisionBody probe = {};
     probe.type = ColliderType::Box;
     probe.position = position;
@@ -569,6 +571,7 @@ bool CollisionWorld::CheckBox(const Vector3& position, const Vector3& halfExtent
 
 bool CollisionWorld::CheckSphere(const Vector3& position, float radius, ColliderHandle ignore) const
 {
+    KES_ZONE_FN(PHYSICS);
     CollisionBody probe = {};
     probe.type = ColliderType::Sphere;
     probe.position = position;
@@ -578,6 +581,7 @@ bool CollisionWorld::CheckSphere(const Vector3& position, float radius, Collider
 
 bool CollisionWorld::CheckCapsule(const Vector3& position, float radius, float halfHeight, ColliderHandle ignore) const
 {
+    KES_ZONE_FN(PHYSICS);
     CollisionBody probe = {};
     probe.type = ColliderType::Capsule;
     probe.position = position;
@@ -588,6 +592,7 @@ bool CollisionWorld::CheckCapsule(const Vector3& position, float radius, float h
 
 CollisionHit CollisionWorld::SweepCapsule(const Vector3& from, const Vector3& to, float radius, float halfHeight, ColliderHandle ignore, int steps) const
 {
+    KES_ZONE_FN(PHYSICS);
     CollisionHit hit = {};
     if (steps < 1)
         steps = 1;
@@ -620,6 +625,7 @@ CollisionHit CollisionWorld::SweepCapsule(const Vector3& from, const Vector3& to
 
 bool CollisionWorld::Raycast(const Ray& ray, RaycastHit& outHit, const RaycastQuery& query) const
 {
+    KES_ZONE_FN(PHYSICS);
     outHit = {};
 
     const Vector3 direction = Vector3Normalize(ray.direction);
@@ -653,6 +659,7 @@ bool CollisionWorld::Raycast(const Ray& ray, RaycastHit& outHit, const RaycastQu
 
 std::size_t CollisionWorld::RaycastAll(const Ray& ray, std::vector<RaycastHit>& outHits, const RaycastQuery& query) const
 {
+    KES_ZONE_FN(PHYSICS);
     outHits.clear();
 
     const Vector3 direction = Vector3Normalize(ray.direction);

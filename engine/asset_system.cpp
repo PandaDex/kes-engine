@@ -4,6 +4,7 @@
 #include "mesh_file.h"
 #include "material_file.h"
 #include "shader.h"
+#include "profiler.h"
 
 AssetSystem::AssetSystem()
 {
@@ -18,6 +19,8 @@ MeshHandle AssetSystem::CreateMesh(const MeshData& mesh)
 
 MeshHandle AssetSystem::LoadMesh(const char* path)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     const std::string resolvedPath = ResolveAssetPath(path);
     auto cached = meshFiles.find(resolvedPath);
     if (cached != meshFiles.end())
@@ -85,6 +88,8 @@ MeshHandle AssetSystem::CreateCubeMesh()
 
 ModelHandle AssetSystem::LoadModel(const char* path)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     const std::string resolvedPath = ResolveAssetPath(path);
     auto cached = modelFiles.find(resolvedPath);
     if (cached != modelFiles.end())
@@ -108,6 +113,8 @@ ShaderHandle AssetSystem::CreateShader(const ShaderData& shader)
 
 ShaderHandle AssetSystem::LoadShader(const char* path)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     const std::string resolvedPath = ResolveAssetPath(path);
     auto cached = shaderFiles.find(resolvedPath);
     if (cached != shaderFiles.end())
@@ -138,6 +145,8 @@ MaterialHandle AssetSystem::CreateMaterial(const MaterialData& material)
 
 MaterialHandle AssetSystem::LoadMaterial(const char* path)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     const std::string resolvedPath = ResolveAssetPath(path);
     auto cached = materialFiles.find(resolvedPath);
     if (cached != materialFiles.end())
@@ -160,6 +169,8 @@ MaterialHandle AssetSystem::LoadMaterial(const char* path)
 
 AnimationClipHandle AssetSystem::LoadAnimationClip(const char* path)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     const std::string resolvedPath = ResolveAssetPath(path);
     auto cached = animationClipFiles.find(resolvedPath);
     if (cached != animationClipFiles.end())
@@ -177,6 +188,8 @@ AnimationClipHandle AssetSystem::LoadAnimationClip(const char* path)
 
 AnimationGraphHandle AssetSystem::LoadAnimationGraph(const char* path)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     const std::string resolvedPath = ResolveAssetPath(path);
     auto cached = animationGraphFiles.find(resolvedPath);
     if (cached != animationGraphFiles.end())
@@ -236,6 +249,7 @@ const AnimationGraphData* AssetSystem::GetAnimationGraph(AnimationGraphHandle ha
 
 void AssetSystem::Clear()
 {
+    KES_ZONE_FN(ASSETS);
     ++generation;
     meshes.clear();
     models.clear();

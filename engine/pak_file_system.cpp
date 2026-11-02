@@ -14,6 +14,7 @@
 
 #include "engine_configuration.h"
 #include "file_paths.h"
+#include "profiler.h"
 
 namespace
 {
@@ -486,6 +487,8 @@ namespace
 
 bool LoadAssetFileBytes(const char* path, std::vector<uint8_t>& outData, std::string* outError)
 {
+    KES_ZONE_FN(IO);
+    KES_ZONE_TEXTF(IO, "%s", path ? path : "<null>");
     outData.clear();
     if (!path || !path[0])
     {
@@ -541,6 +544,8 @@ bool LoadAssetFileBytes(const char* path, std::vector<uint8_t>& outData, std::st
 
 bool LoadAssetFileText(const char* path, std::string& outText, std::string* outError)
 {
+    KES_ZONE_FN(IO);
+    KES_ZONE_TEXTF(IO, "%s", path ? path : "<null>");
     outText.clear();
 
     std::vector<uint8_t> bytes;
@@ -569,6 +574,8 @@ std::string GetPakEncryptionKeyOverride()
 
 bool MountPakFile(const char* pakPath, std::string* outError)
 {
+    KES_ZONE_FN(IO);
+    KES_ZONE_TEXTF(IO, "%s", pakPath ? pakPath : "<null>");
     if (!pakPath || !pakPath[0])
     {
         if (outError)
@@ -696,6 +703,7 @@ bool MountPakFile(const char* pakPath, std::string* outError)
 
 bool MountContentPakFiles(std::string* outError, String executablePath)
 {
+    KES_ZONE_FN(IO);
     ClearMountedPakFiles();
     // <exe dir>/<content dir>. (Was a plain string append, which produced
     // "...\\Releasecontent" and never found any pak.)

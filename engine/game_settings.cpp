@@ -13,6 +13,7 @@
 #include "logger.h"
 #include "render_backend.h"
 #include "window.h"
+#include "profiler.h"
 
 namespace
 {
@@ -169,6 +170,7 @@ bool GameSettings::IsDirty() const
 
 void GameSettings::ApplySettings(bool checkForCommandLineOverrides)
 {
+    KES_ZONE_FN(CORE);
     ApplyResolutionSettings(checkForCommandLineOverrides);
     ApplyNonResolutionSettings();
 
@@ -367,6 +369,7 @@ void GameSettings::WriteToIni(IniFile &ini) const
 
 void GameSettings::LoadSettings(bool forceReload)
 {
+    KES_ZONE_FN(CORE);
     if (m_loaded && !forceReload)
         return;
 
@@ -403,6 +406,7 @@ void GameSettings::LoadSettings(bool forceReload)
 
 void GameSettings::SaveSettings()
 {
+    KES_ZONE_FN(CORE);
     WriteToIni(m_ini);
     SaveCustomSettings(m_ini);
 

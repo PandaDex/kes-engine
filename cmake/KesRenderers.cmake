@@ -16,7 +16,7 @@ include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/KesPlatform.cmake")
 
 set(KES_RENDERERS_WINDOWS "vulkan;d3d11" CACHE STRING "Renderer backends built on Windows, in priority order (vulkan, d3d11). One entry forces it.")
-set(KES_RENDERERS_GDK     "d3d11;vulkan" CACHE STRING "Renderer backends built for GDK (PC), in priority order (d3d11, vulkan). One entry forces it.")
+set(KES_RENDERERS_GDK     "d3d11" CACHE STRING "Renderer backends built for GDK (PC), in priority order (d3d11, vulkan). One entry forces it.")
 set(KES_RENDERERS_LINUX   "vulkan"       CACHE STRING "Renderer backends built on Linux, in priority order (vulkan). One entry forces it.")
 set(KES_RENDERERS_MACOS   "vulkan"       CACHE STRING "Renderer backends built on macOS, in priority order (vulkan). One entry forces it.")
 option(KES_ALLOW_RENDERER_SELECTION "Allow choosing between compiled renderers at runtime (-renderer=, KES_RENDERER, AppConfig::renderer). OFF always uses the first one." ON)

@@ -12,6 +12,7 @@
 #define NOMINMAX
 #endif
 #include "file_paths.h"
+#include "profiler.h"
 
 namespace
 {
@@ -722,6 +723,7 @@ namespace
 
 void InputInit(InputState& input)
 {
+    KES_ZONE_FN(INPUT);
     input = {};
 
     const int joystickCount = 0;
@@ -757,6 +759,7 @@ void InputShutdown(InputState& input)
 
 void InputBeginFrame(InputState& input)
 {
+    KES_ZONE_FN(INPUT);
     std::copy(std::begin(input.keys), std::end(input.keys), std::begin(input.previousKeys));
     std::copy(std::begin(input.mouseButtons), std::end(input.mouseButtons), std::begin(input.previousMouseButtons));
 
@@ -818,11 +821,13 @@ void InputProcessEvent(InputState& input, const SDL_Event& e)
 
 void InputEndFrame(InputState& input)
 {
+    KES_ZONE_FN(INPUT);
     InputEvaluateActions(input);
 }
 
 void InputResetState(InputState& input)
 {
+    KES_ZONE_FN(INPUT);
     std::fill(std::begin(input.keys), std::end(input.keys), false);
     std::fill(std::begin(input.mouseButtons), std::end(input.mouseButtons), false);
     input.mouseDeltaX = 0.0f;
@@ -831,6 +836,8 @@ void InputResetState(InputState& input)
 
 bool InputLoadActionMap(InputState& input, const char* path, std::string* outError)
 {
+    KES_ZONE_FN(INPUT);
+    KES_ZONE_TEXTF(INPUT, "%s", path ? path : "<null>");
     const std::string text = ReadTextFile(path);
     if (text.empty())
     {
@@ -876,6 +883,7 @@ bool InputLoadActionMap(InputState& input, const char* path, std::string* outErr
 
 void InputEvaluateActions(InputState& input)
 {
+    KES_ZONE_FN(INPUT);
     for (const InputAction& action : input.actions)
     {
         InputActionState& state = input.actionStates[action.name];

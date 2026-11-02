@@ -17,6 +17,14 @@
 #include "pak_file_system.h"
 #include "shader_binary.h"
 
+#if KES_PROFILE_GPU
+#include <tracy/TracyD3D11.hpp>
+// GPU timestamp zone on the immediate context (shows in Tracy's GPU lane).
+#define KES_D3D11_GPU_ZONE(r, name) TracyD3D11Zone((r).gpuProfiler, name)
+#else
+#define KES_D3D11_GPU_ZONE(r, name) ((void)0)
+#endif
+
 namespace kes::d3d11
 {
 
@@ -585,6 +593,7 @@ static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle han
     if (it != r.gpuShaders.end())
         return &it->second;
 
+    KES_ZONE(RENDER, "Compile shader program (cache miss)");
     const ShaderData* shader = assets.GetShader(handle);
     if (!shader)
         return nullptr;
@@ -790,6 +799,11 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
         return false;
     }
 
+#if KES_PROFILE_GPU
+    r.gpuProfiler = TracyD3D11Context(r.device, r.context);
+    TracyD3D11ContextName(r.gpuProfiler, "D3D11", 5);
+#endif
+
     if (!CreateRenderTargets(r))
     {
         RendererShutdown(r);
@@ -891,6 +905,8 @@ static bool CreateWhiteTexture(Renderer& r)
 
 static bool CreateTextureFromFile(Renderer& r, const char* path, GPUTexture& outTexture)
 {
+    KES_ZONE_FN(RENDER);
+    KES_ZONE_TEXTF(RENDER, "%s", path ? path : "<null>");
     TextureFileData textureFile = {};
     std::string error;
     if (!LoadTextureFile(path, textureFile, &error))
@@ -954,6 +970,7 @@ static ID3D11ShaderResourceView* GetMaterialTextureSRV(Renderer& r, const Materi
 
 bool RendererResize(Renderer& r, int width, int height)
 {
+    KES_ZONE_FN(RENDER);
     if (!r.swapChain || width <= 0 || height <= 0)
         return false;
 
@@ -981,6 +998,7 @@ bool RendererResize(Renderer& r, int width, int height)
 
 bool RendererSetRenderResolution(Renderer& r, int width, int height)
 {
+    KES_ZONE_FN(RENDER);
     if (!r.swapChain || width <= 0 || height <= 0)
         return false;
     if (width == r.renderWidth && height == r.renderHeight)
@@ -1006,6 +1024,7 @@ static GPUMesh* GetOrUploadMesh(Renderer& r, MeshHandle handle, const AssetSyste
     if (it != r.gpuMeshes.end())
         return &it->second;
 
+    KES_ZONE(RENDER, "Upload mesh (cache miss)");
     const MeshData* data = assets.GetMesh(handle);
     if (!data || data->vertices.empty())
         return nullptr;
@@ -1073,6 +1092,7 @@ static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t m
     if (it != r.gpuModelMeshes.end())
         return &it->second;
 
+    KES_ZONE(RENDER, "Upload model mesh (cache miss)");
     const KModelData* model = assets.GetModel(handle);
     if (!model || meshIndex >= model->meshes.size() || model->meshes[meshIndex].vertices.empty())
         return nullptr;
@@ -1157,6 +1177,7 @@ static int32_t FindModelNodeForMesh(const KModelData& model, uint32_t meshIndex)
 
 static void DestroyRendererAssetCaches(Renderer& r)
 {
+    KES_ZONE_FN(RENDER);
     for (auto& pair : r.gpuTextures)
         DestroyGPUTexture(pair.second);
     r.gpuTextures.clear();
@@ -1195,6 +1216,7 @@ static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelH
     if (it != r.gpuModelRenderCaches.end())
         return &it->second;
 
+    KES_ZONE(RENDER, "Build model render cache (cache miss)");
     const KModelData* model = assets.GetModel(handle);
     if (!model)
         return nullptr;
@@ -1406,6 +1428,8 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
         r.assetGeneration = assets.GetGeneration();
     }
 
+    KES_D3D11_GPU_ZONE(r, "Scene pass");
+
     float clearColor[4] = {};
     BuildSkyClearColor(sceneObj, clearColor);
 
@@ -1502,42 +1526,47 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
     transparentItems.clear();
     const Vector3 cameraPosition = { camera.x, camera.y, camera.z };
 
-    for (const SceneObject& obj : sceneObj.GetObjects())
     {
-        if (!obj.active) continue;
+        KES_ZONE(RENDER, "Build draw lists");
+        for (const SceneObject& obj : sceneObj.GetObjects())
+        {
+            if (!obj.active) continue;
 
-        const MaterialData* material = assets.GetMaterial(obj.material);
-        const Vector3 delta = {
-            obj.transform.position.x - cameraPosition.x,
-            obj.transform.position.y - cameraPosition.y,
-            obj.transform.position.z - cameraPosition.z
-        };
-        DrawItem item = {};
-        item.object = &obj;
-        item.material = material;
-        item.distanceSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+            const MaterialData* material = assets.GetMaterial(obj.material);
+            const Vector3 delta = {
+                obj.transform.position.x - cameraPosition.x,
+                obj.transform.position.y - cameraPosition.y,
+                obj.transform.position.z - cameraPosition.z
+            };
+            DrawItem item = {};
+            item.object = &obj;
+            item.material = material;
+            item.distanceSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
 
-        if (IsTransparentMaterial(material))
-            transparentItems.push_back(item);
-        else
-            opaqueItems.push_back(item);
+            if (IsTransparentMaterial(material))
+                transparentItems.push_back(item);
+            else
+                opaqueItems.push_back(item);
+        }
+
+        // Opaque: group by material, near-to-far inside a group (early depth reject).
+        std::sort(opaqueItems.begin(), opaqueItems.end(),
+            [](const DrawItem& a, const DrawItem& b)
+            {
+                if (a.material != b.material)
+                    return a.material < b.material;
+                return a.distanceSq < b.distanceSq;
+            });
+
+        // Transparent: back-to-front for correct blending.
+        std::sort(transparentItems.begin(), transparentItems.end(),
+            [](const DrawItem& a, const DrawItem& b)
+            {
+                return a.distanceSq > b.distanceSq;
+            });
+        KES_PROFILE_PLOT("Opaque draw items", static_cast<int64_t>(opaqueItems.size()));
+        KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
     }
-
-    // Opaque: group by material, near-to-far inside a group (early depth reject).
-    std::sort(opaqueItems.begin(), opaqueItems.end(),
-        [](const DrawItem& a, const DrawItem& b)
-        {
-            if (a.material != b.material)
-                return a.material < b.material;
-            return a.distanceSq < b.distanceSq;
-        });
-
-    // Transparent: back-to-front for correct blending.
-    std::sort(transparentItems.begin(), transparentItems.end(),
-        [](const DrawItem& a, const DrawItem& b)
-        {
-            return a.distanceSq > b.distanceSq;
-        });
 
     // Redundant state filtering across consecutive draws. The mesh setup
     // above bound the default program; track what is currently set.
@@ -1644,12 +1673,21 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
         }
     };
 
-    drawItems(opaqueItems, false);
-    drawItems(transparentItems, true);
+    {
+        KES_ZONE(RENDER, "Draw opaque");
+        KES_D3D11_GPU_ZONE(r, "Opaque");
+        drawItems(opaqueItems, false);
+    }
+    {
+        KES_ZONE(RENDER, "Draw transparent");
+        KES_D3D11_GPU_ZONE(r, "Transparent");
+        drawItems(transparentItems, true);
+    }
 }
 
 void RendererBeginBackbufferOverlay(Renderer& r)
 {
+    KES_D3D11_GPU_ZONE(r, "Backbuffer blit");
     float black[4] = { 0,0,0,1 };
     r.context->OMSetRenderTargets(1, &r.rtv, nullptr);
 
@@ -1684,7 +1722,17 @@ void RendererPresent(Renderer& r)
     // in windowed/borderless mode skip the compositor's vblank wait.
     const UINT syncInterval = r.vsync ? 1u : 0u;
     const UINT presentFlags = (!r.vsync && r.tearingSupported) ? DXGI_PRESENT_ALLOW_TEARING : 0u;
-    r.swapChain->Present(syncInterval, presentFlags);
+    {
+        KES_ZONE(RENDER, "IDXGISwapChain::Present");
+        r.swapChain->Present(syncInterval, presentFlags);
+    }
+
+#if KES_PROFILE_GPU
+    {
+        KES_ZONE(GPU, "Collect GPU timestamps");
+        TracyD3D11Collect(r.gpuProfiler);
+    }
+#endif
 }
 
 void RendererRender(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
@@ -1696,6 +1744,14 @@ void RendererRender(Renderer& r, const SceneState& scene, const Camera& camera, 
 
 void RendererShutdown(Renderer& r)
 {
+#if KES_PROFILE_GPU
+    if (r.gpuProfiler)
+    {
+        TracyD3D11Destroy(r.gpuProfiler);
+        r.gpuProfiler = nullptr;
+    }
+#endif
+
     DestroyGPUTexture(r.whiteTexture);
     DestroyRendererAssetCaches(r);
     r.assetGeneration = 0;

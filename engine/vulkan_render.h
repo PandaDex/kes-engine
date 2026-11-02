@@ -12,6 +12,11 @@
 #include "kmodel.h"
 #include "material.h"
 #include "render_backend.h"
+#include "profiler.h"
+
+#if KES_PROFILE_GPU
+namespace tracy { class VkCtx; }
+#endif
 
 // Vulkan renderer backend. Internal to the engine: game code talks to the
 // renderer through IRenderer (render_backend.h).
@@ -182,6 +187,10 @@ struct Renderer
     VkFence inFlightFence = VK_NULL_HANDLE;
 
     bool frameActive = false;       // between "start of frame" and RendererPresent
+
+#if KES_PROFILE_GPU
+    tracy::VkCtx* gpuProfiler = nullptr;   // Tracy GPU timestamp context
+#endif
     bool haveSwapchainImage = false;
     bool swapchainNeedsRecreate = false;
     uint32_t currentSwapchainImageIndex = 0;

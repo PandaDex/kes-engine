@@ -22,6 +22,7 @@
 #include "ent_trigger.h"
 #include "logger.h"
 #include "text_parse_utils.h"
+#include "profiler.h"
 
 namespace
 {
@@ -85,6 +86,7 @@ namespace
 
 bool World::Init(Camera* mainCamera, InputState* input)
 {
+    KES_ZONE_FN(WORLD);
     EngineLog("World initialization begin.");
     Shutdown();
     gameContext.mainCamera = mainCamera;
@@ -112,6 +114,7 @@ bool World::Init(Camera* mainCamera, InputState* input)
 
 void World::Shutdown()
 {
+    KES_ZONE_FN(WORLD);
     EngineLog("World shutdown begin.");
     pendingMapLoad.clear();
     ClearLevelState();
@@ -125,6 +128,7 @@ void World::Shutdown()
 
 void World::Update(float dt)
 {
+    KES_ZONE_FN(WORLD);
     scene.GetFog() = {};
     entities.Update(dt);
     entities.DestroyPending();
@@ -140,11 +144,14 @@ void World::Update(float dt)
 
 void World::FixedUpdate(float fixedDt)
 {
+    KES_ZONE_FN(WORLD);
     entities.FixedUpdate(fixedDt);
 }
 
 bool World::LoadMap(const char* mapName)
 {
+    KES_ZONE_FN(WORLD);
+    KES_ZONE_TEXTF(WORLD, "%s", mapName ? mapName : "<null>");
     EngineLogf("Loading map: %s", mapName ? mapName : "<null>");
 
     CompiledMap map;
@@ -251,6 +258,7 @@ const EntityManager& World::GetEntities() const
 
 void World::ClearLevelState()
 {
+    KES_ZONE_FN(WORLD);
     entities.DestroyAll();
     collision.Clear();
     scene.Clear();
@@ -259,6 +267,7 @@ void World::ClearLevelState()
 
 void World::InstantiateMap(const CompiledMap& map)
 {
+    KES_ZONE_FN(WORLD);
     // Materials. "" (faces without a material) and missing files use the default material.
     MaterialHandle defaultMaterial = 0;
     auto getDefaultMaterial = [&]()
@@ -385,6 +394,7 @@ void World::RegisterBuiltInEntityClasses()
 
 Entity* World::CreatePlayerEntity()
 {
+    KES_ZONE_FN(WORLD);
     if (!gameContext.input)
         return nullptr;
 

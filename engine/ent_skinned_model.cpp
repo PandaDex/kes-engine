@@ -6,6 +6,7 @@
 #include "entity_property_utils.h"
 #include "game_context.h"
 #include "scene.h"
+#include "profiler.h"
 
 void SkinnedModelEntity::Start()
 {
@@ -169,6 +170,7 @@ const AnimationClipData* SkinnedModelEntity::ResolveAnimationClipHandle(const st
 
 void SkinnedModelEntity::SyncSceneObject(float dt)
 {
+    KES_ZONE_FN(WORLD);
     if (!game || !game->scene || !game->assets)
         return;
     if (objectId == 0)

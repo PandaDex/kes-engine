@@ -38,6 +38,15 @@
             }
         },
         {
+            "name": "x64-profile",
+            "displayName": "x64 Profile (Tracy)",
+            "inherits": "x64-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "KES_PROFILING": "ON"
+            }
+        },
+        {
             "name": "x86-debug",
             "displayName": "x86 Debug",
             "inherits": "windows-base",

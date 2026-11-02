@@ -12,6 +12,11 @@
 #include "kmodel.h"
 #include "material.h"
 #include "render_backend.h"
+#include "profiler.h"
+
+#if KES_PROFILE_GPU
+namespace tracy { class D3D11Ctx; }
+#endif
 
 // Direct3D 11 renderer backend (Windows only). Internal to the engine: game
 // code talks to the renderer through IRenderer (render_backend.h).
@@ -132,6 +137,10 @@ struct Renderer
 
     bool vsync = true;
     bool tearingSupported = false;   // DXGI_FEATURE_PRESENT_ALLOW_TEARING
+
+#if KES_PROFILE_GPU
+    tracy::D3D11Ctx* gpuProfiler = nullptr;   // Tracy GPU timestamp context
+#endif
     UINT swapChainFlags = 0;         // creation flags, reused by ResizeBuffers
 
     // Per-frame scratch, kept to reuse its storage.

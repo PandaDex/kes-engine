@@ -1,4 +1,5 @@
 #include "animator.h"
+#include "profiler.h"
 
 namespace
 {
@@ -127,6 +128,7 @@ void FireAnimatorTrigger(const AnimationGraphData& graph, AnimatorGraphInstance&
 
 bool UpdateAnimatorGraph(const AnimationGraphData& graph, AnimatorGraphInstance& instance, float dt, AnimatorPlaybackState& outPlayback)
 {
+    KES_ZONE_FN(WORLD);
     outPlayback = {};
     if (graph.states.empty())
         return false;

@@ -6,6 +6,7 @@
 
 #include "kmodel.h"
 #include "pak_file_system.h"
+#include "profiler.h"
 
 namespace
 {
@@ -173,6 +174,8 @@ namespace
 
 bool LoadAnimationClipFile(const char* path, AnimationClipData& outClip, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outClip = {};
 
     std::vector<uint8_t> fileBytes;
@@ -386,6 +389,7 @@ void BuildAnimationBindPose(const KModelData& model, std::vector<AnimationTransf
 
 bool SampleAnimationClip(const KModelData& model, const AnimationClipData& clip, float timeSeconds, std::vector<AnimationTransform>& outLocalPose, std::string* outError)
 {
+    KES_ZONE_FN(WORLD);
     BuildAnimationBindPose(model, outLocalPose);
 
     const float sampleTime = clip.looping ? WrapAnimationTime(timeSeconds, clip.duration) : (timeSeconds < 0.0f ? 0.0f : timeSeconds);

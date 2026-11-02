@@ -1,6 +1,7 @@
 #include "engine.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "engine_configuration.h"
 #include "logger.h"
 #include "pak_file_system.h"
+#include "profiler.h"
 
 #if PLATFORM_GDK
 #include "platform/platform_gdk.h"
@@ -23,22 +25,24 @@
 
 namespace
 {
+    // I FUCKING HATE THIS BUT
     // Tries each candidate backend in order (requested one first, then the
     // platform priority list). The window is recreated per attempt because
     // backends need different window flags (e.g. SDL_WINDOW_VULKAN).
-    bool CreateWindowAndRenderer(EngineApp& app)
+    bool CreateWindowAndRenderer(EngineApp &app)
     {
-        GameSettings& settings = *app.settings;
+        KES_ZONE_FN(CORE);
+        GameSettings &settings = *app.settings;
 
-        // AppConfig::renderer (game code) wins over the player's saved preference.
+        // AppConfig::renderer wins over the player's saved preference.
         const RendererBackend preferred = app.config.renderer != RendererBackend::Auto
-            ? app.config.renderer
-            : settings.GetPreferredRenderer();
+                                              ? app.config.renderer
+                                              : settings.GetPreferredRenderer();
 
         const std::vector<RendererBackend> candidates = BuildRendererCandidateList(preferred);
         for (RendererBackend backend : candidates)
         {
-            const char* backendName = RendererBackendName(backend);
+            const char *backendName = RendererBackendName(backend);
 
             // Created windowed and hidden; ApplySettings switches to the saved
             // window mode before the window is shown.
@@ -63,10 +67,16 @@ namespace
             rendererConfig.renderHeight = renderResolution.y;
 
             std::unique_ptr<IRenderer> renderer = CreateRenderer(backend);
-            if (renderer && renderer->Init(app.window.handle, rendererConfig))
+            bool rendererReady = false;
+            {
+                KES_ZONE(RENDER, "Renderer init");
+                KES_ZONE_TEXT(RENDER, backendName, std::strlen(backendName));
+                rendererReady = renderer && renderer->Init(app.window.handle, rendererConfig);
+            }
+            if (rendererReady)
             {
                 app.renderer = std::move(renderer);
-                app.rendererSize = { app.window.pixelWidth, app.window.pixelHeight };
+                app.rendererSize = {app.window.pixelWidth, app.window.pixelHeight};
                 EngineLogf("Renderer initialized: %s.", backendName);
                 return true;
             }
@@ -80,18 +90,19 @@ namespace
         return false;
     }
 
-    void ResizeRendererToWindow(EngineApp& app)
+    void ResizeRendererToWindow(EngineApp &app)
     {
+        KES_ZONE_FN(RENDER);
         if (!app.renderer || !IsAppWindowRenderable(app.window))
             return;
-        const IntPoint size = { app.window.pixelWidth, app.window.pixelHeight };
+        const IntPoint size = {app.window.pixelWidth, app.window.pixelHeight};
         if (size == app.rendererSize)
             return;
         if (app.renderer->Resize(size.x, size.y))
             app.rendererSize = size;
     }
 
-    void ApplyInputMode(EngineApp& app)
+    void ApplyInputMode(EngineApp &app)
     {
         switch (app.inputMode)
         {
@@ -114,8 +125,9 @@ namespace
     }
 
     // Sleeps until the next frame slot when a frame rate limit is set.
-    void LimitFrameRate(EngineApp& app)
+    void LimitFrameRate(EngineApp &app)
     {
+        KES_ZONE(CORE, "Frame rate limit");
         const float limit = app.settings ? app.settings->GetFrameRateLimit() : 0.0f;
         const unsigned long long now = SDL_GetPerformanceCounter();
         if (limit <= 0.0f)
@@ -138,7 +150,7 @@ namespace
         app.frameDeadline = target;
     }
 
-    bool IsAltEnter(const SDL_Event& event)
+    bool IsAltEnter(const SDL_Event &event)
     {
         return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
                (event.key.scancode == SDL_SCANCODE_RETURN || event.key.scancode == SDL_SCANCODE_KP_ENTER) &&
@@ -146,13 +158,16 @@ namespace
     }
 }
 
-void EngineSetCommandLine(int argc, const char* const* argv)
+void EngineSetCommandLine(int argc, const char *const *argv)
 {
     CommandLineInit(argc, argv);
 }
 
-bool EngineStart(EngineApp& app)
+bool EngineStart(EngineApp &app)
 {
+    KES_PROFILE_THREAD_NAME("Main");
+    KES_ZONE(CORE, "Engine startup");
+    KES_PROFILE_APP_INFO(ENGINE_PROJECT_NAME, std::strlen(ENGINE_PROJECT_NAME));
     const auto failStartup = [&app]() -> bool
     {
         EngineLog("Startup failed. Beginning shutdown cleanup.");
@@ -178,7 +193,12 @@ bool EngineStart(EngineApp& app)
     app.platformInitialized = true;
 
     std::string pakError;
-    if (!MountContentPakFiles(&pakError, app.platform->get_executable_path()))
+    bool paksMounted = false;
+    {
+        KES_ZONE(IO, "Mount content paks");
+        paksMounted = MountContentPakFiles(&pakError, app.platform->get_executable_path());
+    }
+    if (!paksMounted)
     {
         EngineLogf("Pak mount failed: %s", pakError.c_str());
         return failStartup();
@@ -186,7 +206,12 @@ bool EngineStart(EngineApp& app)
 
     EngineLogf("Mounted %zu pak file(s) from %s.", GetMountedPakFileCount(), ENGINE_CONTENT_DIRECTORY);
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD))
+    bool sdlInitOk = false;
+    {
+        KES_ZONE(CORE, "SDL_Init");
+        sdlInitOk = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD);
+    }
+    if (!sdlInitOk)
     {
         EngineLogf("SDL_Init failed: %s", SDL_GetError());
         return failStartup();
@@ -201,20 +226,30 @@ bool EngineStart(EngineApp& app)
     app.settings = app.settingsFactory ? app.settingsFactory() : std::make_unique<GameSettings>();
     app.settings->AttachEngine(nullptr, nullptr, &app.config);
     app.settings->SetActiveInstance(true);
-    app.settings->LoadSettings();
+    {
+        KES_ZONE(CORE, "Load settings");
+        app.settings->LoadSettings();
+    }
 
     if (!CreateWindowAndRenderer(app))
         return failStartup();
 
     // Window mode, resolution, vsync and render resolution from the settings
-    // (plus command line overrides), before the window becomes visible.
     app.settings->AttachEngine(&app.window, app.renderer.get(), &app.config);
-    app.settings->ApplySettings(true);
+    {
+        KES_ZONE(WINDOW, "Apply video settings");
+        app.settings->ApplySettings(true);
+    }
     ResizeRendererToWindow(app);
 
     EngineLogf("Main camera initialized at position (%.2f, %.2f, %.2f).", app.camera.x, app.camera.y, app.camera.z);
 
-    if (!app.world.Init(&app.camera, &app.input))
+    bool worldInitOk = false;
+    {
+        KES_ZONE(WORLD, "World init");
+        worldInitOk = app.world.Init(&app.camera, &app.input);
+    }
+    if (!worldInitOk)
         return failStartup();
     app.worldInitialized = true;
     EngineLog("World initialized.");
@@ -230,41 +265,60 @@ bool EngineStart(EngineApp& app)
     return true;
 }
 
-bool EngineTick(EngineApp& app)
+bool EngineTick(EngineApp &app)
 {
     if (!app.running)
         return false;
 
+    KES_ZONE(CORE, "EngineTick");
+
     // Nothing to draw while minimized: block until an event arrives instead of
     // spinning the CPU (and the GPU on some drivers) at full speed.
     if (!IsAppWindowRenderable(app.window))
-        SDL_WaitEventTimeout(nullptr, 100);
-
-    InputBeginFrame(app.input);
-
-    SDL_Event event = {};
-    while (SDL_PollEvent(&event))
     {
-        InputProcessEvent(app.input, event);
+        KES_ZONE(WINDOW, "Minimized wait");
+        SDL_WaitEventTimeout(nullptr, 100);
+    }
 
-        const uint32_t windowEvents = AppWindowHandleEvent(app.window, event);
-        if (windowEvents & AppWindowEvent_PixelSizeChanged)
-            ResizeRendererToWindow(app);
-        if ((windowEvents & AppWindowEvent_FocusChanged) && !app.window.focused)
-            InputResetState(app.input);   // key-up events won't arrive while unfocused
-        if ((windowEvents & AppWindowEvent_CloseRequested) || event.type == SDL_EVENT_QUIT)
-            app.running = false;
+    {
+        KES_ZONE(INPUT, "Event pump");
+        InputBeginFrame(app.input);
 
-        if (IsAltEnter(event))
-            EngineToggleFullscreen(app);
+        SDL_Event event = {};
+        int eventCount = 0;
+        for (;;)
+        {
+            bool gotEvent = false;
+            {
+                KES_ZONE(INPUT, "SDL_PollEvent");
+                gotEvent = SDL_PollEvent(&event);
+            }
+            if (!gotEvent)
+                break;
+            ++eventCount;
+
+            InputProcessEvent(app.input, event);
+
+            const uint32_t windowEvents = AppWindowHandleEvent(app.window, event);
+            if (windowEvents & AppWindowEvent_PixelSizeChanged)
+                ResizeRendererToWindow(app);
+            if ((windowEvents & AppWindowEvent_FocusChanged) && !app.window.focused)
+                InputResetState(app.input); // key-up events won't arrive while unfocused
+            if ((windowEvents & AppWindowEvent_CloseRequested) || event.type == SDL_EVENT_QUIT)
+                app.running = false;
+
+            if (IsAltEnter(event))
+                EngineToggleFullscreen(app);
 
 #if ENGINE_ALLOW_DEBUG_MODE
-        // F4: free / capture the mouse while developing.
-        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F4)
-            EngineSetInputMode(app, app.inputMode == InputMode::GameOnly ? InputMode::GameAndUI : InputMode::GameOnly);
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F4)
+                EngineSetInputMode(app, app.inputMode == InputMode::GameOnly ? InputMode::GameAndUI : InputMode::GameOnly);
 #endif
+        }
+        InputEndFrame(app.input);
+        KES_ZONE_VALUE(INPUT, eventCount);
+        KES_PROFILE_PLOT("SDL events / frame", static_cast<int64_t>(eventCount));
     }
-    InputEndFrame(app.input);
 
     const Uint64 now = SDL_GetPerformanceCounter();
     float dt = static_cast<float>((now - app.prevCounter) / app.performanceFrequency);
@@ -272,69 +326,89 @@ bool EngineTick(EngineApp& app)
     if (dt > 0.25f)
         dt = 0.25f;
 
+    KES_PROFILE_PLOT("Frame time (ms)", static_cast<double>(dt) * 1000.0);
+
     RendererUpdateScene(app.sceneState, app.input);
 
-    app.fixedAccumulator += dt;
-    while (app.fixedAccumulator >= app.fixedDt)
     {
-        app.world.FixedUpdate(app.fixedDt);
-        app.fixedAccumulator -= app.fixedDt;
+        KES_ZONE(WORLD, "Fixed update loop");
+        int fixedSteps = 0;
+        app.fixedAccumulator += dt;
+        while (app.fixedAccumulator >= app.fixedDt)
+        {
+            app.world.FixedUpdate(app.fixedDt);
+            app.fixedAccumulator -= app.fixedDt;
+            ++fixedSteps;
+        }
+        KES_ZONE_VALUE(WORLD, fixedSteps);
+        KES_PROFILE_PLOT("Fixed steps / frame", static_cast<int64_t>(fixedSteps));
     }
 
     app.world.Update(dt);
 
     if (IsAppWindowRenderable(app.window))
     {
-        app.renderer->RenderScene(app.sceneState, app.camera, app.world.GetScene(), app.world.GetAssets());
-        app.renderer->BeginBackbufferOverlay();
-        app.renderer->Present();
+        KES_ZONE(RENDER, "Render frame");
+        {
+            KES_ZONE(RENDER, "RenderScene");
+            app.renderer->RenderScene(app.sceneState, app.camera, app.world.GetScene(), app.world.GetAssets());
+        }
+        {
+            KES_ZONE(RENDER, "BeginBackbufferOverlay");
+            app.renderer->BeginBackbufferOverlay();
+        }
+        {
+            KES_ZONE(RENDER, "Present");
+            app.renderer->Present();
+        }
     }
 
     LimitFrameRate(app);
+    KES_PROFILE_FRAME();
     return app.running;
 }
 
-void EngineRegisterEntityClass(EngineApp& app, const std::string& className, EntityFactoryFunction factory)
+void EngineRegisterEntityClass(EngineApp &app, const std::string &className, EntityFactoryFunction factory)
 {
     app.world.RegisterEntityClass(className, std::move(factory));
 }
 
-void EngineSetPlayerClass(EngineApp& app, const std::string& className)
+void EngineSetPlayerClass(EngineApp &app, const std::string &className)
 {
     app.world.SetPlayerClassName(className);
 }
 
-void EngineSetInputMode(EngineApp& app, InputMode mode)
+void EngineSetInputMode(EngineApp &app, InputMode mode)
 {
     app.inputMode = mode;
     ApplyInputMode(app);
 }
 
-InputMode EngineGetInputMode(const EngineApp& app)
+InputMode EngineGetInputMode(const EngineApp &app)
 {
     return app.inputMode;
 }
 
-void EngineSetShowMouseCursor(EngineApp& app, bool show)
+void EngineSetShowMouseCursor(EngineApp &app, bool show)
 {
     app.showMouseCursor = show;
     ApplyInputMode(app);
 }
 
-void EngineSetWindowTitle(EngineApp& app, const char* title)
+void EngineSetWindowTitle(EngineApp &app, const char *title)
 {
     SetWindowTitle(app.window, title);
 }
 
-void EngineToggleFullscreen(EngineApp& app)
+void EngineToggleFullscreen(EngineApp &app)
 {
     if (!app.settings)
         return;
 
-    GameSettings& settings = *app.settings;
+    GameSettings &settings = *app.settings;
     const bool toFullscreen = settings.GetFullscreenMode() == WindowMode::Windowed;
     if (!toFullscreen && app.window.mode == WindowMode::Windowed)
-        settings.SetScreenResolution(app.window.windowedSize);   // keep the size the player dragged to
+        settings.SetScreenResolution(app.window.windowedSize); // keep the size the player dragged to
 
     settings.SetFullscreenMode(toFullscreen ? settings.GetPreferredFullscreenMode() : WindowMode::Windowed);
     settings.ApplyResolutionSettings(false);
@@ -343,13 +417,14 @@ void EngineToggleFullscreen(EngineApp& app)
     ResizeRendererToWindow(app);
 }
 
-GameSettings& EngineGetGameSettings(EngineApp& app)
+GameSettings &EngineGetGameSettings(EngineApp &app)
 {
     return *app.settings;
 }
 
-void EngineShutdown(EngineApp& app)
+void EngineShutdown(EngineApp &app)
 {
+    KES_ZONE(CORE, "Engine shutdown");
     EngineLog("Engine shutdown begin.");
     app.running = false;
     InputShutdown(app.input);

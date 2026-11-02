@@ -1,6 +1,7 @@
 #include "window.h"
 #include <algorithm>
 #include "logger.h"
+#include "profiler.h"
 
 namespace
 {
@@ -56,6 +57,7 @@ namespace
 
 bool CreateAppWindow(AppWindow& outWindow, const WindowDesc& desc)
 {
+    KES_ZONE_FN(WINDOW);
     outWindow = {};
     outWindow.mode = desc.mode;
     outWindow.displayIndex = desc.displayIndex;
@@ -91,6 +93,7 @@ bool CreateAppWindow(AppWindow& outWindow, const WindowDesc& desc)
 
 void DestroyAppWindow(AppWindow& window)
 {
+    KES_ZONE_FN(WINDOW);
     if (window.handle)
     {
         SDL_SetWindowRelativeMouseMode(window.handle, false);
@@ -102,6 +105,7 @@ void DestroyAppWindow(AppWindow& window)
 
 void ShowAppWindow(AppWindow& window)
 {
+    KES_ZONE_FN(WINDOW);
     if (!window.handle)
         return;
 
@@ -120,6 +124,7 @@ void SetWindowTitle(AppWindow& window, const char* title)
 
 bool SetAppWindowMode(AppWindow& window, WindowMode mode, IntPoint resolution, int displayIndex)
 {
+    KES_ZONE_FN(WINDOW);
     if (!window.handle)
         return false;
 
@@ -197,6 +202,7 @@ bool IsAppWindowRenderable(const AppWindow& window)
 
 uint32_t AppWindowHandleEvent(AppWindow& window, const SDL_Event& event)
 {
+    KES_ZONE_FN(WINDOW);
     if (!window.handle || event.type < SDL_EVENT_WINDOW_FIRST || event.type > SDL_EVENT_WINDOW_LAST)
         return AppWindowEvent_None;
     if (event.window.windowID != SDL_GetWindowID(window.handle))
@@ -269,6 +275,7 @@ void SetAppWindowCursor(AppWindow& window, bool visible, bool locked)
 
 void ApplyAppWindowCursor(AppWindow& window)
 {
+    KES_ZONE_FN(WINDOW);
     if (!window.handle)
         return;
 
@@ -302,6 +309,7 @@ IntPoint GetDesktopResolution(int displayIndex)
 
 std::vector<IntPoint> GetSupportedFullscreenResolutions(int displayIndex)
 {
+    KES_ZONE_FN(WINDOW);
     std::vector<IntPoint> result;
     int count = 0;
     SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(GetDisplayId(displayIndex), &count);

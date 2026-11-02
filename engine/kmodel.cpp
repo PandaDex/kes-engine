@@ -5,6 +5,7 @@
 #include <sstream>
 
 #include "pak_file_system.h"
+#include "profiler.h"
 
 namespace
 {
@@ -352,6 +353,8 @@ bool SaveKModelFile(const char* path, const KModelData& model, std::string* outE
 
 bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outModel = {};
 
     std::vector<uint8_t> fileBytes;
@@ -516,6 +519,7 @@ bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outErro
 
 bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::string* outError, uint32_t meshIndex)
 {
+    KES_ZONE_FN(ASSETS);
     outMesh = {};
     if (model.meshes.empty())
     {

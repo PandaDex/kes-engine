@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include "engine_types.h"
+#include "profiler.h"
 
 namespace
 {
@@ -277,6 +278,9 @@ namespace
 
     void WriteMessage(LogSource source, const std::string& message)
     {
+        // Log lines also show up in Tracy's message list, on the timeline.
+        KES_PROFILE_MESSAGE(message.data(), message.size());
+        KES_ZONE(IO, "Log write");
         std::lock_guard<std::mutex> lock(g_logger.mutex);
         WriteMessageNoLock(source, message);
     }

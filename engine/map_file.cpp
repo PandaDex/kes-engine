@@ -3,6 +3,7 @@
 #include <cstring>
 #include "engine_configuration.h"
 #include "pak_file_system.h"
+#include "profiler.h"
 
 namespace
 {
@@ -208,6 +209,8 @@ namespace
 
 bool LoadCompiledMap(const char* path, CompiledMap& outMap, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outMap = {};
     auto fail = [&](const std::string& message)
     {

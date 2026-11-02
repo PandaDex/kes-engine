@@ -8,6 +8,7 @@
 
 #include "file_paths.h"
 #include "pak_file_system.h"
+#include "profiler.h"
 
 namespace
 {
@@ -64,6 +65,8 @@ namespace
 
 bool LoadSoundFile(const char* path, SoundFileData& outSound, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outSound = {};
 
     const std::string resolvedPath = ResolveAssetPath(path);
@@ -79,6 +82,8 @@ bool LoadSoundFile(const char* path, SoundFileData& outSound, std::string* outEr
 
 bool LoadKSoundFile(const char* path, SoundFileData& outSound, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outSound = {};
 
     std::vector<uint8_t> fileBytes;

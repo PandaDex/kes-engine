@@ -48,6 +48,7 @@ include(KesPlatform)    # KES_PLATFORM: Windows, GDK, GDKX, Linux
 include(KesRenderers)   # KES_RENDERERS_<PLATFORM>: which renderer backends are built
 include(KesShaders)     # Slang -> SPIR-V / DXBC at build time
 include(KesPackage)     # "package" target: staged folder + archive / MSIXVC
+include(KesProfiler)    # KES_PROFILING: Tracy profiler zones (engine/profiler.h)
 
 # Include sub-projects.
 add_subdirectory ("engine")

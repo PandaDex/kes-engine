@@ -4,6 +4,7 @@
 #include <filesystem>
 #include "file_paths.h"
 #include "kmodel.h"
+#include "profiler.h"
 
 namespace
 {
@@ -20,6 +21,8 @@ namespace
 
 bool LoadMeshFromFile(const char* path, MeshData& outMesh, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outMesh = {};
 
     const std::string resolvedPath = ResolveAssetPath(path);

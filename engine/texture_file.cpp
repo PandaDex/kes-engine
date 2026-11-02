@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 #include "file_paths.h"
 #include "pak_file_system.h"
+#include "profiler.h"
 
 namespace
 {
@@ -120,6 +121,8 @@ namespace
 
 bool LoadTextureFile(const char* path, TextureFileData& outTexture, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outTexture = {};
     const std::string resolvedPath = ResolveAssetPath(path);
     const std::string extension = Lowercase(std::filesystem::path(resolvedPath).extension().string());
@@ -137,6 +140,8 @@ bool LoadTextureFile(const char* path, TextureFileData& outTexture, std::string*
 
 bool LoadKTexFile(const char* path, TextureFileData& outTexture, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outTexture = {};
 
     std::vector<uint8_t> fileBytes;

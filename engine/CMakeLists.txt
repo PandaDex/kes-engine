@@ -108,12 +108,16 @@ add_library(engine STATIC
     "audio_system.h"
     "audio_system.cpp"
     "platform/platform.h"
+    "profiler.h"
         reflection.h
 )
 target_include_directories(engine PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_link_libraries(engine PUBLIC SDL3::SDL3)
+
+# Profiler (KES_PROFILING, cmake/KesProfiler.cmake)
+kes_target_profiler(engine)
 
 # Renderer backends
 if(KES_RENDERER_VULKAN)

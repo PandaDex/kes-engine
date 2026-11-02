@@ -5,9 +5,11 @@
 #include "file_paths.h"
 #include "logger.h"
 #include "sound_file.h"
+#include "profiler.h"
 
 bool AudioSystem::Init()
 {
+    KES_ZONE_FN(AUDIO);
     EngineLog("Audio system initialization begin.");
     mutex = SDL_CreateMutex();
     if (!mutex)
@@ -34,6 +36,7 @@ bool AudioSystem::Init()
 
 void AudioSystem::Shutdown()
 {
+    KES_ZONE_FN(AUDIO);
     EngineLog("Audio system shutdown begin.");
     if (device != 0)
     {
@@ -54,6 +57,7 @@ void AudioSystem::Shutdown()
 
 void AudioSystem::Update(float dt)
 {
+    KES_ZONE_FN(AUDIO);
     (void)dt;
     if (!mutex)
         return;
@@ -205,6 +209,7 @@ void AudioSystem::SDLAudioCallback(void* userdata, Uint8* stream, int len)
 
 void AudioSystem::MixAudio(float* outSamples, int frameCount)
 {
+    KES_ZONE_FN(AUDIO);
     if (!outSamples || frameCount <= 0)
         return;
 
@@ -322,6 +327,8 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
 
 const AudioClip* AudioSystem::GetOrLoadClip(const char* soundFile)
 {
+    KES_ZONE_FN(AUDIO);
+    KES_ZONE_TEXTF(AUDIO, "%s", soundFile ? soundFile : "<null>");
     if (!soundFile || !soundFile[0])
         return nullptr;
 

@@ -16,6 +16,14 @@
 #include "pak_file_system.h"
 #include "shader_binary.h"
 
+#if KES_PROFILE_GPU
+#include <tracy/TracyVulkan.hpp>
+// GPU timestamp zone recorded into this frame's command buffer.
+#define KES_VK_GPU_ZONE(r, name) TracyVkZone((r).gpuProfiler, (r).commandBuffer, name)
+#else
+#define KES_VK_GPU_ZONE(r, name) ((void)0)
+#endif
+
 namespace kes::vk
 {
 
@@ -1581,7 +1589,10 @@ static VkPipeline GetOrCreateMeshPipelineVariant(Renderer& r, GPUShaderProgram& 
     const uint32_t variant = SelectMeshPipelineVariant(wireframe, doubleSided, transparent, depthReadOnly);
 
     if (program.pipelines[variant] == VK_NULL_HANDLE)
+    {
+        KES_ZONE(RENDER, "Create pipeline variant (cache miss)");
         program.pipelines[variant] = CreateMeshPipelineVariant(r, program, variant);
+    }
 
     return program.pipelines[variant];
 }
@@ -1641,6 +1652,7 @@ static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle han
     if (it != r.gpuShaders.end())
         return &it->second;
 
+    KES_ZONE(RENDER, "Compile shader program (cache miss)");
     const ShaderData* shader = assets.GetShader(handle);
     if (!shader)
         return nullptr;
@@ -1844,6 +1856,8 @@ static bool CreateWhiteTexture(Renderer& r)
 
 static bool CreateTextureFromFile(Renderer& r, const char* path, GPUTexture& outTexture)
 {
+    KES_ZONE_FN(RENDER);
+    KES_ZONE_TEXTF(RENDER, "%s", path ? path : "<null>");
     TextureFileData textureFile = {};
     std::string error;
     if (!LoadTextureFile(path, textureFile, &error))
@@ -1904,6 +1918,7 @@ static GPUMesh* GetOrUploadMesh(Renderer& r, MeshHandle handle, const AssetSyste
     if (it != r.gpuMeshes.end())
         return &it->second;
 
+    KES_ZONE(RENDER, "Upload mesh (cache miss)");
     const MeshData* data = assets.GetMesh(handle);
     if (!data || data->vertices.empty())
         return nullptr;
@@ -1961,6 +1976,7 @@ static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t m
     if (it != r.gpuModelMeshes.end())
         return &it->second;
 
+    KES_ZONE(RENDER, "Upload model mesh (cache miss)");
     const KModelData* model = assets.GetModel(handle);
     if (!model || meshIndex >= model->meshes.size() || model->meshes[meshIndex].vertices.empty())
         return nullptr;
@@ -2042,6 +2058,7 @@ static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelH
     if (it != r.gpuModelRenderCaches.end())
         return &it->second;
 
+    KES_ZONE(RENDER, "Build model render cache (cache miss)");
     const KModelData* model = assets.GetModel(handle);
     if (!model)
         return nullptr;
@@ -2121,6 +2138,7 @@ static void DestroyGPUMesh(Renderer& r, GPUMesh& mesh)
 
 static void DestroyRendererAssetCaches(Renderer& r)
 {
+    KES_ZONE_FN(RENDER);
     // Nothing here may be in flight: callers only invoke this outside of an
     // active frame (asset-generation change, or full shutdown).
     for (auto& pair : r.gpuTextures)
@@ -2202,6 +2220,13 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
 
     if (!CreateConstantBuffers(r)) { RendererShutdown(r); return false; }
     if (!CreateCommandObjects(r)) { RendererShutdown(r); return false; }
+
+#if KES_PROFILE_GPU
+    // Records and submits a few one-off command buffers on the graphics queue
+    // to calibrate GPU timestamps; the frame command buffer is reset before use.
+    r.gpuProfiler = TracyVkContext(r.physicalDevice, r.device, r.graphicsQueue, r.commandBuffer);
+    TracyVkContextName(r.gpuProfiler, "Vulkan", 6);
+#endif
     if (!CreateWhiteTexture(r)) { RendererShutdown(r); return false; }
 
     EngineLogf("Renderer initialized successfully (Vulkan). window=%dx%d render=%dx%d.", r.windowWidth, r.windowHeight, r.renderWidth, r.renderHeight);
@@ -2210,6 +2235,7 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
 
 bool RendererResize(Renderer& r, int width, int height)
 {
+    KES_ZONE_FN(RENDER);
     if (!r.device || width <= 0 || height <= 0)
         return false;
 
@@ -2227,6 +2253,7 @@ bool RendererResize(Renderer& r, int width, int height)
 
 bool RendererSetRenderResolution(Renderer& r, int width, int height)
 {
+    KES_ZONE_FN(RENDER);
     if (!r.device || width <= 0 || height <= 0)
         return false;
     if (width == r.renderWidth && height == r.renderHeight)
@@ -2475,12 +2502,25 @@ static void BeginFrameIfNeeded(Renderer& r)
     if (r.frameActive)
         return;
 
-    vkWaitForFences(r.device, 1, &r.inFlightFence, VK_TRUE, UINT64_MAX);
+    KES_ZONE_FN(RENDER);
+    {
+        // Time blocked here = CPU waiting on the GPU to finish the previous frame.
+        KES_ZONE(RENDER, "Wait for GPU (in-flight fence)");
+        vkWaitForFences(r.device, 1, &r.inFlightFence, VK_TRUE, UINT64_MAX);
+    }
     vkResetFences(r.device, 1, &r.inFlightFence);
 
     vkResetCommandBuffer(r.commandBuffer, 0);
     VkCommandBufferBeginInfo beginInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     vkBeginCommandBuffer(r.commandBuffer, &beginInfo);
+
+#if KES_PROFILE_GPU
+    {
+        // Reads back finished queries; must be outside a render pass.
+        KES_ZONE(GPU, "Collect GPU timestamps");
+        TracyVkCollect(r.gpuProfiler, r.commandBuffer);
+    }
+#endif
 
     r.modelCBRing.cursor = 0;
     r.materialCBRing.cursor = 0;
@@ -2498,6 +2538,7 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
         // and the previous frame's fence has already been waited on by the
         // time we get here on every path that reaches this function, it is
         // safe to do this before BeginFrameIfNeeded.
+        KES_ZONE(RENDER, "Asset generation changed (device wait idle)");
         vkDeviceWaitIdle(r.device);
         DestroyRendererAssetCaches(r);
         r.assetGeneration = assets.GetGeneration();
@@ -2508,6 +2549,7 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
     // destroying targets the buffer already references invalidates it.
     if (r.swapchainNeedsRecreate && !r.frameActive)
     {
+        KES_ZONE(RENDER, "Recreate swapchain");
         vkWaitForFences(r.device, 1, &r.inFlightFence, VK_TRUE, UINT64_MAX);
         vkDeviceWaitIdle(r.device);
         DestroyRenderTargets(r);
@@ -2518,6 +2560,7 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
         return;   // targets unavailable (window minimized); retry next frame
 
     BeginFrameIfNeeded(r);
+    KES_VK_GPU_ZONE(r, "Scene pass");
 
     float clearColor[4] = {};
     BuildSkyClearColor(sceneObj, clearColor);
@@ -2605,43 +2648,48 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
     transparentItems.clear();
     const Vector3 cameraPosition = { camera.x, camera.y, camera.z };
 
-    for (const SceneObject& obj : sceneObj.GetObjects())
     {
-        if (!obj.active) continue;
+        KES_ZONE(RENDER, "Build draw lists");
+        for (const SceneObject& obj : sceneObj.GetObjects())
+        {
+            if (!obj.active) continue;
 
-        const MaterialData* material = assets.GetMaterial(obj.material);
-        const Vector3 delta = {
-            obj.transform.position.x - cameraPosition.x,
-            obj.transform.position.y - cameraPosition.y,
-            obj.transform.position.z - cameraPosition.z
-        };
-        DrawItem item = {};
-        item.object = &obj;
-        item.material = material;
-        item.distanceSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+            const MaterialData* material = assets.GetMaterial(obj.material);
+            const Vector3 delta = {
+                obj.transform.position.x - cameraPosition.x,
+                obj.transform.position.y - cameraPosition.y,
+                obj.transform.position.z - cameraPosition.z
+            };
+            DrawItem item = {};
+            item.object = &obj;
+            item.material = material;
+            item.distanceSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
 
-        if (IsTransparentMaterial(material))
-            transparentItems.push_back(item);
-        else
-            opaqueItems.push_back(item);
+            if (IsTransparentMaterial(material))
+                transparentItems.push_back(item);
+            else
+                opaqueItems.push_back(item);
+        }
+
+        // Opaque: group by material (shader, textures and material constants are
+        // per material) and draw near-to-far inside a group for early depth reject.
+        std::sort(opaqueItems.begin(), opaqueItems.end(),
+            [](const DrawItem& a, const DrawItem& b)
+            {
+                if (a.material != b.material)
+                    return a.material < b.material;
+                return a.distanceSq < b.distanceSq;
+            });
+
+        // Transparent: back-to-front for correct blending.
+        std::sort(transparentItems.begin(), transparentItems.end(),
+            [](const DrawItem& a, const DrawItem& b)
+            {
+                return a.distanceSq > b.distanceSq;
+            });
+        KES_PROFILE_PLOT("Opaque draw items", static_cast<int64_t>(opaqueItems.size()));
+        KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
     }
-
-    // Opaque: group by material (shader, textures and material constants are
-    // per material) and draw near-to-far inside a group for early depth reject.
-    std::sort(opaqueItems.begin(), opaqueItems.end(),
-        [](const DrawItem& a, const DrawItem& b)
-        {
-            if (a.material != b.material)
-                return a.material < b.material;
-            return a.distanceSq < b.distanceSq;
-        });
-
-    // Transparent: back-to-front for correct blending.
-    std::sort(transparentItems.begin(), transparentItems.end(),
-        [](const DrawItem& a, const DrawItem& b)
-        {
-            return a.distanceSq > b.distanceSq;
-        });
 
     // Redundant state filtering across consecutive draws.
     VkPipeline boundPipeline = VK_NULL_HANDLE;
@@ -2747,8 +2795,16 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
         }
     };
 
-    drawItems(opaqueItems, false);
-    drawItems(transparentItems, true);
+    {
+        KES_ZONE(RENDER, "Draw opaque");
+        KES_VK_GPU_ZONE(r, "Opaque");
+        drawItems(opaqueItems, false);
+    }
+    {
+        KES_ZONE(RENDER, "Draw transparent");
+        KES_VK_GPU_ZONE(r, "Transparent");
+        drawItems(transparentItems, true);
+    }
 
     vkCmdEndRenderPass(r.commandBuffer);
 }
@@ -2763,7 +2819,12 @@ void RendererBeginBackbufferOverlay(Renderer& r)
         return;
     }
 
-    VkResult acquireResult = vkAcquireNextImageKHR(r.device, r.swapchain, UINT64_MAX, r.imageAvailableSemaphore, VK_NULL_HANDLE, &r.currentSwapchainImageIndex);
+    VkResult acquireResult = VK_SUCCESS;
+    {
+        // Can block when every swapchain image is still queued for display (vsync).
+        KES_ZONE(RENDER, "vkAcquireNextImageKHR");
+        acquireResult = vkAcquireNextImageKHR(r.device, r.swapchain, UINT64_MAX, r.imageAvailableSemaphore, VK_NULL_HANDLE, &r.currentSwapchainImageIndex);
+    }
     if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR)
     {
         r.swapchainNeedsRecreate = true;
@@ -2778,6 +2839,7 @@ void RendererBeginBackbufferOverlay(Renderer& r)
     }
 
     r.haveSwapchainImage = true;
+    KES_VK_GPU_ZONE(r, "Backbuffer blit");
 
     const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     VkClearValue clearValue = {};
@@ -2825,7 +2887,10 @@ void RendererPresent(Renderer& r)
         submitInfo.pSignalSemaphores = &r.renderFinishedSemaphores[r.currentSwapchainImageIndex];
     }
 
-    vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, r.inFlightFence);
+    {
+        KES_ZONE(RENDER, "vkQueueSubmit");
+        vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, r.inFlightFence);
+    }
 
     if (r.haveSwapchainImage)
     {
@@ -2836,7 +2901,11 @@ void RendererPresent(Renderer& r)
         presentInfo.pSwapchains = &r.swapchain;
         presentInfo.pImageIndices = &r.currentSwapchainImageIndex;
 
-        const VkResult presentResult = vkQueuePresentKHR(r.presentQueue, &presentInfo);
+        VkResult presentResult = VK_SUCCESS;
+        {
+            KES_ZONE(RENDER, "vkQueuePresentKHR");
+            presentResult = vkQueuePresentKHR(r.presentQueue, &presentInfo);
+        }
         if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
             r.swapchainNeedsRecreate = true;
         else if (presentResult != VK_SUCCESS)
@@ -2858,6 +2927,14 @@ void RendererShutdown(Renderer& r)
 {
     if (r.device)
         vkDeviceWaitIdle(r.device);
+
+#if KES_PROFILE_GPU
+    if (r.gpuProfiler)
+    {
+        TracyVkDestroy(r.gpuProfiler);
+        r.gpuProfiler = nullptr;
+    }
+#endif
 
     DestroyGPUTexture(r, r.whiteTexture);
     DestroyRendererAssetCaches(r);

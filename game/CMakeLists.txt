@@ -18,9 +18,6 @@ if (CMAKE_VERSION VERSION_GREATER 3.21)
 endif()
 
 
-# Content, config, shaders, platform files and the kes_package target
-# (cmake/KesPackage.cmake). Every *.slang under content/ is compiled for all
-# enabled renderers and can #include the engine's kes_common.slang.
 kes_add_game(game
     CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content"
     CONFIG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/config"

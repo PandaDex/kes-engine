@@ -2,6 +2,7 @@
 #include "collision_world.h"
 #include "entity_property_utils.h"
 #include "game_context.h"
+#include "profiler.h"
 
 void Entity::Teleport(const Vector3& newPosition)
 {
@@ -23,6 +24,7 @@ bool Entity::ApplyProperty(const std::string& name, const std::string& value)
 
 void Entity::RunBuiltinPhysics(float fixedDt)
 {
+    KES_ZONE(PHYSICS, "Entity::RunBuiltinPhysics");
     if (!gravityEnabled || fixedDt <= 0.0f)
         return;
 

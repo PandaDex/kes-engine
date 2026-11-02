@@ -8,6 +8,7 @@
 #include "file_paths.h"
 #include "text_block_file.h"
 #include "text_parse_utils.h"
+#include "profiler.h"
 
 namespace
 {
@@ -77,6 +78,8 @@ namespace
 
 bool LoadMaterialFile(const char* path, MaterialFileData& outMaterialFile, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outMaterialFile = {};
     outMaterialFile.authorFlags = MaterialFlag_Lit;
     outMaterialFile.material.flags = outMaterialFile.authorFlags;
@@ -220,6 +223,7 @@ bool SaveMaterialFile(const char* path, const MaterialFileData& materialFile, st
 
 bool EvaluateMaterialGraph(MaterialFileData& materialFile, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
     materialFile.material.flags = materialFile.authorFlags;
     materialFile.material.baseTexturePath = materialFile.legacyBaseTexturePath;
 

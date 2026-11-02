@@ -20,8 +20,6 @@ struct SceneState
     bool animDebug = false;
 };
 
-// Abstract renderer. One instance is created by the engine for the backend
-// that was selected (and successfully initialized) at startup.
 class IRenderer
 {
 public:
@@ -49,11 +47,9 @@ public:
     virtual void Present() = 0;
 };
 
-// --- Backend information
-
 const char *RendererBackendName(RendererBackend backend);
 
-// Parses "vulkan", "vk", "d3d11", "dx11", "auto" (case-insensitive).
+// Parses "vulkan", "vk", "d3d11", "dx11", "auto"
 bool ParseRendererBackend(const char *text, RendererBackend &outBackend);
 
 // Backends compiled into this build for the current platform, in priority order.
@@ -67,17 +63,7 @@ bool IsRendererSelectionAllowed();
 // SDL window flags a backend needs on its window (e.g. SDL_WINDOW_VULKAN).
 SDL_WindowFlags GetRendererWindowFlags(RendererBackend backend);
 
-// --- Selection ---------
-
-// The command line ("-renderer=vulkan", "--renderer d3d11", see
-// command_line.h) takes precedence over the environment and AppConfig.
-
-// Ordered list of backends to try at startup. The first entry is the one the
-// user/game asked for (if it is available and selection is allowed), followed
-// by the remaining backends in platform priority order as fallbacks.
 std::vector<RendererBackend> BuildRendererCandidateList(RendererBackend configured);
 
 std::unique_ptr<IRenderer> CreateRenderer(RendererBackend backend);
-
-// Backend independent debug toggles (F1 wireframe, F2 vertex snap, F3 anim debug).
 void RendererUpdateScene(SceneState &scene, const InputState &input);

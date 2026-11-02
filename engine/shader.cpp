@@ -1,5 +1,6 @@
 #include "shader.h"
 #include "text_block_file.h"
+#include "profiler.h"
 
 namespace
 {
@@ -13,6 +14,8 @@ namespace
 
 bool LoadShaderFile(const char* path, ShaderData& outShader, std::string* outError)
 {
+    KES_ZONE_FN(ASSETS);
+    KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
     outShader = {};
 
     std::vector<TextBlock> blocks;
