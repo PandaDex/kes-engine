@@ -7,6 +7,7 @@
 # Detects which stages the file defines, compiles each one for every format and
 # removes binaries for stages that no longer exist. Include-only files (no
 # entry points) produce nothing but the stamp.
+cmake_minimum_required(VERSION 3.21)
 
 foreach(_var SLANGC SOURCE OUTPUT_BASE STAMP)
     if(NOT DEFINED ${_var})
