@@ -238,9 +238,12 @@ bool EngineStart(EngineApp &app)
     KES_PROFILE_THREAD_NAME("Main");
     KES_ZONE(CORE, "Engine startup");
     KES_PROFILE_APP_INFO(ENGINE_PROJECT_NAME, std::strlen(ENGINE_PROJECT_NAME));
-    const auto failStartup = [&app]() -> bool
+    // `reason` is shown to the player; null when the failing code already did.
+    const auto failStartup = [&app](const char *reason) -> bool
     {
         EngineLog("Startup failed. Beginning shutdown cleanup.");
+        if (reason)
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, ENGINE_PROJECT_NAME, reason, nullptr);
         EngineShutdown(app);
         return false;
     };
@@ -259,7 +262,8 @@ bool EngineStart(EngineApp &app)
 #else
     const String logRoot = app.platform->get_executable_path();
 #endif
-    if (!LoggerInitialize(logRoot))
+    // The executable's folder may not be writable (Program Files).
+    if (!LoggerInitialize(logRoot) && !LoggerInitialize(GetUserDataDirectory().string()))
         std::printf("[Engine] Logger initialization failed. Continuing with console-only logging.\n");
 
     EngineLogf("Engine startup begin (platform: %s).", app.platform->get_name());
@@ -275,7 +279,7 @@ bool EngineStart(EngineApp &app)
     }
 
     if (!app.platform->initialize())
-        return failStartup();
+        return failStartup(nullptr);
     app.platformInitialized = true;
 
     std::string pakError;
@@ -287,7 +291,7 @@ bool EngineStart(EngineApp &app)
     if (!paksMounted)
     {
         EngineLogf("Pak mount failed: %s", pakError.c_str());
-        return failStartup();
+        return failStartup("The game data could not be read. Reinstalling or verifying the game files may help.");
     }
 
     EngineLogf("Mounted %zu pak file(s) from %s.", GetMountedPakFileCount(), ENGINE_CONTENT_DIRECTORY);
@@ -300,7 +304,7 @@ bool EngineStart(EngineApp &app)
     if (!sdlInitOk)
     {
         EngineLogf("SDL_Init failed: %s", SDL_GetError());
-        return failStartup();
+        return failStartup("The game could not start its video or audio systems.");
     }
     app.sdlInitialized = true;
     EngineLog("SDL subsystems initialized.");
@@ -337,7 +341,7 @@ bool EngineStart(EngineApp &app)
 #endif
 
     if (!CreateWindowAndRenderer(app))
-        return failStartup();
+        return failStartup("No supported graphics device was found.\n\nThe game needs Vulkan 1.1 or Direct3D 11. Updating your graphics driver may help.");
     CrashReporterSetTag("renderer", RendererBackendName(app.renderer->GetBackend()));
 
     // Window mode, resolution, vsync and render resolution from the settings
@@ -355,7 +359,7 @@ bool EngineStart(EngineApp &app)
         EngineLog("UI system failed to initialize; continuing without UI.");
     app.ui.SetSoundCallback([&app](const std::string &path) {
         if (app.worldInitialized)
-            app.world.GetAudio().Play2D(path.c_str());
+            app.world.GetAudio().PlayUi(path.c_str());
     });
 
     EngineLogf("Main camera initialized at position (%.2f, %.2f, %.2f).", app.camera.x, app.camera.y, app.camera.z);
@@ -366,11 +370,11 @@ bool EngineStart(EngineApp &app)
         worldInitOk = app.world.Init(&app.camera, &app.input);
     }
     if (!worldInitOk)
-        return failStartup();
+        return failStartup("The game world could not be initialized.");
     app.worldInitialized = true;
     EngineLog("World initialized.");
-    app.world.LoadMap(ENGINE_STARTUP_MAP);
-    EngineLogf("Startup map load requested: %s.", ENGINE_STARTUP_MAP);
+    if (!app.world.LoadMap(ENGINE_STARTUP_MAP))
+        EngineLogf("Startup map %s could not be loaded; starting with an empty level.", ENGINE_STARTUP_MAP);
     app.performanceFrequency = static_cast<double>(SDL_GetPerformanceFrequency());
     app.prevCounter = SDL_GetPerformanceCounter();
     app.frameDeadline = app.prevCounter;
@@ -475,6 +479,7 @@ bool EngineTick(EngineApp &app)
             app.fixedAccumulator -= app.fixedDt;
             ++fixedSteps;
         }
+        app.world.GetGameContext().fixedStepAlpha = app.fixedAccumulator / app.fixedDt;
         KES_ZONE_VALUE(WORLD, fixedSteps);
         KES_PROFILE_PLOT("Fixed steps / frame", static_cast<int64_t>(fixedSteps));
     }
@@ -502,8 +507,8 @@ bool EngineTick(EngineApp &app)
             KES_ZONE(RENDER, "Present");
             app.renderer->Present();
         }
-        ExitOnGpuFailure(app);
     }
+    ExitOnGpuFailure(app);
 
     LimitFrameRate(app);
     KES_PROFILE_FRAME();
@@ -593,8 +598,11 @@ void EngineShutdown(EngineApp &app)
 
     if (app.settings)
     {
-        // Remember a window the player resized by dragging its border.
-        if (app.renderer && app.window.handle &&
+        // Remember a window the player resized by dragging its border, but not
+        // a size that came from the command line.
+        int overrideSize = 0;
+        const bool sizeOverridden = CommandLineGetInt("ResX", overrideSize) || CommandLineGetInt("ResY", overrideSize);
+        if (app.renderer && app.window.handle && !sizeOverridden &&
             app.settings->GetFullscreenMode() == WindowMode::Windowed && app.window.mode == WindowMode::Windowed)
         {
             app.settings->SetScreenResolution(app.window.windowedSize);

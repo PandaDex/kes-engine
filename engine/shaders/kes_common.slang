@@ -52,8 +52,8 @@ cbuffer ModelCB : register(b1)
 {
     row_major float4x4 uWorldViewProj;
     row_major float4x4 uWorld;
-    row_major float4x4 uSkinMatrices[128];
     float4 uSkinInfo;    // x = skinned
+    row_major float4x4 uSkinMatrices[128];
 };
 
 [[vk::binding(2, 0)]]

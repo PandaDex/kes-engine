@@ -35,6 +35,9 @@ public:
     void FixedUpdate(float fixedDt);
     void DestroyPending();
     void DestroyAll();
+    // True inside Update, FixedUpdate and DestroyPending, while the entity list
+    // must not be cleared.
+    bool IsUpdating() const { return updating; }
 
     template<typename T>
     T* GetEntityOfClass()
@@ -155,4 +158,5 @@ private:
     std::vector<Entity*> pendingStart;
     GameContext* game = nullptr;
     uint64_t nextEntityId = 1;
+    bool updating = false;
 };

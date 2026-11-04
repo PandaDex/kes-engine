@@ -67,7 +67,7 @@ static void DestroyShadowArray(GPUShadowArray& shadows)
 }
 
 static void DestroyRendererAssetCaches(Renderer& r);
-static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelHandle handle, const AssetSystem& assets);
+static void SetFatalError(Renderer& r, const char* call, HRESULT result);
 
 // Shaders are authored once in Slang (engine/shaders/*.slang) and compiled to
 // DXBC at build time (cmake/KesShaders.cmake). Nothing is compiled at runtime.
@@ -605,9 +605,10 @@ static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle han
     if (handle == 0)
         return nullptr;
 
+    // A failed program is kept empty so it isn't retried on every draw.
     auto it = r.gpuShaders.find(handle);
     if (it != r.gpuShaders.end())
-        return &it->second;
+        return it->second.vertexShader ? &it->second : nullptr;
 
     KES_ZONE(RENDER, "Compile shader program (cache miss)");
     const ShaderData* shader = assets.GetShader(handle);
@@ -622,6 +623,7 @@ static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle han
     if (!CreateShaderPairFromBinaries(r, vs, ps, &program.vertexShader, &program.pixelShader, &program.inputLayout))
     {
         EngineLogf("Failed to create shader program for \"%s\".", shader->name.c_str());
+        r.gpuShaders.emplace(handle, GPUShaderProgram{});
         return nullptr;
     }
 
@@ -1036,16 +1038,6 @@ static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t m
     return &(r.gpuModelMeshes[key] = gpu);
 }
 
-static int32_t FindModelNodeForMesh(const KModelData& model, uint32_t meshIndex)
-{
-    for (size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex)
-    {
-        if (model.nodes[nodeIndex].meshIndex == static_cast<int32_t>(meshIndex))
-            return static_cast<int32_t>(nodeIndex);
-    }
-    return -1;
-}
-
 static void DestroyRendererAssetCaches(Renderer& r)
 {
     KES_ZONE_FN(RENDER);
@@ -1074,48 +1066,6 @@ static void DestroyRendererAssetCaches(Renderer& r)
         SafeRelease(pair.second.vertexShader);
     }
     r.gpuShaders.clear();
-
-    r.gpuModelRenderCaches.clear();
-}
-
-static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelHandle handle, const AssetSystem& assets)
-{
-    if (handle == 0)
-        return nullptr;
-
-    auto it = r.gpuModelRenderCaches.find(handle);
-    if (it != r.gpuModelRenderCaches.end())
-        return &it->second;
-
-    KES_ZONE(RENDER, "Build model render cache (cache miss)");
-    const KModelData* model = assets.GetModel(handle);
-    if (!model)
-        return nullptr;
-
-    GPUModelRenderCache cache = {};
-    cache.meshBindWorldMatrices.resize(model->meshes.size() * 16u, 0.0f);
-
-    std::vector<AnimationTransform> bindPose;
-    BuildAnimationBindPose(*model, bindPose);
-    std::vector<float> bindWorldMatrices;
-    BuildAnimationWorldMatrices(*model, bindPose, bindWorldMatrices);
-
-    for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
-    {
-        const int32_t meshNodeIndex = FindModelNodeForMesh(*model, meshIndex);
-
-        float* destination = cache.meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u;
-        destination[0] = 1.0f;
-        destination[5] = 1.0f;
-        destination[10] = 1.0f;
-        destination[15] = 1.0f;
-
-        if (meshNodeIndex >= 0 && bindWorldMatrices.size() >= (static_cast<size_t>(meshNodeIndex) + 1u) * 16u)
-            std::memcpy(destination, bindWorldMatrices.data() + static_cast<size_t>(meshNodeIndex) * 16u, sizeof(float) * 16u);
-    }
-
-    auto inserted = r.gpuModelRenderCaches.emplace(handle, std::move(cache));
-    return &inserted.first->second;
 }
 
 // Init / resize / options
@@ -1177,11 +1127,14 @@ bool RendererResize(Renderer& r, int width, int height)
 
     if (FAILED(hr))
     {
-        EngineLogf("ResizeBuffers failed: 0x%08X", static_cast<unsigned>(hr));
+        SetFatalError(r, "ResizeBuffers", hr);
         return false;
     }
 
-    return CreateSwapchainTargets(r);
+    if (CreateSwapchainTargets(r))
+        return true;
+    SetFatalError(r, "Creating the swapchain targets", r.device->GetDeviceRemovedReason());
+    return false;
 }
 
 bool RendererSetRenderResolution(Renderer& r, int width, int height)
@@ -1196,7 +1149,10 @@ bool RendererSetRenderResolution(Renderer& r, int width, int height)
     r.renderHeight = height;
     r.context->OMSetRenderTargets(0, nullptr, nullptr);
     DestroySceneTargets(r);
-    return CreateSceneTargets(r);
+    if (CreateSceneTargets(r))
+        return true;
+    SetFatalError(r, "Creating the scene targets", r.device->GetDeviceRemovedReason());
+    return false;
 }
 
 void RendererSetVSync(Renderer& r, bool enabled)
@@ -1217,7 +1173,8 @@ void RendererSetGraphicsOptions(Renderer& r, const GraphicsOptions& options)
     if (previous.msaaSamples != options.msaaSamples)
     {
         DestroySceneTargets(r);
-        CreateSceneTargets(r);
+        if (!CreateSceneTargets(r))
+            SetFatalError(r, "Creating the scene targets", r.device->GetDeviceRemovedReason());
     }
     if (previous.shadowQuality != options.shadowQuality)
         CreateShadowTargets(r);
@@ -1357,9 +1314,9 @@ static void DrawGPUMesh(Renderer& r, DrawState& state, const GPUMesh& gpuMesh)
 static void DrawSceneObject(Renderer& r, DrawState& state, const DrawItem& item, const Matrix4& viewProj,
                             const render::Frustum& frustum, const AssetSystem& assets, bool shadowPass, bool wireframe)
 {
+    if (!item.skinned && !render::SphereInFrustum(frustum, item.boundsCenter, item.boundsRadius))
+        return;
     const SceneObject& obj = *item.object;
-    const KModelData* model = assets.GetModel(obj.model);
-    const bool skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
 
     const bool doubleSided = IsDoubleSidedMaterial(item.material);
     ID3D11RasterizerState* rs = shadowPass ? r.shadowRS
@@ -1391,39 +1348,27 @@ static void DrawSceneObject(Renderer& r, DrawState& state, const DrawItem& item,
         state.haveMaterial = true;
     }
 
-    const Matrix4 objectWorld = render::TransformToMatrix(obj.transform);
-    if (skinned)
+    const Matrix4 worldViewProj = render::MatrixMultiply(item.world, viewProj);
+    if (item.skinned)
     {
-        const GPUModelRenderCache* modelRenderCache = GetOrBuildModelRenderCache(r, obj.model, assets);
-        if (!modelRenderCache)
-            return;
-
-        // Animated: no culling (the bind-pose bounds don't cover the animation).
+        // glTF semantics: the skin matrices already place the mesh, so the mesh node's
+        // own transform doesn't apply. Animated: no culling (the bind-pose bounds don't
+        // cover the animation).
+        const KModelData* model = assets.GetModel(obj.model);
         const uint32_t matrixCount = std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices);
         for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
         {
             GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
             if (!gpuMesh)
                 continue;
-            Matrix4 meshLocal;
-            std::memcpy(meshLocal.m, modelRenderCache->meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u, sizeof(meshLocal.m));
-            const Matrix4 world = render::MatrixMultiply(meshLocal, objectWorld);
-            UpdateModelConstants(r, render::MatrixMultiply(world, viewProj), world, obj.skinMatrices, matrixCount);
+            UpdateModelConstants(r, worldViewProj, item.world, obj.skinMatrices.data(), matrixCount);
             DrawGPUMesh(r, state, *gpuMesh);
         }
         return;
     }
 
-    GPUMesh* gpuMesh = GetOrUploadMesh(r, obj.mesh, assets);
-    if (!gpuMesh)
-        return;
-    Vector3 center;
-    float radius = 0.0f;
-    render::TransformSphere(obj.transform, gpuMesh->boundsCenter, gpuMesh->boundsRadius, center, radius);
-    if (!render::SphereInFrustum(frustum, center, radius))
-        return;
-    UpdateModelConstants(r, render::MatrixMultiply(objectWorld, viewProj), objectWorld, nullptr, 0);
-    DrawGPUMesh(r, state, *gpuMesh);
+    UpdateModelConstants(r, worldViewProj, item.world, nullptr, 0);
+    DrawGPUMesh(r, state, *item.mesh);
 }
 
 static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
@@ -1474,7 +1419,7 @@ static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
 
 void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
 {
-    if (!r.sceneColor || !r.dsv)
+    if (!r.sceneColor || !r.dsv || (r.msaaSamples > 1 && !r.sceneColorMSRTV))
         return;
     if (r.assetGeneration != assets.GetGeneration())
     {
@@ -1520,6 +1465,17 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
             item.object = &obj;
             item.material = assets.GetMaterial(obj.material);
             item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
+            item.world = render::TransformToMatrix(obj.transform);
+            const KModelData* model = assets.GetModel(obj.model);
+            item.skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
+            if (!item.skinned)
+            {
+                item.mesh = GetOrUploadMesh(r, obj.mesh, assets);
+                if (!item.mesh)
+                    continue;
+                render::TransformSphere(item.world, obj.transform.scale, item.mesh->boundsCenter, item.mesh->boundsRadius,
+                                        item.boundsCenter, item.boundsRadius);
+            }
             (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);
         }
         // Opaque: group by material, near-to-far inside a group (early depth reject).
@@ -1591,6 +1547,8 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
 
 void RendererBeginBackbufferOverlay(Renderer& r)
 {
+    if (!r.rtv)
+        return;
     KES_D3D11_GPU_ZONE(r, "Tonemap");
     const float black[4] = { 0, 0, 0, 1 };
     r.context->OMSetRenderTargets(1, &r.rtv, nullptr);
@@ -1751,8 +1709,21 @@ static const char* DeviceRemovedReasonName(HRESULT reason)
     }
 }
 
+static void SetFatalError(Renderer& r, const char* call, HRESULT result)
+{
+    if (!r.fatalError.empty())
+        return;
+    char message[160];
+    std::snprintf(message, sizeof(message), "%s failed: 0x%08lX, device removed reason %s", call, static_cast<unsigned long>(result),
+                  DeviceRemovedReasonName(r.device->GetDeviceRemovedReason()));
+    r.fatalError = message;
+}
+
 void RendererPresent(Renderer& r)
 {
+    if (!r.fatalError.empty())
+        return;
+
     // Vsync off: present immediately; ALLOW_TEARING lets flip-model swapchains
     // in windowed/borderless mode skip the compositor's vblank wait.
     const UINT syncInterval = r.vsync ? 1u : 0u;
@@ -1760,13 +1731,8 @@ void RendererPresent(Renderer& r)
     {
         KES_ZONE(RENDER, "IDXGISwapChain::Present");
         const HRESULT result = r.swapChain->Present(syncInterval, presentFlags);
-        if (FAILED(result) && r.fatalError.empty())
-        {
-            char message[128];
-            std::snprintf(message, sizeof(message), "IDXGISwapChain::Present failed: 0x%08lX, device removed reason %s",
-                          static_cast<unsigned long>(result), DeviceRemovedReasonName(r.device->GetDeviceRemovedReason()));
-            r.fatalError = message;
-        }
+        if (FAILED(result))
+            SetFatalError(r, "IDXGISwapChain::Present", result);
     }
 
 #if KES_PROFILE_GPU

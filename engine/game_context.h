@@ -20,6 +20,9 @@ struct GameContext
     AssetSystem* assets = nullptr;
     AudioSystem* audio = nullptr;
     CollisionWorld* collision = nullptr;
+    // How far the frame is between the last two fixed steps (0..1), for
+    // drawing physics bodies smoothly at any frame rate.
+    float fixedStepAlpha = 1.0f;
     EntityManager* entities = nullptr;
     InputState* input = nullptr;
     Camera* mainCamera = nullptr;

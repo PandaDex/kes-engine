@@ -101,6 +101,7 @@ struct InputState
 {
     bool keys[SDL_SCANCODE_COUNT] = {};
     bool previousKeys[SDL_SCANCODE_COUNT] = {};
+    bool keysTapped[SDL_SCANCODE_COUNT] = {};   // went down this frame, so a press and release in one frame still counts
 
     bool mouseButtons[8] = {};
     bool previousMouseButtons[8] = {};

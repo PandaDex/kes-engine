@@ -19,4 +19,4 @@ std::vector<std::string> GetMountedPakFilePaths();
 
 std::string GeneratePakEncryptionKeyHex();
 bool CreatePakFile(const char* sourceDirectory, const char* outputPath, const char* encryptionKeyHex, std::string* outError = nullptr);
-bool ExtractPakFile(const char* pakPath, const char* outputDirectory, std::string* outError);
+bool ExtractPakFile(const char* pakPath, const char* outputDirectory, std::string* outError, const char* encryptionKeyHex = nullptr);

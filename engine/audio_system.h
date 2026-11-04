@@ -15,6 +15,9 @@ struct AudioListener
     Vector3 up = { 0.0f, 1.0f, 0.0f };
 };
 
+// -1 = fully left, 1 = fully right of the listener.
+float ComputeStereoPan(const AudioListener& listener, const Vector3& soundPosition);
+
 struct AudioClip
 {
     SDL_AudioSpec spec = {};
@@ -27,11 +30,12 @@ struct AudioVoice
 {
     AudioVoiceId id = 0;
     const AudioClip* clip = nullptr;
-    float samplePosition = 0.0f;
+    double samplePosition = 0.0;   // a float stops advancing at 2^24 frames (under 6 minutes)
     float volume = 1.0f;
     float pitch = 1.0f;
     bool spatial = false;
     bool loop = false;
+    bool ignoresPause = false;
     float attenuation = 1.0f;
     Vector3 position = {};
     bool playing = false;
@@ -50,14 +54,16 @@ public:
     bool LoadClip(const char* soundFile);
     AudioVoiceId Play2D(const char* soundFile, float volume = 1.0f, float pitch = 1.0f, bool loop = false);
     AudioVoiceId Play3D(const Vector3& location, float attenuation, const char* soundFile, float volume = 1.0f, float pitch = 1.0f, bool loop = false);
+    // Keeps playing while the system is paused (menu sounds).
+    AudioVoiceId PlayUi(const char* soundFile, float volume = 1.0f);
     void StopVoice(AudioVoiceId id);
     bool IsVoicePlaying(AudioVoiceId id) const;
     void UpdateVoice3D(AudioVoiceId id, const Vector3& location, float attenuation);
     void SetVoicePitch(AudioVoiceId id, float pitch);
     void SetVoiceVolume(AudioVoiceId id, float volume);
 
-    // Pauses the output device (e.g. while the game is paused); voices keep
-    // their positions.
+    // Holds every voice except PlayUi ones (e.g. while the game is paused);
+    // voices keep their positions.
     void SetPaused(bool paused);
     bool IsPaused() const { return paused; }
     void StopAll();

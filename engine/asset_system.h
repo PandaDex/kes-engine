@@ -16,7 +16,7 @@ class AssetSystem
 public:
     AssetSystem();
 
-    MeshHandle CreateMesh(const MeshData& mesh);
+    MeshHandle CreateMesh(MeshData mesh);
     MeshHandle LoadMesh(const char* path);
     MeshHandle LoadObjMesh(const char* path);
     MeshHandle CreateCubeMesh();
@@ -36,6 +36,9 @@ public:
     const AnimationClipData* GetAnimationClip(AnimationClipHandle handle) const;
     const AnimationGraphData* GetAnimationGraph(AnimationGraphHandle handle) const;
     uint64_t GetGeneration() const { return generation; }
+
+    // A file that fails to load is logged once and then returns 0 from the
+    // cache until Clear(), so callers may retry freely.
 
     void Clear();
 

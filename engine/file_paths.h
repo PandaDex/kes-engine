@@ -28,9 +28,9 @@ std::vector<std::string> CollectPositionalCommandLineArguments(int argc, const c
 inline std::filesystem::path GetExecutableDirectory()
 {
 #if PLATFORM_WINDOWS
-    char modulePath[MAX_PATH] = {};
-    const DWORD length = GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
-    if (length == 0 || length >= MAX_PATH)
+    char modulePath[4096] = {};
+    const DWORD length = GetModuleFileNameA(nullptr, modulePath, sizeof(modulePath));
+    if (length == 0 || length >= sizeof(modulePath))
         return {};
 
     std::filesystem::path path = std::filesystem::path(std::string(modulePath, length)).parent_path();

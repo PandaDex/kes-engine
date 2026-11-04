@@ -76,8 +76,8 @@ namespace render
     {
         float worldViewProj[16];
         float world[16];
-        float skinMatrices[128 * 16];
         float skinInfo[4];
+        float skinMatrices[128 * 16];   // last: static draws only need what comes before
     };
 
     struct SkyCBData
@@ -107,7 +107,8 @@ namespace render
     static_assert(offsetof(SceneCBData, shadowParams) == 2640, "SceneCB layout");
     static_assert(offsetof(SceneCBData, localShadowViewProj) == 2656, "SceneCB layout");
     static_assert(sizeof(SceneCBData) == 3680, "SceneCB layout");
-    static_assert(offsetof(ModelCBData, skinInfo) == 8320, "ModelCB layout");
+    static_assert(offsetof(ModelCBData, skinInfo) == 128, "ModelCB layout");
+    static_assert(offsetof(ModelCBData, skinMatrices) == 144, "ModelCB layout");
     static_assert(sizeof(MaterialCBData) == 64, "MaterialCB layout");
 
     MaterialCBData BuildMaterialConstants(const MaterialData* material, uint32_t textureFlags);
@@ -185,8 +186,8 @@ namespace render
 
     // Local-space bounding sphere of a vertex stream (positions as 3 floats at `stride` bytes).
     void ComputeBoundingSphere(const void* vertices, size_t count, size_t stride, Vector3& outCenter, float& outRadius);
-    // World-space sphere of a local sphere under a TRS transform.
-    void TransformSphere(const Transform& transform, const Vector3& localCenter, float localRadius, Vector3& outCenter, float& outRadius);
+    // World-space sphere of a local sphere, `world` being TransformToMatrix of a transform with this scale.
+    void TransformSphere(const Matrix4& world, const Vector3& scale, const Vector3& localCenter, float localRadius, Vector3& outCenter, float& outRadius);
     Matrix4 TransformToMatrix(const Transform& transform);
 
     uint16_t FloatToHalf(float value);

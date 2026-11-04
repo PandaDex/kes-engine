@@ -22,6 +22,14 @@ if(KES_SANITIZE)
     endif()
 endif()
 
+# Makes the narrow Windows APIs and std::filesystem conversions use UTF-8, so
+# install and user folders with any characters work (Windows 10 1903+).
+function(kes_target_utf8 target)
+    if(MSVC)
+        target_sources(${target} PRIVATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/kes_utf8.manifest")
+    endif()
+endfunction()
+
 function(kes_target_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /external:anglebrackets /external:W0)

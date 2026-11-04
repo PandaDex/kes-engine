@@ -1,11 +1,23 @@
 #include "audio_system.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include "file_paths.h"
 #include "logger.h"
 #include "sound_file.h"
 #include "profiler.h"
+
+float ComputeStereoPan(const AudioListener& listener, const Vector3& soundPosition)
+{
+    const Vector3 toSound = soundPosition - listener.position;
+    const float distance = Vector3Length(toSound);
+    if (distance <= 0.0001f)
+        return 0.0f;
+    // up x forward: the engine is left-handed.
+    const Vector3 right = Vector3Normalize(Vector3Cross(listener.up, listener.forward));
+    return ClampFloat(Vector3Dot(toSound / distance, right), -1.0f, 1.0f);
+}
 
 bool AudioSystem::Init()
 {
@@ -86,15 +98,14 @@ void AudioSystem::SetListener(const AudioListener& newListener)
 
 void AudioSystem::SetPaused(bool pause)
 {
-    if (paused == pause)
+    if (!mutex)
+    {
+        paused = pause;
         return;
+    }
+    SDL_LockMutex(mutex);
     paused = pause;
-    if (!stream)
-        return;
-    if (pause)
-        SDL_PauseAudioStreamDevice(stream);
-    else
-        SDL_ResumeAudioStreamDevice(stream);
+    SDL_UnlockMutex(mutex);
 }
 
 void AudioSystem::StopAll()
@@ -160,6 +171,23 @@ AudioVoiceId AudioSystem::Play3D(const Vector3& location, float attenuation, con
     voice.spatial = true;
     voice.attenuation = attenuation;
     voice.position = location;
+    return AddVoice(voice) ? voice.id : 0;
+}
+
+AudioVoiceId AudioSystem::PlayUi(const char* soundFile, float volume)
+{
+    if (!stream || !mutex)
+        return 0;
+    const AudioClip* clip = GetOrLoadClip(soundFile);
+    if (!clip)
+        return 0;
+
+    AudioVoice voice = {};
+    voice.id = nextVoiceId++;
+    voice.clip = clip;
+    voice.volume = volume;
+    voice.playing = true;
+    voice.ignoresPause = true;
     return AddVoice(voice) ? voice.id : 0;
 }
 
@@ -257,14 +285,15 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
     {
         if (!voice.playing || !voice.clip || voice.clip->frameCount <= 0)
             continue;
+        if (paused && !voice.ignoresPause)
+            continue;
 
         float leftGain = voice.volume;
         float rightGain = voice.volume;
 
         if (voice.spatial)
         {
-            const Vector3 toSound = voice.position - listener.position;
-            const float distance = Vector3Length(toSound);
+            const float distance = Vector3Length(voice.position - listener.position);
 
             // Avoid std::max() because Windows headers may define max as a macro.
             const float attenuation =
@@ -275,22 +304,7 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
             const float att =
                 1.0f / (1.0f + distance * attenuation);
 
-            const Vector3 right =
-                Vector3Normalize(
-                    Vector3Cross(listener.forward, listener.up)
-                );
-
-            const Vector3 dir =
-                distance > 0.0001f
-                    ? toSound / distance
-                    : Vector3{};
-
-            const float pan =
-                ClampFloat(
-                    Vector3Dot(dir, right),
-                    -1.0f,
-                    1.0f
-                );
+            const float pan = ComputeStereoPan(listener, voice.position);
 
             leftGain *=
                 att * (pan <= 0.0f ? 1.0f : 1.0f - pan);
@@ -307,8 +321,8 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
             {
                 if (voice.loop)
                 {
-                    voice.samplePosition = 0.0f;
-                    sampleIndex = 0;
+                    voice.samplePosition = std::fmod(voice.samplePosition, static_cast<double>(voice.clip->frameCount));
+                    sampleIndex = static_cast<int>(voice.samplePosition);
                 }
                 else
                 {
@@ -347,12 +361,7 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
             outSamples[static_cast<size_t>(frame) * 2 + 1] +=
                 right * rightGain;
 
-            const float pitch =
-                voice.pitch > 0.01f
-                    ? voice.pitch
-                    : 0.01f;
-
-            voice.samplePosition += pitch;
+            voice.samplePosition += voice.pitch > 0.01f ? voice.pitch : 0.01f;
         }
     }
 
@@ -424,7 +433,7 @@ const AudioClip* AudioSystem::GetOrLoadClip(const char* soundFile)
     }
     else
     {
-        clip.samples = sound.samples;
+        clip.samples = std::move(sound.samples);
     }
 
     clip.channels = deviceSpec.channels;

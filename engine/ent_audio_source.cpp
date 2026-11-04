@@ -10,17 +10,18 @@ AudioSourceEntity::AudioSourceEntity(const char* soundFilePath, bool useSpatial)
 
 void AudioSourceEntity::Start()
 {
-    if (!soundFile.empty() && loop)
+    if (!soundFile.empty() && (loop || autoPlay))
         Play();
 }
 
 void AudioSourceEntity::Update(float dt)
 {
     (void)dt;
-    if (!game || !game->audio || voiceId == 0 || !spatial)
+    if (!game || !game->audio || voiceId == 0)
         return;
 
-    game->audio->UpdateVoice3D(voiceId, Position, attenuation);
+    if (spatial)
+        game->audio->UpdateVoice3D(voiceId, Position, attenuation);
     game->audio->SetVoiceVolume(voiceId, volume);
     game->audio->SetVoicePitch(voiceId, pitch);
 }
@@ -89,6 +90,12 @@ bool AudioSourceEntity::ApplyProperty(const std::string& name, const std::string
     if (name == "Loop")
     {
         SetLoop(entityprops::ParseBool(value, loop));
+        return true;
+    }
+
+    if (name == "AutoPlay")
+    {
+        autoPlay = entityprops::ParseBool(value, autoPlay);
         return true;
     }
 

@@ -41,6 +41,32 @@ TEST_CASE("pak: extract returns the packed files")
     CHECK(kestest::ReadBytes((output / "nested" / "data.bin").string()) == fixture.binary);
 }
 
+TEST_CASE("pak: extract accepts a trailing separator on the output directory")
+{
+    PakFixture fixture;
+    std::string error;
+    REQUIRE(CreatePakFile(fixture.source.c_str(), fixture.pak.c_str(), nullptr, &error));
+
+    const std::string output = fixture.dir.File("extracted") + "/";
+    REQUIRE(ExtractPakFile(fixture.pak.c_str(), output.c_str(), &error));
+    CHECK(kestest::ReadBytes((fs::path(output) / "hello.txt").string()) == fixture.hello);
+}
+
+TEST_CASE("pak: encrypted paks extract with the key and fail without it")
+{
+    PakFixture fixture;
+    std::string error;
+    const std::string key = GeneratePakEncryptionKeyHex();
+    REQUIRE(CreatePakFile(fixture.source.c_str(), fixture.pak.c_str(), key.c_str(), &error));
+
+    const fs::path output = fixture.dir.Path("extracted");
+    REQUIRE(ExtractPakFile(fixture.pak.c_str(), output.string().c_str(), &error, key.c_str()));
+    CHECK(kestest::ReadBytes((output / "nested" / "data.bin").string()) == fixture.binary);
+
+    const std::string wrongKey = GeneratePakEncryptionKeyHex();
+    CHECK(!ExtractPakFile(fixture.pak.c_str(), output.string().c_str(), &error, wrongKey.c_str()));
+}
+
 TEST_CASE("pak: mounted files load by asset path")
 {
     PakFixture fixture;

@@ -256,6 +256,7 @@ Usage:
 
 ```txt
 pak-tool <source-dir> <output.pak> [--encrypt <hex-key> | --generate-key]
+pak-tool --unpack <input.pak> <output-dir> [--decrypt <hex-key>]
 ```
 
 Examples:

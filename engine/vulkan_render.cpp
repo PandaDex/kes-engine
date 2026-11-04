@@ -43,7 +43,6 @@ struct RenderVertex
 };
 
 static void DestroyRendererAssetCaches(Renderer& r);
-static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelHandle handle, const AssetSystem& assets);
 static void DestroyGPUShaderProgram(Renderer& r, GPUShaderProgram& program);
 static void DestroyGPUTexture(Renderer& r, GPUTexture& texture);
 
@@ -653,6 +652,8 @@ static bool CreateLogicalDevice(Renderer& r)
     VkPhysicalDeviceFeatures features = {};
     features.fillModeNonSolid = supported.fillModeNonSolid; // wireframe rasterizer variants (F1 debug toggle)
     features.samplerAnisotropy = supported.samplerAnisotropy;
+    features.depthBiasClamp = supported.depthBiasClamp;
+    r.depthBiasClampSupported = supported.depthBiasClamp == VK_TRUE;
     r.anisotropySupported = supported.samplerAnisotropy == VK_TRUE;
 
     const char* deviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
@@ -1305,12 +1306,11 @@ static void UpdateSceneAndSkyDescriptorBindings(Renderer& r, const FrameResource
     vkUpdateDescriptorSets(r.device, 2, writes, 0, nullptr);
 }
 
-// Updates just the ModelCB or MaterialCB dynamic-buffer binding on the
-// frame's uboDescriptorSet; called once at creation and again whenever
-// a ring buffer grows and gets a new underlying VkBuffer.
+// Updates just the ModelCB or MaterialCB dynamic-buffer binding on the frame's
+// uboDescriptorSet, at creation and when a ring buffer is replaced.
 static void UpdateDynamicRingDescriptorBinding(Renderer& r, VkDescriptorSet set, uint32_t binding, const GPUDynamicRingBuffer& ring)
 {
-    VkDescriptorBufferInfo info = { ring.buffer, 0, ring.slotDataSize };
+    VkDescriptorBufferInfo info = { ring.buffer, 0, ring.rangeSize };
 
     VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     write.dstSet = set;
@@ -1346,18 +1346,20 @@ static void UpdateGlobalDescriptorSet(Renderer& r)
     r.globalSetDirty = false;
 }
 
-// Dynamic uniform ring buffers (ModelCB / MaterialCB per-draw slots)
-static constexpr uint32_t kInitialDynamicSlotCapacity = 2048;
+// Dynamic uniform ring buffers (ModelCB / MaterialCB per-draw data). Each draw
+// takes only the aligned bytes it writes; the end of the buffer keeps a whole
+// struct free so the descriptor range stays inside it at any offset.
+static constexpr VkDeviceSize kInitialDynamicRingSize = 1024 * 1024;
 
-static bool CreateDynamicRingBuffer(Renderer& r, GPUDynamicRingBuffer& ring, VkDeviceSize slotDataSize, uint32_t slotCapacity)
+static bool CreateDynamicRingBuffer(Renderer& r, GPUDynamicRingBuffer& ring, VkDeviceSize rangeSize, VkDeviceSize size)
 {
-    ring.slotDataSize = slotDataSize;
     const VkDeviceSize alignment = r.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
-    ring.slotStride = AlignUp(slotDataSize, alignment == 0 ? 1 : alignment);
-    ring.slotCapacity = slotCapacity;
+    ring.rangeSize = rangeSize;
+    ring.alignment = alignment == 0 ? 1 : alignment;
+    ring.size = size;
     ring.cursor = 0;
 
-    if (!CreateBuffer(r, ring.slotStride * slotCapacity, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+    if (!CreateBuffer(r, size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         ring.buffer, ring.memory))
         return false;
@@ -1371,71 +1373,37 @@ static void DestroyDynamicRingBuffer(Renderer& r, GPUDynamicRingBuffer& ring)
     if (ring.mapped) vkUnmapMemory(r.device, ring.memory);
     DestroyBuffer(r, ring.buffer, ring.memory);
     ring.mapped = nullptr;
-    ring.slotCapacity = 0;
+    ring.size = 0;
     ring.cursor = 0;
 }
 
-// Grows a ring buffer in place, preserving already-written slot contents
-// (so draws already recorded into the in-flight command buffer, which
-// reference the descriptor set by handle rather than by snapshot, keep
-// seeing correct data once the descriptor's underlying buffer is repointed
-// at the new, larger allocation).
-static bool GrowDynamicRingBuffer(Renderer& r, GPUDynamicRingBuffer& ring, uint32_t requiredSlots, uint32_t descriptorBinding)
+// Only valid before the frame binds `set`: replacing the buffer of a bound set
+// would invalidate the command buffer. The frame's fence has been waited, so
+// the GPU no longer uses this frame's ring.
+static bool EnsureDynamicRingCapacity(Renderer& r, GPUDynamicRingBuffer& ring, VkDeviceSize requiredBytes, VkDescriptorSet set, uint32_t binding)
 {
-    uint32_t newCapacity = ring.slotCapacity == 0 ? kInitialDynamicSlotCapacity : ring.slotCapacity;
-    while (newCapacity < requiredSlots)
-        newCapacity *= 2;
+    const VkDeviceSize needed = requiredBytes + ring.rangeSize;
+    if (needed <= ring.size)
+        return true;
 
-    // Nothing may currently be executing on the GPU that references this
-    // frame's command buffer yet (it has not been submitted), so it is safe
-    // to reallocate synchronously here.
-    vkDeviceWaitIdle(r.device);
+    VkDeviceSize newSize = std::max(ring.size, kInitialDynamicRingSize);
+    while (newSize < needed)
+        newSize *= 2;
 
-    VkBuffer newBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory newMemory = VK_NULL_HANDLE;
-    if (!CreateBuffer(r, ring.slotStride * newCapacity, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        newBuffer, newMemory))
-        return false;
-
-    uint8_t* newMapped = nullptr;
-    if (vkMapMemory(r.device, newMemory, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void**>(&newMapped)) != VK_SUCCESS)
-    {
-        DestroyBuffer(r, newBuffer, newMemory);
-        return false;
-    }
-
-    if (ring.mapped && ring.cursor > 0)
-        std::memcpy(newMapped, ring.mapped, static_cast<size_t>(ring.slotStride) * ring.cursor);
-
-    const uint32_t cursor = ring.cursor;
+    const VkDeviceSize rangeSize = ring.rangeSize;
     DestroyDynamicRingBuffer(r, ring);
-    ring.buffer = newBuffer;
-    ring.memory = newMemory;
-    ring.mapped = newMapped;
-    ring.slotCapacity = newCapacity;
-    ring.cursor = cursor;
-
-    UpdateDynamicRingDescriptorBinding(r, r.frames[r.frameIndex].uboDescriptorSet, descriptorBinding, ring);
+    if (!CreateDynamicRingBuffer(r, ring, rangeSize, newSize))
+        return false;
+    UpdateDynamicRingDescriptorBinding(r, set, binding, ring);
     return true;
 }
 
-// Reserves the next slot, growing the buffer first if needed, and returns
-// the byte offset to use both for the memcpy destination and the dynamic
-// descriptor offset passed to vkCmdBindDescriptorSets.
-static VkDeviceSize AcquireDynamicSlot(Renderer& r, GPUDynamicRingBuffer& ring, uint32_t descriptorBinding)
+// Takes `bytes` from the ring, which EnsureDynamicRingCapacity sized for the
+// frame. Returns the offset for the writes and the dynamic descriptor offset.
+static VkDeviceSize AcquireDynamicSlot(GPUDynamicRingBuffer& ring, VkDeviceSize bytes)
 {
-    if (ring.cursor + 1 > ring.slotCapacity)
-    {
-        if (!GrowDynamicRingBuffer(r, ring, ring.cursor + 1, descriptorBinding))
-        {
-            EngineLogf("GrowDynamicRingBuffer failed; reusing last slot (visual corruption may occur)");
-            return static_cast<VkDeviceSize>(ring.slotStride) * (ring.slotCapacity > 0 ? ring.slotCapacity - 1 : 0);
-        }
-    }
-
-    const VkDeviceSize offset = static_cast<VkDeviceSize>(ring.slotStride) * ring.cursor;
-    ring.cursor++;
+    const VkDeviceSize offset = ring.cursor;
+    ring.cursor += AlignUp(bytes, ring.alignment);
     return offset;
 }
 
@@ -1516,14 +1484,19 @@ static void DestroyRenderTargets(Renderer& r)
     DestroySwapchainObjects(r);
 }
 
+// Creates the swapchain and, when they are missing, the scene targets.
 static bool CreateRenderTargets(Renderer& r)
 {
     if (!CreateSwapchain(r))
         return false;
     if (!r.backbufferRenderPass && !CreateBackbufferRenderPass(r))
         return false;
-    if (!CreateSceneTargets(r))
-        return false;
+    if (!r.sceneFramebuffer)
+    {
+        DestroySceneTargets(r);
+        if (!CreateSceneTargets(r))
+            return false;
+    }
 
     // Backbuffer framebuffers, one per swap chain image.
     r.backbufferFramebuffers.resize(r.swapchainImageViews.size());
@@ -1690,6 +1663,7 @@ static VkPipeline CreateMeshPipeline(Renderer& r, const GPUShaderProgram& progra
         rasterizer.depthBiasEnable = VK_TRUE;
         rasterizer.depthBiasConstantFactor = r.shadowFormat == VK_FORMAT_D16_UNORM ? 2.0f : 1000.0f;
         rasterizer.depthBiasSlopeFactor = 2.0f;
+        rasterizer.depthBiasClamp = r.depthBiasClampSupported ? 0.01f : 0.0f;
     }
 
     VkPipelineMultisampleStateCreateInfo multisample = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
@@ -1754,10 +1728,12 @@ static VkPipeline GetOrCreateMeshPipelineVariant(Renderer& r, GPUShaderProgram& 
     if (doubleSided) variant |= kVariantBit_DoubleSided;
     if (transparent) variant |= kVariantBit_Transparent | kVariantBit_DepthReadOnly;
 
-    if (program.pipelines[variant] == VK_NULL_HANDLE)
+    if (program.pipelines[variant] == VK_NULL_HANDLE && (program.failedVariants & (1u << variant)) == 0)
     {
         KES_ZONE(RENDER, "Create pipeline variant (cache miss)");
         program.pipelines[variant] = CreateMeshPipeline(r, program, variant, false);
+        if (program.pipelines[variant] == VK_NULL_HANDLE)
+            program.failedVariants |= 1u << variant;
     }
     return program.pipelines[variant];
 }
@@ -1769,6 +1745,7 @@ static void DestroyProgramPipelines(Renderer& r, GPUShaderProgram& program)
         if (pipeline) vkDestroyPipeline(r.device, pipeline, nullptr);
         pipeline = VK_NULL_HANDLE;
     }
+    program.failedVariants = 0;
 }
 
 static bool CreateShaderProgram(Renderer& r, const std::string& vsSource, const std::string& psSource, GPUShaderProgram& outProgram)
@@ -1803,9 +1780,10 @@ static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle han
     if (handle == 0)
         return nullptr;
 
+    // A failed program is kept empty so it isn't retried on every draw.
     auto it = r.gpuShaders.find(handle);
     if (it != r.gpuShaders.end())
-        return &it->second;
+        return it->second.vertexShader ? &it->second : nullptr;
 
     KES_ZONE(RENDER, "Compile shader program (cache miss)");
     const ShaderData* shader = assets.GetShader(handle);
@@ -1820,6 +1798,7 @@ static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle han
     if (!CreateShaderProgram(r, vs, ps, program))
     {
         EngineLogf("Failed to create shader program for \"%s\".", shader->name.c_str());
+        r.gpuShaders.emplace(handle, GPUShaderProgram{});
         return nullptr;
     }
 
@@ -2031,9 +2010,9 @@ static bool CreateConstantBuffers(Renderer& r)
             return false;
         VK_CHECK_RET(vkMapMemory(r.device, frame.skyCBMemory, 0, sizeof(render::SkyCBData), 0, &frame.skyCBMapped), "vkMapMemory (skyCB)", false);
 
-        if (!CreateDynamicRingBuffer(r, frame.modelCBRing, sizeof(render::ModelCBData), kInitialDynamicSlotCapacity))
+        if (!CreateDynamicRingBuffer(r, frame.modelCBRing, sizeof(render::ModelCBData), kInitialDynamicRingSize))
             return false;
-        if (!CreateDynamicRingBuffer(r, frame.materialCBRing, sizeof(render::MaterialCBData), kInitialDynamicSlotCapacity))
+        if (!CreateDynamicRingBuffer(r, frame.materialCBRing, sizeof(render::MaterialCBData), kInitialDynamicRingSize))
             return false;
 
         UpdateSceneAndSkyDescriptorBindings(r, frame);
@@ -2285,56 +2264,6 @@ static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t m
     return &(r.gpuModelMeshes[key] = gpu);
 }
 
-static int32_t FindModelNodeForMesh(const KModelData& model, uint32_t meshIndex)
-{
-    for (size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex)
-    {
-        if (model.nodes[nodeIndex].meshIndex == static_cast<int32_t>(meshIndex))
-            return static_cast<int32_t>(nodeIndex);
-    }
-    return -1;
-}
-
-static const GPUModelRenderCache* GetOrBuildModelRenderCache(Renderer& r, ModelHandle handle, const AssetSystem& assets)
-{
-    if (handle == 0)
-        return nullptr;
-
-    auto it = r.gpuModelRenderCaches.find(handle);
-    if (it != r.gpuModelRenderCaches.end())
-        return &it->second;
-
-    KES_ZONE(RENDER, "Build model render cache (cache miss)");
-    const KModelData* model = assets.GetModel(handle);
-    if (!model)
-        return nullptr;
-
-    GPUModelRenderCache cache = {};
-    cache.meshBindWorldMatrices.resize(model->meshes.size() * 16u, 0.0f);
-
-    std::vector<AnimationTransform> bindPose;
-    BuildAnimationBindPose(*model, bindPose);
-    std::vector<float> bindWorldMatrices;
-    BuildAnimationWorldMatrices(*model, bindPose, bindWorldMatrices);
-
-    for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
-    {
-        const int32_t meshNodeIndex = FindModelNodeForMesh(*model, meshIndex);
-
-        float* destination = cache.meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u;
-        destination[0] = 1.0f;
-        destination[5] = 1.0f;
-        destination[10] = 1.0f;
-        destination[15] = 1.0f;
-
-        if (meshNodeIndex >= 0 && bindWorldMatrices.size() >= (static_cast<size_t>(meshNodeIndex) + 1u) * 16u)
-            std::memcpy(destination, bindWorldMatrices.data() + static_cast<size_t>(meshNodeIndex) * 16u, sizeof(float) * 16u);
-    }
-
-    auto inserted = r.gpuModelRenderCaches.emplace(handle, std::move(cache));
-    return &inserted.first->second;
-}
-
 static bool IsTransparentMaterial(const MaterialData* material)
 {
     return material && (material->flags & MaterialFlag_Transparent) != 0;
@@ -2397,8 +2326,6 @@ static void DestroyRendererAssetCaches(Renderer& r)
     for (auto& pair : r.gpuShaders)
         DestroyGPUShaderProgram(r, pair.second);
     r.gpuShaders.clear();
-
-    r.gpuModelRenderCaches.clear();
 }
 
 // Command pool / synchronization
@@ -2494,7 +2421,7 @@ bool RendererResize(Renderer& r, int width, int height)
     r.windowHeight = height;
 
     vkDeviceWaitIdle(r.device);
-    DestroyRenderTargets(r);
+    DestroySwapchainObjects(r);
 
     if (CreateRenderTargets(r))
         return true;
@@ -2514,8 +2441,8 @@ bool RendererSetRenderResolution(Renderer& r, int width, int height)
     r.renderHeight = height;
 
     vkDeviceWaitIdle(r.device);
-    DestroyRenderTargets(r);
-    if (CreateRenderTargets(r))
+    DestroySceneTargets(r);
+    if (CreateSceneTargets(r))
         return true;
     r.swapchainNeedsRecreate = true;
     return false;
@@ -2531,9 +2458,16 @@ void RendererSetVSync(Renderer& r, bool enabled)
 
 void RendererSetGraphicsOptions(Renderer& r, const GraphicsOptions& options)
 {
+    if (r.frameActive)
+    {
+        r.deferredOptions = options;
+        r.hasDeferredOptions = true;
+        return;
+    }
+
     const GraphicsOptions previous = r.options;
     r.options = options;
-    if (!r.device || previous == options || r.frameActive)
+    if (!r.device || previous == options)
         return;
 
     vkDeviceWaitIdle(r.device);
@@ -2567,10 +2501,16 @@ void RendererSetGraphicsOptions(Renderer& r, const GraphicsOptions& options)
 // Writes only what the shader reads: the two matrices, the skin info and the
 // skin matrices that are actually used. ModelCBData is ~8 KB because of the
 // 128-matrix skin palette, too much to copy for every static mesh draw.
+static VkDeviceSize ModelConstantsSize(uint32_t skinMatrixCount)
+{
+    return offsetof(render::ModelCBData, skinMatrices) + static_cast<VkDeviceSize>(skinMatrixCount) * 16u * sizeof(float);
+}
+
 static VkDeviceSize WriteModelConstants(Renderer& r, const Matrix4& wvp, const Matrix4& world, const float* skinMatrices, uint32_t skinMatrixCount)
 {
-    const VkDeviceSize offset = AcquireDynamicSlot(r, r.frames[r.frameIndex].modelCBRing, 1);
-    uint8_t* dst = r.frames[r.frameIndex].modelCBRing.mapped + offset;
+    GPUDynamicRingBuffer& ring = r.frames[r.frameIndex].modelCBRing;
+    const VkDeviceSize offset = AcquireDynamicSlot(ring, ModelConstantsSize(skinMatrixCount));
+    uint8_t* dst = ring.mapped + offset;
     std::memcpy(dst + offsetof(render::ModelCBData, worldViewProj), wvp.m, sizeof(wvp.m));
     std::memcpy(dst + offsetof(render::ModelCBData, world), world.m, sizeof(world.m));
     if (skinMatrices && skinMatrixCount > 0)
@@ -2583,8 +2523,9 @@ static VkDeviceSize WriteModelConstants(Renderer& r, const Matrix4& wvp, const M
 static VkDeviceSize WriteMaterialConstants(Renderer& r, const MaterialData* material, uint32_t textureFlags)
 {
     const render::MaterialCBData cb = render::BuildMaterialConstants(material, textureFlags);
-    const VkDeviceSize offset = AcquireDynamicSlot(r, r.frames[r.frameIndex].materialCBRing, 2);
-    std::memcpy(r.frames[r.frameIndex].materialCBRing.mapped + offset, &cb, sizeof(cb));
+    GPUDynamicRingBuffer& ring = r.frames[r.frameIndex].materialCBRing;
+    const VkDeviceSize offset = AcquireDynamicSlot(ring, sizeof(cb));
+    std::memcpy(ring.mapped + offset, &cb, sizeof(cb));
     return offset;
 }
 
@@ -2787,9 +2728,9 @@ static void DrawGPUMesh(Renderer& r, DrawState& state, const GPUMesh& gpuMesh, V
 static void DrawSceneObject(Renderer& r, DrawState& state, const DrawItem& item, const Matrix4& viewProj, const render::Frustum& frustum,
                             const AssetSystem& assets, bool shadowPass, bool wireframe, bool transparent)
 {
+    if (!item.skinned && !render::SphereInFrustum(frustum, item.boundsCenter, item.boundsRadius))
+        return;
     const SceneObject& obj = *item.object;
-    const KModelData* model = assets.GetModel(obj.model);
-    const bool skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
 
     VkPipeline pipeline = r.shadowProgram.pipelines[0];
     if (!shadowPass)
@@ -2822,39 +2763,57 @@ static void DrawSceneObject(Renderer& r, DrawState& state, const DrawItem& item,
     if (!state.materialSet)
         return;
 
-    const Matrix4 objectWorld = render::TransformToMatrix(obj.transform);
-    if (skinned)
+    const Matrix4 worldViewProj = render::MatrixMultiply(item.world, viewProj);
+    if (item.skinned)
     {
-        const GPUModelRenderCache* modelRenderCache = GetOrBuildModelRenderCache(r, obj.model, assets);
-        if (!modelRenderCache)
-            return;
-
-        // Animated: no culling (the bind-pose bounds don't cover the animation).
+        // glTF semantics: the skin matrices already place the mesh, so the mesh node's
+        // own transform doesn't apply. Animated: no culling (the bind-pose bounds don't
+        // cover the animation).
+        const KModelData* model = assets.GetModel(obj.model);
         const uint32_t matrixCount = std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices);
         for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
         {
             GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
             if (!gpuMesh)
                 continue;
-            Matrix4 meshLocal;
-            std::memcpy(meshLocal.m, modelRenderCache->meshBindWorldMatrices.data() + static_cast<size_t>(meshIndex) * 16u, sizeof(meshLocal.m));
-            const Matrix4 world = render::MatrixMultiply(meshLocal, objectWorld);
-            const VkDeviceSize modelOffset = WriteModelConstants(r, render::MatrixMultiply(world, viewProj), world, obj.skinMatrices, matrixCount);
+            const VkDeviceSize modelOffset = WriteModelConstants(r, worldViewProj, item.world, obj.skinMatrices.data(), matrixCount);
             DrawGPUMesh(r, state, *gpuMesh, modelOffset);
         }
         return;
     }
 
-    GPUMesh* gpuMesh = GetOrUploadMesh(r, obj.mesh, assets);
-    if (!gpuMesh)
-        return;
-    Vector3 center;
-    float radius = 0.0f;
-    render::TransformSphere(obj.transform, gpuMesh->boundsCenter, gpuMesh->boundsRadius, center, radius);
-    if (!render::SphereInFrustum(frustum, center, radius))
-        return;
-    const VkDeviceSize modelOffset = WriteModelConstants(r, render::MatrixMultiply(objectWorld, viewProj), objectWorld, nullptr, 0);
-    DrawGPUMesh(r, state, *gpuMesh, modelOffset);
+    const VkDeviceSize modelOffset = WriteModelConstants(r, worldViewProj, item.world, nullptr, 0);
+    DrawGPUMesh(r, state, *item.mesh, modelOffset);
+}
+
+// Makes room for every draw of this frame before the first one is recorded,
+// counting each object as if no view culled it.
+static bool ReserveDynamicConstants(Renderer& r, const AssetSystem& assets)
+{
+    FrameResources& frame = r.frames[r.frameIndex];
+    VkDeviceSize modelBytes = 0;
+    VkDeviceSize materialBytes = 0;
+    const auto add = [&](const DrawItem& item, VkDeviceSize views)
+    {
+        const SceneObject& obj = *item.object;
+        const VkDeviceSize drawsPerView = item.skinned ? assets.GetModel(obj.model)->meshes.size() : 1u;
+        const uint32_t skinCount = item.skinned ? std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices) : 0u;
+        modelBytes += views * drawsPerView * AlignUp(ModelConstantsSize(skinCount), frame.modelCBRing.alignment);
+        materialBytes += views * AlignUp(sizeof(render::MaterialCBData), frame.materialCBRing.alignment);
+    };
+    const VkDeviceSize shadowViews = r.frame.shadowViews.size();
+    for (const DrawItem& item : r.opaqueDrawItems)
+        add(item, 1 + (CastsShadows(item.material) ? shadowViews : 0));
+    for (const DrawItem& item : r.transparentDrawItems)
+        add(item, 1);
+
+    if (EnsureDynamicRingCapacity(r, frame.modelCBRing, modelBytes, frame.uboDescriptorSet, 1) &&
+        EnsureDynamicRingCapacity(r, frame.materialCBRing, materialBytes, frame.uboDescriptorSet, 2))
+        return true;
+
+    if (r.fatalError.empty())
+        r.fatalError = "Out of memory for the per-draw constants";
+    return false;
 }
 
 static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
@@ -2920,7 +2879,7 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
     {
         KES_ZONE(RENDER, "Recreate swapchain");
         vkDeviceWaitIdle(r.device);
-        DestroyRenderTargets(r);
+        DestroySwapchainObjects(r);
         if (CreateRenderTargets(r))
             r.swapchainNeedsRecreate = false;
     }
@@ -2975,6 +2934,17 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
             item.object = &obj;
             item.material = assets.GetMaterial(obj.material);
             item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
+            item.world = render::TransformToMatrix(obj.transform);
+            const KModelData* model = assets.GetModel(obj.model);
+            item.skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
+            if (!item.skinned)
+            {
+                item.mesh = GetOrUploadMesh(r, obj.mesh, assets);
+                if (!item.mesh)
+                    continue;
+                render::TransformSphere(item.world, obj.transform.scale, item.mesh->boundsCenter, item.mesh->boundsRadius,
+                                        item.boundsCenter, item.boundsRadius);
+            }
             (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);
         }
         // Opaque: group by material, near-to-far inside a group (early depth reject).
@@ -2986,6 +2956,9 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
         KES_PROFILE_PLOT("Opaque draw items", static_cast<int64_t>(opaqueItems.size()));
         KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
     }
+
+    if (!ReserveDynamicConstants(r, assets))
+        return;
 
     RenderShadowMaps(r, assets);
 
@@ -3287,6 +3260,12 @@ void RendererPresent(Renderer& r)
     r.haveSwapchainImage = false;
     r.frameIndex = (r.frameIndex + 1) % kMaxFramesInFlight;
     ++r.frameNumber;
+
+    if (r.hasDeferredOptions)
+    {
+        r.hasDeferredOptions = false;
+        RendererSetGraphicsOptions(r, r.deferredOptions);
+    }
 }
 
 void RendererRender(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)

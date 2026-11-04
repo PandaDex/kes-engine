@@ -35,6 +35,7 @@ struct MaterialFileData
 {
     std::string shaderPath;
     uint32_t authorFlags = MaterialFlag_Lit;
+    bool transparencySet = false;   // the file says Transparent = ..., which beats the alpha rule
     std::string legacyBaseTexturePath;
     MaterialData material;
     std::vector<MaterialNode> nodes;

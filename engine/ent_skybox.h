@@ -5,7 +5,7 @@
 class SkyboxEntity : public Entity
 {
 public:
-    SkyboxEntity() = default;
+    SkyboxEntity() { skyData.active = true; }
     ~SkyboxEntity() override = default;
 
     void Start() override;

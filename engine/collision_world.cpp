@@ -1,625 +1,585 @@
 #include "collision_world.h"
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
+#include <unordered_map>
+#include <box3d/box3d.h>
+#include "logger.h"
 #include "profiler.h"
 
 namespace
 {
-    struct RaycastCandidate
+    // A shape only matches a query when its mask has the query's category too,
+    // so triggers accept kCategoryQuery and nothing that collides.
+    constexpr uint64_t kCategorySolid = 1u << 0;     // static and kinematic
+    constexpr uint64_t kCategoryDynamic = 1u << 1;
+    constexpr uint64_t kCategoryTrigger = 1u << 2;
+    constexpr uint64_t kCategoryQuery = 1u << 3;
+
+    constexpr int kSubStepCount = 4;
+    constexpr float kGravity = -9.81f;
+    constexpr float kMinHalfExtent = 0.005f;   // Box3D rejects degenerate shapes
+    constexpr float kDynamicPushLimit = 0.02f; // how far a dynamic body may push the mover per solve
+    constexpr int kMaxMoverPlanes = 32;
+    constexpr int kMaxMoverIterations = 5;
+
+    struct Pose
     {
-        bool hit = false;
-        float distance = 0.0f;
+        b3Pos position = {};
+        b3Quat rotation = b3Quat_identity;
+    };
+
+    b3Vec3 ToB3(const Vector3& v) { return { v.x, v.y, v.z }; }
+    Vector3 FromB3(b3Vec3 v) { return { v.x, v.y, v.z }; }
+
+    // Entity rotations are applied X, then Y, then Z (render::TransformToMatrix).
+    b3Quat QuatFromEuler(const Vector3& euler)
+    {
+        const float cx = std::cos(euler.x * 0.5f), sx = std::sin(euler.x * 0.5f);
+        const float cy = std::cos(euler.y * 0.5f), sy = std::sin(euler.y * 0.5f);
+        const float cz = std::cos(euler.z * 0.5f), sz = std::sin(euler.z * 0.5f);
+        b3Quat q;
+        q.v.x = cz * cy * sx - sz * sy * cx;
+        q.v.y = cz * sy * cx + sz * cy * sx;
+        q.v.z = sz * cy * cx - cz * sy * sx;
+        q.s = cz * cy * cx + sz * sy * sx;
+        return q;
+    }
+
+    Vector3 EulerFromQuat(b3Quat q)
+    {
+        const float x = q.v.x, y = q.v.y, z = q.v.z, w = q.s;
+        const float m00 = 1.0f - 2.0f * (y * y + z * z);
+        const float m10 = 2.0f * (x * y + z * w);
+        const float m20 = 2.0f * (x * z - y * w);
+        const float m21 = 2.0f * (y * z + x * w);
+        const float m22 = 1.0f - 2.0f * (x * x + y * y);
+        const float yaw = std::asin(ClampFloat(-m20, -1.0f, 1.0f));
+        if (std::fabs(m20) > 0.9999f)
+        {
+            // Gimbal lock: X and Z turn about the same axis, so Z takes all of it.
+            const float m01 = 2.0f * (x * y - z * w);
+            const float m11 = 1.0f - 2.0f * (x * x + z * z);
+            return { 0.0f, yaw, std::atan2(-m01, m11) };
+        }
+        return { std::atan2(m21, m22), yaw, std::atan2(m10, m00) };
+    }
+
+    b3Quat BlendQuat(b3Quat from, b3Quat to, float t)
+    {
+        const float dot = from.v.x * to.v.x + from.v.y * to.v.y + from.v.z * to.v.z + from.s * to.s;
+        const float sign = dot < 0.0f ? -1.0f : 1.0f;
+        b3Quat q;
+        q.v.x = from.v.x + (to.v.x * sign - from.v.x) * t;
+        q.v.y = from.v.y + (to.v.y * sign - from.v.y) * t;
+        q.v.z = from.v.z + (to.v.z * sign - from.v.z) * t;
+        q.s = from.s + (to.s * sign - from.s) * t;
+        const float length = std::sqrt(q.v.x * q.v.x + q.v.y * q.v.y + q.v.z * q.v.z + q.s * q.s);
+        if (length <= 1e-6f)
+            return to;
+        q.v.x /= length;
+        q.v.y /= length;
+        q.v.z /= length;
+        q.s /= length;
+        return q;
+    }
+
+    ColliderHandle HandleOf(b3ShapeId shape)
+    {
+        return static_cast<ColliderHandle>(reinterpret_cast<uintptr_t>(b3Shape_GetUserData(shape)));
+    }
+
+    b3QueryFilter MakeQueryFilter(bool includeTriggers)
+    {
+        b3QueryFilter filter = b3DefaultQueryFilter();
+        filter.categoryBits = kCategoryQuery;
+        filter.maskBits = kCategorySolid | kCategoryDynamic | (includeTriggers ? kCategoryTrigger : 0u);
+        return filter;
+    }
+
+    // Corners of the hull: every point where three planes meet that no plane cuts away.
+    std::vector<b3Vec3> HullPointsFromPlanes(const std::vector<CollisionPlane>& planes)
+    {
+        struct Plane
+        {
+            double x, y, z, d;
+        };
+        std::vector<Plane> p;
+        p.reserve(planes.size());
+        for (const CollisionPlane& plane : planes)
+            p.push_back({ plane.normal.x, plane.normal.y, plane.normal.z, plane.dist });
+
+        std::vector<b3Vec3> points;
+        const size_t count = p.size();
+        for (size_t i = 0; i < count; ++i)
+        {
+            for (size_t j = i + 1; j < count; ++j)
+            {
+                const double cx = p[i].y * p[j].z - p[i].z * p[j].y;
+                const double cy = p[i].z * p[j].x - p[i].x * p[j].z;
+                const double cz = p[i].x * p[j].y - p[i].y * p[j].x;
+                for (size_t k = j + 1; k < count; ++k)
+                {
+                    const double det = cx * p[k].x + cy * p[k].y + cz * p[k].z;
+                    if (std::fabs(det) < 1e-9)
+                        continue;
+
+                    // Cramer's rule: (d_i (n_j x n_k) + d_j (n_k x n_i) + d_k (n_i x n_j)) / det
+                    const double jkx = p[j].y * p[k].z - p[j].z * p[k].y;
+                    const double jky = p[j].z * p[k].x - p[j].x * p[k].z;
+                    const double jkz = p[j].x * p[k].y - p[j].y * p[k].x;
+                    const double kix = p[k].y * p[i].z - p[k].z * p[i].y;
+                    const double kiy = p[k].z * p[i].x - p[k].x * p[i].z;
+                    const double kiz = p[k].x * p[i].y - p[k].y * p[i].x;
+                    const double x = (p[i].d * jkx + p[j].d * kix + p[k].d * cx) / det;
+                    const double y = (p[i].d * jky + p[j].d * kiy + p[k].d * cy) / det;
+                    const double z = (p[i].d * jkz + p[j].d * kiz + p[k].d * cz) / det;
+
+                    bool inside = true;
+                    for (const Plane& plane : p)
+                    {
+                        if (plane.x * x + plane.y * y + plane.z * z - plane.d > 1e-4)
+                        {
+                            inside = false;
+                            break;
+                        }
+                    }
+                    if (!inside)
+                        continue;
+
+                    const b3Vec3 point = { static_cast<float>(x), static_cast<float>(y), static_cast<float>(z) };
+                    const bool duplicate = std::any_of(points.begin(), points.end(), [&point](const b3Vec3& other)
+                    {
+                        return std::fabs(other.x - point.x) + std::fabs(other.y - point.y) + std::fabs(other.z - point.z) < 1e-4f;
+                    });
+                    if (!duplicate)
+                        points.push_back(point);
+                }
+            }
+        }
+        return points;
+    }
+
+    struct CapsuleProxy
+    {
+        b3Vec3 points[2];
+        b3ShapeProxy proxy;
+
+        CapsuleProxy(float radius, float halfHeight)
+        {
+            points[0] = { 0.0f, -halfHeight, 0.0f };
+            points[1] = { 0.0f, halfHeight, 0.0f };
+            proxy = { points, 2, radius };
+        }
+    };
+
+    struct OverlapContext
+    {
+        ColliderHandle ignore = 0;
+        bool found = false;
+        ColliderHandle first = 0;
+        b3ShapeId shape = {};
+    };
+
+    bool OverlapCallback(b3ShapeId shape, void* context)
+    {
+        auto* overlap = static_cast<OverlapContext*>(context);
+        const ColliderHandle handle = HandleOf(shape);
+        if (handle == overlap->ignore)
+            return true;
+        overlap->found = true;
+        overlap->first = handle;
+        overlap->shape = shape;
+        return false;
+    }
+
+    struct ClosestCastContext
+    {
+        ColliderHandle ignore = 0;
+        bool found = false;
+        float fraction = 1.0f;
+        ColliderHandle other = 0;
         Vector3 point = {};
         Vector3 normal = {};
     };
 
-    static Vector3 AbsVec3(const Vector3& v)
+    float ClosestCastCallback(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uint64_t, int, int, void* context)
     {
-        return { std::fabs(v.x), std::fabs(v.y), std::fabs(v.z) };
-    }
-
-    static float ClampScalar(float v, float minV, float maxV)
-    {
-        if (v < minV) return minV;
-        if (v > maxV) return maxV;
-        return v;
-    }
-
-    static Vector3 ClosestPointOnAABB(const Vector3& point, const Vector3& center, const Vector3& halfExtents)
-    {
-        return {
-            ClampScalar(point.x, center.x - halfExtents.x, center.x + halfExtents.x),
-            ClampScalar(point.y, center.y - halfExtents.y, center.y + halfExtents.y),
-            ClampScalar(point.z, center.z - halfExtents.z, center.z + halfExtents.z)
-        };
-    }
-
-    static bool BoxVsBox(const Vector3& aPos, const Vector3& aHalf, const Vector3& bPos, const Vector3& bHalf)
-    {
-        const Vector3 d = AbsVec3(aPos - bPos);
-        return d.x <= (aHalf.x + bHalf.x) && d.y <= (aHalf.y + bHalf.y) && d.z <= (aHalf.z + bHalf.z);
-    }
-
-    static bool SphereVsSphere(const Vector3& aPos, float aRadius, const Vector3& bPos, float bRadius)
-    {
-        const float radiusSum = aRadius + bRadius;
-        return Vector3LengthSq(aPos - bPos) <= radiusSum * radiusSum;
-    }
-
-    static bool SphereVsBox(const Vector3& spherePos, float radius, const Vector3& boxPos, const Vector3& boxHalf)
-    {
-        const Vector3 closest = ClosestPointOnAABB(spherePos, boxPos, boxHalf);
-        return Vector3LengthSq(spherePos - closest) <= radius * radius;
-    }
-
-    static bool CapsuleVsSphere(const Vector3& capsulePos, float capsuleRadius, float capsuleHalfHeight, const Vector3& spherePos, float sphereRadius)
-    {
-        const float top = capsulePos.y + capsuleHalfHeight;
-        const float bottom = capsulePos.y - capsuleHalfHeight;
-        const Vector3 closest = { capsulePos.x, ClampScalar(spherePos.y, bottom, top), capsulePos.z };
-        return SphereVsSphere(closest, capsuleRadius, spherePos, sphereRadius);
-    }
-
-    static bool CapsuleVsBox(const Vector3& capsulePos, float capsuleRadius, float capsuleHalfHeight, const Vector3& boxPos, const Vector3& boxHalf)
-    {
-        const float top = capsulePos.y + capsuleHalfHeight;
-        const float bottom = capsulePos.y - capsuleHalfHeight;
-        const Vector3 closestOnSegmentToBox = {
-            capsulePos.x,
-            ClampScalar(boxPos.y, bottom, top),
-            capsulePos.z
-        };
-        return SphereVsBox(closestOnSegmentToBox, capsuleRadius, boxPos, boxHalf);
-    }
-
-    static bool CapsuleVsCapsule(const Vector3& aPos, float aRadius, float aHalfHeight, const Vector3& bPos, float bRadius, float bHalfHeight)
-    {
-        const float aTop = aPos.y + aHalfHeight;
-        const float aBottom = aPos.y - aHalfHeight;
-        const float bTop = bPos.y + bHalfHeight;
-        const float bBottom = bPos.y - bHalfHeight;
-
-        const float closestAy = ClampScalar((bTop + bBottom) * 0.5f, aBottom, aTop);
-        const float closestBy = ClampScalar(closestAy, bBottom, bTop);
-
-        const Vector3 pa = { aPos.x, closestAy, aPos.z };
-        const Vector3 pb = { bPos.x, closestBy, bPos.z };
-        return SphereVsSphere(pa, aRadius, pb, bRadius);
-    }
-
-    static bool PointInBox(const Vector3& point, const Vector3& center, const Vector3& halfExtents)
-    {
-        const Vector3 local = point - center;
-        return std::fabs(local.x) <= halfExtents.x &&
-            std::fabs(local.y) <= halfExtents.y &&
-            std::fabs(local.z) <= halfExtents.z;
-    }
-
-    static bool PointInCapsule(const Vector3& point, const Vector3& center, float radius, float halfHeight)
-    {
-        const float clampedY = ClampScalar(point.y, center.y - halfHeight, center.y + halfHeight);
-        const Vector3 closest = { center.x, clampedY, center.z };
-        return Vector3LengthSq(point - closest) <= radius * radius;
-    }
-
-    static Vector3 SafeNormal(const Vector3& value, const Vector3& fallback)
-    {
-        const float lengthSq = Vector3LengthSq(value);
-        if (lengthSq <= 0.00001f)
-            return fallback;
-        return value / std::sqrt(lengthSq);
-    }
-
-    static bool RayVsSphere(const Ray& ray, const Vector3& center, float radius, float maxDistance, RaycastCandidate& outHit)
-    {
-        const Vector3 toOrigin = ray.origin - center;
-        const float b = Vector3Dot(toOrigin, ray.direction);
-        const float c = Vector3Dot(toOrigin, toOrigin) - radius * radius;
-
-        if (c <= 0.0f)
+        auto* cast = static_cast<ClosestCastContext*>(context);
+        const ColliderHandle handle = HandleOf(shape);
+        if (handle == cast->ignore)
+            return -1.0f;
+        if (!cast->found || fraction < cast->fraction)
         {
-            outHit.hit = true;
-            outHit.distance = 0.0f;
-            outHit.point = ray.origin;
-            outHit.normal = SafeNormal(ray.origin - center, ray.direction * -1.0f);
-            return true;
+            cast->found = true;
+            cast->fraction = fraction;
+            cast->other = handle;
+            cast->point = FromB3(point);
+            cast->normal = FromB3(normal);
         }
+        return fraction;
+    }
+}
 
-        const float discriminant = b * b - c;
-        if (discriminant < 0.0f)
-            return false;
+struct CollisionWorld::Impl
+{
+    struct Entry
+    {
+        b3BodyId body = {};
+        ColliderType type = ColliderType::Box;
+        ColliderMotion motion = ColliderMotion::Static;
+        Vector3 offset = {};
+        Pose previous;   // dynamic bodies: the last two steps, for interpolation
+        Pose current;
+    };
 
-        float distance = -b - std::sqrt(discriminant);
-        if (distance < 0.0f)
-            distance = -b + std::sqrt(discriminant);
-        if (distance < 0.0f || distance > maxDistance)
-            return false;
+    b3WorldId world = {};
+    std::unordered_map<ColliderHandle, Entry> entries;
+    std::vector<ColliderHandle> dynamicBodies;
+    ColliderHandle nextHandle = 1;
 
-        outHit.hit = true;
-        outHit.distance = distance;
-        outHit.point = ray.origin + ray.direction * distance;
-        outHit.normal = SafeNormal(outHit.point - center, ray.direction * -1.0f);
-        return true;
+    void CreateWorld()
+    {
+        b3WorldDef def = b3DefaultWorldDef();
+        def.gravity = { 0.0f, kGravity, 0.0f };
+        world = b3CreateWorld(&def);
     }
 
-    static bool RayVsBox(const Ray& ray, const Vector3& center, const Vector3& halfExtents, float maxDistance, RaycastCandidate& outHit)
+    Entry* Find(ColliderHandle handle)
     {
-        if (PointInBox(ray.origin, center, halfExtents))
-        {
-            outHit.hit = true;
-            outHit.distance = 0.0f;
-            outHit.point = ray.origin;
-            outHit.normal = ray.direction * -1.0f;
-            return true;
-        }
-
-        const Vector3 origin = ray.origin - center;
-        float tMin = 0.0f;
-        float tMax = maxDistance;
-        int hitAxis = -1;
-        float hitSign = 0.0f;
-
-        const float originValues[3] = { origin.x, origin.y, origin.z };
-        const float directionValues[3] = { ray.direction.x, ray.direction.y, ray.direction.z };
-        const float halfValues[3] = { halfExtents.x, halfExtents.y, halfExtents.z };
-
-        for (int axis = 0; axis < 3; ++axis)
-        {
-            const float axisOrigin = originValues[axis];
-            const float axisDirection = directionValues[axis];
-            const float axisHalf = halfValues[axis];
-
-            if (std::fabs(axisDirection) <= 0.00001f)
-            {
-                if (axisOrigin < -axisHalf || axisOrigin > axisHalf)
-                    return false;
-                continue;
-            }
-
-            const float invDirection = 1.0f / axisDirection;
-            float t1 = (-axisHalf - axisOrigin) * invDirection;
-            float t2 = (axisHalf - axisOrigin) * invDirection;
-            float nearDistance = t1;
-            float farDistance = t2;
-            float nearSign = axisDirection > 0.0f ? -1.0f : 1.0f;
-
-            if (nearDistance > farDistance)
-            {
-                const float temp = nearDistance;
-                nearDistance = farDistance;
-                farDistance = temp;
-            }
-
-            if (nearDistance > tMin)
-            {
-                tMin = nearDistance;
-                hitAxis = axis;
-                hitSign = nearSign;
-            }
-
-            if (farDistance < tMax)
-                tMax = farDistance;
-
-            if (tMin > tMax)
-                return false;
-        }
-
-        if (hitAxis < 0 || tMin < 0.0f || tMin > maxDistance)
-            return false;
-
-        outHit.hit = true;
-        outHit.distance = tMin;
-        outHit.point = ray.origin + ray.direction * tMin;
-        outHit.normal = {};
-        if (hitAxis == 0) outHit.normal.x = hitSign;
-        if (hitAxis == 1) outHit.normal.y = hitSign;
-        if (hitAxis == 2) outHit.normal.z = hitSign;
-        return true;
+        const auto found = entries.find(handle);
+        return found != entries.end() ? &found->second : nullptr;
     }
 
-    static bool RayVsVerticalCylinder(const Ray& ray, const Vector3& center, float radius, float halfHeight, float maxDistance, RaycastCandidate& outHit)
+    const Entry* Find(ColliderHandle handle) const
     {
-        const Vector3 origin = ray.origin - center;
-        const float a = ray.direction.x * ray.direction.x + ray.direction.z * ray.direction.z;
-        if (a <= 0.00001f)
-            return false;
-
-        const float b = 2.0f * (origin.x * ray.direction.x + origin.z * ray.direction.z);
-        const float c = origin.x * origin.x + origin.z * origin.z - radius * radius;
-        const float discriminant = b * b - 4.0f * a * c;
-        if (discriminant < 0.0f)
-            return false;
-
-        const float sqrtDiscriminant = std::sqrt(discriminant);
-        const float invDenominator = 0.5f / a;
-        const float candidates[2] = {
-            (-b - sqrtDiscriminant) * invDenominator,
-            (-b + sqrtDiscriminant) * invDenominator
-        };
-
-        for (float distance : candidates)
-        {
-            if (distance < 0.0f || distance > maxDistance)
-                continue;
-
-            const float y = origin.y + ray.direction.y * distance;
-            if (y < -halfHeight || y > halfHeight)
-                continue;
-
-            const Vector3 localPoint = origin + ray.direction * distance;
-            outHit.hit = true;
-            outHit.distance = distance;
-            outHit.point = ray.origin + ray.direction * distance;
-            outHit.normal = SafeNormal({ localPoint.x, 0.0f, localPoint.z }, ray.direction * -1.0f);
-            return true;
-        }
-
-        return false;
+        const auto found = entries.find(handle);
+        return found != entries.end() ? &found->second : nullptr;
     }
 
-    static bool RayVsCapsule(const Ray& ray, const Vector3& center, float radius, float halfHeight, float maxDistance, RaycastCandidate& outHit)
+    ColliderHandle CreateBody(ColliderType type, const RigidBodyDesc& desc, const Vector3& offset)
     {
-        if (PointInCapsule(ray.origin, center, radius, halfHeight))
-        {
-            outHit.hit = true;
-            outHit.distance = 0.0f;
-            outHit.point = ray.origin;
-            outHit.normal = ray.direction * -1.0f;
-            return true;
-        }
+        const ColliderHandle handle = nextHandle++;
+        b3BodyDef def = b3DefaultBodyDef();
+        def.type = desc.motion == ColliderMotion::Dynamic ? b3_dynamicBody
+                   : desc.motion == ColliderMotion::Kinematic ? b3_kinematicBody
+                                                              : b3_staticBody;
+        def.position = b3ToPos(ToB3(desc.position));
+        def.rotation = QuatFromEuler(desc.rotation);
 
-        RaycastCandidate bestHit = {};
-        auto considerHit = [&](const RaycastCandidate& candidate)
-        {
-            if (!candidate.hit)
-                return;
-            if (!bestHit.hit || candidate.distance < bestHit.distance)
-                bestHit = candidate;
-        };
-
-        RaycastCandidate sideHit = {};
-        considerHit(RayVsVerticalCylinder(ray, center, radius, halfHeight, maxDistance, sideHit) ? sideHit : RaycastCandidate{});
-
-        RaycastCandidate capHit = {};
-        considerHit(RayVsSphere(ray, { center.x, center.y + halfHeight, center.z }, radius, maxDistance, capHit) ? capHit : RaycastCandidate{});
-
-        capHit = {};
-        considerHit(RayVsSphere(ray, { center.x, center.y - halfHeight, center.z }, radius, maxDistance, capHit) ? capHit : RaycastCandidate{});
-
-        if (!bestHit.hit)
-            return false;
-
-        outHit = bestHit;
-        return true;
+        Entry entry;
+        entry.body = b3CreateBody(world, &def);
+        entry.type = type;
+        entry.motion = desc.motion;
+        entry.offset = offset;
+        entry.current = { def.position, def.rotation };
+        entry.previous = entry.current;
+        entries[handle] = entry;
+        if (desc.motion == ColliderMotion::Dynamic)
+            dynamicBodies.push_back(handle);
+        return handle;
     }
 
-    // Convex hulls
-    // Separating-axis style tests using the hull face planes plus the world axes
-    // (the hull AABB). Probe shapes are handled by pushing each plane out by the
-    // probe support distance, which is exact on faces and slightly conservative
-    // on edges/corners - the classic brush-collision trade-off.
-
-    static bool AabbOverlap(const Vector3& aMin, const Vector3& aMax, const Vector3& bMin, const Vector3& bMax)
+    static b3ShapeDef MakeShapeDef(ColliderHandle handle, const RigidBodyDesc& desc, bool isTrigger)
     {
-        return aMin.x <= bMax.x && aMax.x >= bMin.x &&
-               aMin.y <= bMax.y && aMax.y >= bMin.y &&
-               aMin.z <= bMax.z && aMax.z >= bMin.z;
-    }
-
-    // support(n) = how far the probe reaches along n from its center.
-    template<typename SupportFn>
-    static bool ConvexVsProbe(const CollisionBody& hull, const Vector3& hullPos, const Vector3& center,
-                              const Vector3& probeHalfExtents, SupportFn support)
-    {
-        const Vector3 hullMin = hullPos + hull.convex.boundsMin;
-        const Vector3 hullMax = hullPos + hull.convex.boundsMax;
-        if (!AabbOverlap(hullMin, hullMax, center - probeHalfExtents, center + probeHalfExtents))
-            return false;
-
-        const Vector3 local = center - hullPos;
-        for (const CollisionPlane& plane : hull.convex.planes)
+        b3ShapeDef def = b3DefaultShapeDef();
+        def.userData = reinterpret_cast<void*>(static_cast<uintptr_t>(handle));
+        def.density = desc.density;
+        def.baseMaterial.friction = desc.friction;
+        def.baseMaterial.restitution = desc.restitution;
+        def.baseMaterial.rollingResistance = desc.rollingResistance;
+        if (isTrigger)
         {
-            if (Vector3Dot(plane.normal, local) - plane.dist > support(plane.normal))
-                return false;
-        }
-        return true;
-    }
-
-    static bool ConvexVsSphere(const CollisionBody& hull, const Vector3& hullPos, const Vector3& center, float radius)
-    {
-        return ConvexVsProbe(hull, hullPos, center, { radius, radius, radius },
-                             [radius](const Vector3&) { return radius; });
-    }
-
-    static bool ConvexVsBox(const CollisionBody& hull, const Vector3& hullPos, const Vector3& center, const Vector3& half)
-    {
-        return ConvexVsProbe(hull, hullPos, center, half, [&half](const Vector3& n)
-        {
-            return std::fabs(n.x) * half.x + std::fabs(n.y) * half.y + std::fabs(n.z) * half.z;
-        });
-    }
-
-    // Vertical capsule = segment along Y swept by a sphere.
-    static bool ConvexVsCapsule(const CollisionBody& hull, const Vector3& hullPos, const Vector3& center, float radius, float halfHeight)
-    {
-        return ConvexVsProbe(hull, hullPos, center, { radius, halfHeight + radius, radius },
-                             [radius, halfHeight](const Vector3& n) { return radius + std::fabs(n.y) * halfHeight; });
-    }
-
-    static bool PointInConvex(const CollisionBody& hull, const Vector3& hullPos, const Vector3& point)
-    {
-        const Vector3 local = point - hullPos;
-        for (const CollisionPlane& plane : hull.convex.planes)
-        {
-            if (Vector3Dot(plane.normal, local) - plane.dist > 0.0f)
-                return false;
-        }
-        return !hull.convex.planes.empty();
-    }
-
-    // Ray clipped against every half-space (Cyrus-Beck).
-    static bool RayVsConvex(const Ray& ray, const CollisionBody& hull, const Vector3& hullPos, float maxDistance, RaycastCandidate& outHit)
-    {
-        if (hull.convex.planes.empty())
-            return false;
-
-        if (PointInConvex(hull, hullPos, ray.origin))
-        {
-            outHit.hit = true;
-            outHit.distance = 0.0f;
-            outHit.point = ray.origin;
-            outHit.normal = ray.direction * -1.0f;
-            return true;
-        }
-
-        const Vector3 origin = ray.origin - hullPos;
-        float tEnter = 0.0f;
-        float tExit = maxDistance;
-        Vector3 enterNormal = {};
-        bool entered = false;
-
-        for (const CollisionPlane& plane : hull.convex.planes)
-        {
-            const float distance = Vector3Dot(plane.normal, origin) - plane.dist;
-            const float rate = Vector3Dot(plane.normal, ray.direction);
-            if (std::fabs(rate) <= 0.000001f)
-            {
-                if (distance > 0.0f)
-                    return false;   // parallel and outside
-                continue;
-            }
-            const float t = -distance / rate;
-            if (rate < 0.0f)
-            {
-                if (t > tEnter)
-                {
-                    tEnter = t;
-                    enterNormal = plane.normal;
-                    entered = true;
-                }
-            }
-            else if (t < tExit)
-            {
-                tExit = t;
-            }
-            if (tEnter > tExit)
-                return false;
-        }
-
-        if (!entered || tEnter > maxDistance)
-            return false;
-
-        outHit.hit = true;
-        outHit.distance = tEnter;
-        outHit.point = ray.origin + ray.direction * tEnter;
-        outHit.normal = enterNormal;
-        return true;
-    }
-
-    static bool RaycastBody(const CollisionBody& body, const Ray& ray, float maxDistance, RaycastHit& outHit)
-    {
-        RaycastCandidate candidate = {};
-        const Vector3 bodyPosition = body.position + body.offset;
-
-        if (body.type == ColliderType::Box)
-        {
-            if (!RayVsBox(ray, bodyPosition, body.box.halfExtents, maxDistance, candidate))
-                return false;
-        }
-        else if (body.type == ColliderType::Sphere)
-        {
-            if (!RayVsSphere(ray, bodyPosition, body.sphere.radius, maxDistance, candidate))
-                return false;
-        }
-        else if (body.type == ColliderType::Capsule)
-        {
-            if (!RayVsCapsule(ray, bodyPosition, body.capsule.radius, body.capsule.halfHeight, maxDistance, candidate))
-                return false;
-        }
-        else if (body.type == ColliderType::Convex)
-        {
-            if (!RayVsConvex(ray, body, bodyPosition, maxDistance, candidate))
-                return false;
+            def.filter.categoryBits = kCategoryTrigger;
+            def.filter.maskBits = kCategoryQuery;
         }
         else
         {
-            return false;
+            def.filter.categoryBits = desc.motion == ColliderMotion::Dynamic ? kCategoryDynamic : kCategorySolid;
+            def.filter.maskBits = kCategorySolid | kCategoryDynamic | kCategoryQuery;
         }
-
-        outHit.hit = true;
-        outHit.other = body.handle;
-        outHit.type = body.type;
-        outHit.point = candidate.point;
-        outHit.normal = SafeNormal(candidate.normal, ray.direction * -1.0f);
-        outHit.distance = candidate.distance;
-        return true;
+        return def;
     }
+
+    void AddBoxShape(ColliderHandle handle, const Vector3& halfExtents, const Vector3& offset, const RigidBodyDesc& desc, bool isTrigger)
+    {
+        const b3ShapeDef def = MakeShapeDef(handle, desc, isTrigger);
+        const b3BoxHull box = b3MakeOffsetBoxHull(std::max(halfExtents.x, kMinHalfExtent), std::max(halfExtents.y, kMinHalfExtent),
+                                                  std::max(halfExtents.z, kMinHalfExtent), ToB3(offset));
+        b3CreateHullShape(entries[handle].body, &def, &box.base);
+    }
+
+    void AddHullShape(ColliderHandle handle, const ConvexCollider& collider, const RigidBodyDesc& desc, bool isTrigger)
+    {
+        const std::vector<b3Vec3> points = HullPointsFromPlanes(collider.planes);
+        b3HullData* hull = points.size() >= 4 ? b3CreateHull(points.data(), static_cast<int>(points.size()), B3_MAX_HULL_VERTICES) : nullptr;
+        if (!hull)
+        {
+            EngineLogf("Convex collider with %zu planes has no valid hull; using its bounds.", collider.planes.size());
+            const Vector3 half = (collider.boundsMax - collider.boundsMin) * 0.5f;
+            AddBoxShape(handle, half, (collider.boundsMax + collider.boundsMin) * 0.5f, desc, isTrigger);
+            return;
+        }
+        const b3ShapeDef def = MakeShapeDef(handle, desc, isTrigger);
+        b3CreateHullShape(entries[handle].body, &def, hull);
+        b3DestroyHull(hull);
+    }
+
+    void AddSphereShape(ColliderHandle handle, float radius, const Vector3& offset, const RigidBodyDesc& desc, bool isTrigger)
+    {
+        const b3ShapeDef def = MakeShapeDef(handle, desc, isTrigger);
+        const b3Sphere sphere = { ToB3(offset), std::max(radius, kMinHalfExtent) };
+        b3CreateSphereShape(entries[handle].body, &def, &sphere);
+    }
+
+    bool Overlaps(const Vector3& position, const b3ShapeProxy& proxy, ColliderHandle ignore) const
+    {
+        OverlapContext context;
+        context.ignore = ignore;
+        b3World_OverlapShape(world, b3ToPos(ToB3(position)), &proxy, MakeQueryFilter(false), OverlapCallback, &context);
+        return context.found;
+    }
+};
+
+CollisionWorld::CollisionWorld() : impl(std::make_unique<Impl>())
+{
+    impl->CreateWorld();
+}
+
+CollisionWorld::~CollisionWorld()
+{
+    b3DestroyWorld(impl->world);
 }
 
 ColliderHandle CollisionWorld::AddBox(const Vector3& position, const Vector3& halfExtents, bool isTrigger, const Vector3& offset)
 {
-    CollisionBody body = {};
-    body.handle = nextHandle++;
-    body.type = ColliderType::Box;
-    body.position = position;
-    body.offset = offset;
-    body.box.halfExtents = halfExtents;
-    body.isTrigger = isTrigger;
-    bodies.push_back(body);
-    return body.handle;
+    RigidBodyDesc desc;
+    desc.motion = ColliderMotion::Static;
+    desc.position = position;
+    const ColliderHandle handle = impl->CreateBody(ColliderType::Box, desc, offset);
+    impl->AddBoxShape(handle, halfExtents, offset, desc, isTrigger);
+    return handle;
 }
 
 ColliderHandle CollisionWorld::AddSphere(const Vector3& position, float radius, bool isTrigger, const Vector3& offset)
 {
-    CollisionBody body = {};
-    body.handle = nextHandle++;
-    body.type = ColliderType::Sphere;
-    body.position = position;
-    body.offset = offset;
-    body.sphere.radius = radius;
-    body.isTrigger = isTrigger;
-    bodies.push_back(body);
-    return body.handle;
+    RigidBodyDesc desc;
+    desc.motion = ColliderMotion::Static;
+    desc.position = position;
+    const ColliderHandle handle = impl->CreateBody(ColliderType::Sphere, desc, offset);
+    impl->AddSphereShape(handle, radius, offset, desc, isTrigger);
+    return handle;
 }
 
-ColliderHandle CollisionWorld::AddCapsule(const Vector3& position, float radius, float halfHeight, bool isTrigger, const Vector3& offset)
+ColliderHandle CollisionWorld::AddCapsule(const Vector3& position, float radius, float halfHeight, bool isTrigger, const Vector3& offset,
+                                          ColliderMotion motion)
 {
-    CollisionBody body = {};
-    body.handle = nextHandle++;
-    body.type = ColliderType::Capsule;
-    body.position = position;
-    body.offset = offset;
-    body.capsule.radius = radius;
-    body.capsule.halfHeight = halfHeight;
-    body.isTrigger = isTrigger;
-    bodies.push_back(body);
-    return body.handle;
+    RigidBodyDesc desc;
+    desc.motion = motion;
+    desc.position = position;
+    const ColliderHandle handle = impl->CreateBody(ColliderType::Capsule, desc, offset);
+    const b3ShapeDef def = Impl::MakeShapeDef(handle, desc, isTrigger);
+    const b3Capsule capsule = { { offset.x, offset.y - halfHeight, offset.z }, { offset.x, offset.y + halfHeight, offset.z }, radius };
+    b3CreateCapsuleShape(impl->entries[handle].body, &def, &capsule);
+    return handle;
 }
 
 ColliderHandle CollisionWorld::AddConvex(const Vector3& position, const std::vector<CollisionPlane>& planes,
                                          const Vector3& boundsMin, const Vector3& boundsMax, bool isTrigger)
 {
-    CollisionBody body = {};
-    body.handle = nextHandle++;
-    body.type = ColliderType::Convex;
-    body.position = position;
-    body.convex.planes = planes;
-    body.convex.boundsMin = boundsMin;
-    body.convex.boundsMax = boundsMax;
-    body.isTrigger = isTrigger;
-    bodies.push_back(std::move(body));
-    return bodies.back().handle;
+    RigidBodyDesc desc;
+    desc.motion = ColliderMotion::Static;
+    desc.position = position;
+    const ColliderHandle handle = impl->CreateBody(ColliderType::Convex, desc, {});
+    impl->AddHullShape(handle, { planes, boundsMin, boundsMax }, desc, isTrigger);
+    return handle;
+}
+
+ColliderHandle CollisionWorld::AddRigidHulls(const std::vector<ConvexCollider>& hulls, const RigidBodyDesc& desc)
+{
+    const ColliderHandle handle = impl->CreateBody(ColliderType::Convex, desc, {});
+    for (const ConvexCollider& hull : hulls)
+        impl->AddHullShape(handle, hull, desc, false);
+    return handle;
+}
+
+ColliderHandle CollisionWorld::AddRigidBox(const Vector3& halfExtents, const Vector3& offset, const RigidBodyDesc& desc)
+{
+    const ColliderHandle handle = impl->CreateBody(ColliderType::Box, desc, {});
+    impl->AddBoxShape(handle, halfExtents, offset, desc, false);
+    return handle;
+}
+
+ColliderHandle CollisionWorld::AddRigidSphere(float radius, const Vector3& offset, const RigidBodyDesc& desc)
+{
+    const ColliderHandle handle = impl->CreateBody(ColliderType::Sphere, desc, {});
+    impl->AddSphereShape(handle, radius, offset, desc, false);
+    return handle;
 }
 
 bool CollisionWorld::Remove(ColliderHandle handle)
 {
-    for (std::size_t i = 0; i < bodies.size(); ++i)
+    Impl::Entry* entry = impl->Find(handle);
+    if (!entry)
+        return false;
+    b3DestroyBody(entry->body);
+    if (entry->motion == ColliderMotion::Dynamic)
     {
-        if (bodies[i].handle == handle)
-        {
-            bodies.erase(bodies.begin() + (long long)i);
-            return true;
-        }
+        std::vector<ColliderHandle>& bodies = impl->dynamicBodies;
+        bodies.erase(std::remove(bodies.begin(), bodies.end(), handle), bodies.end());
     }
-    return false;
+    impl->entries.erase(handle);
+    return true;
 }
 
-CollisionBody* CollisionWorld::Find(ColliderHandle handle)
+bool CollisionWorld::Exists(ColliderHandle handle) const
 {
-    for (CollisionBody& body : bodies)
-    {
-        if (body.handle == handle)
-            return &body;
-    }
-    return nullptr;
+    return impl->Find(handle) != nullptr;
 }
 
-const CollisionBody* CollisionWorld::Find(ColliderHandle handle) const
+void CollisionWorld::SetActive(ColliderHandle handle, bool active)
 {
-    for (const CollisionBody& body : bodies)
+    if (Impl::Entry* entry = impl->Find(handle))
     {
-        if (body.handle == handle)
-            return &body;
+        if (active)
+            b3Body_Enable(entry->body);
+        else
+            b3Body_Disable(entry->body);
     }
-    return nullptr;
 }
 
 void CollisionWorld::SetPosition(ColliderHandle handle, const Vector3& position)
 {
-    CollisionBody* body = Find(handle);
-    if (body)
-        body->position = position;
+    Impl::Entry* entry = impl->Find(handle);
+    if (!entry)
+        return;
+
+    const b3Quat rotation = b3Body_GetRotation(entry->body);
+    b3Body_SetTransform(entry->body, b3ToPos(ToB3(position)), rotation);
+    if (entry->motion == ColliderMotion::Dynamic)
+    {
+        b3Body_SetLinearVelocity(entry->body, { 0.0f, 0.0f, 0.0f });
+        b3Body_SetAngularVelocity(entry->body, { 0.0f, 0.0f, 0.0f });
+        b3Body_SetAwake(entry->body, true);
+        entry->current = { b3ToPos(ToB3(position)), rotation };
+        entry->previous = entry->current;
+    }
+}
+
+void CollisionWorld::SetTargetPosition(ColliderHandle handle, const Vector3& position, float timeStep)
+{
+    Impl::Entry* entry = impl->Find(handle);
+    if (!entry || timeStep <= 0.0f)
+        return;
+
+    b3WorldTransform target = b3Body_GetTransform(entry->body);
+    target.p = b3ToPos(ToB3(position));
+    b3Body_SetTargetTransform(entry->body, target, timeStep, true);
 }
 
 Vector3 CollisionWorld::GetWorldPosition(ColliderHandle handle) const
 {
-    const CollisionBody* body = Find(handle);
-    if (!body)
+    const Impl::Entry* entry = impl->Find(handle);
+    if (!entry)
         return {};
-    return body->position + body->offset;
+    return FromB3(b3ToVec3(b3Body_GetPosition(entry->body))) + entry->offset;
+}
+
+void CollisionWorld::Step(float timeStep)
+{
+    KES_ZONE_FN(PHYSICS);
+    if (timeStep <= 0.0f)
+        return;
+
+    b3World_Step(impl->world, timeStep, kSubStepCount);
+    for (ColliderHandle handle : impl->dynamicBodies)
+    {
+        Impl::Entry& entry = impl->entries[handle];
+        const b3WorldTransform transform = b3Body_GetTransform(entry.body);
+        entry.previous = entry.current;
+        entry.current = { transform.p, transform.q };
+    }
+}
+
+bool CollisionWorld::GetBodyPose(ColliderHandle handle, float alpha, Vector3& outPosition, Vector3& outRotation) const
+{
+    const Impl::Entry* entry = impl->Find(handle);
+    if (!entry)
+        return false;
+
+    const float t = ClampFloat(alpha, 0.0f, 1.0f);
+    const Vector3 from = FromB3(b3ToVec3(entry->previous.position));
+    const Vector3 to = FromB3(b3ToVec3(entry->current.position));
+    outPosition = from + (to - from) * t;
+    outRotation = EulerFromQuat(BlendQuat(entry->previous.rotation, entry->current.rotation, t));
+    return true;
+}
+
+void CollisionWorld::ApplyImpulse(ColliderHandle handle, const Vector3& impulse)
+{
+    if (Impl::Entry* entry = impl->Find(handle))
+        b3Body_ApplyLinearImpulseToCenter(entry->body, ToB3(impulse), true);
+}
+
+void CollisionWorld::SetLinearVelocity(ColliderHandle handle, const Vector3& velocity)
+{
+    if (Impl::Entry* entry = impl->Find(handle))
+    {
+        b3Body_SetLinearVelocity(entry->body, ToB3(velocity));
+        b3Body_SetAwake(entry->body, true);
+    }
+}
+
+Vector3 CollisionWorld::GetLinearVelocity(ColliderHandle handle) const
+{
+    const Impl::Entry* entry = impl->Find(handle);
+    return entry ? FromB3(b3Body_GetLinearVelocity(entry->body)) : Vector3{};
 }
 
 bool CollisionWorld::CheckBox(const Vector3& position, const Vector3& halfExtents, ColliderHandle ignore) const
 {
     KES_ZONE_FN(PHYSICS);
-    CollisionBody probe = {};
-    probe.type = ColliderType::Box;
-    probe.position = position;
-    probe.box.halfExtents = halfExtents;
-    return OverlapsBody(probe, ignore);
+    b3Vec3 corners[8];
+    int count = 0;
+    for (float x : { -halfExtents.x, halfExtents.x })
+        for (float y : { -halfExtents.y, halfExtents.y })
+            for (float z : { -halfExtents.z, halfExtents.z })
+                corners[count++] = { x, y, z };
+    const b3ShapeProxy proxy = { corners, 8, 0.0f };
+    return impl->Overlaps(position, proxy, ignore);
 }
 
 bool CollisionWorld::CheckSphere(const Vector3& position, float radius, ColliderHandle ignore) const
 {
     KES_ZONE_FN(PHYSICS);
-    CollisionBody probe = {};
-    probe.type = ColliderType::Sphere;
-    probe.position = position;
-    probe.sphere.radius = radius;
-    return OverlapsBody(probe, ignore);
+    const b3Vec3 center = { 0.0f, 0.0f, 0.0f };
+    const b3ShapeProxy proxy = { &center, 1, radius };
+    return impl->Overlaps(position, proxy, ignore);
 }
 
 bool CollisionWorld::CheckCapsule(const Vector3& position, float radius, float halfHeight, ColliderHandle ignore) const
 {
     KES_ZONE_FN(PHYSICS);
-    CollisionBody probe = {};
-    probe.type = ColliderType::Capsule;
-    probe.position = position;
-    probe.capsule.radius = radius;
-    probe.capsule.halfHeight = halfHeight;
-    return OverlapsBody(probe, ignore);
+    const CapsuleProxy capsule(radius, halfHeight);
+    return impl->Overlaps(position, capsule.proxy, ignore);
 }
 
-CollisionHit CollisionWorld::SweepCapsule(const Vector3& from, const Vector3& to, float radius, float halfHeight, ColliderHandle ignore, int steps) const
+CollisionHit CollisionWorld::SweepCapsule(const Vector3& from, const Vector3& to, float radius, float halfHeight, ColliderHandle ignore) const
 {
     KES_ZONE_FN(PHYSICS);
-    CollisionHit hit = {};
-    if (steps < 1)
-        steps = 1;
+    const CapsuleProxy capsule(radius, halfHeight);
+    ClosestCastContext context;
+    context.ignore = ignore;
+    b3World_CastShape(impl->world, b3ToPos(ToB3(from)), &capsule.proxy, ToB3(to - from), MakeQueryFilter(false), ClosestCastCallback, &context);
 
-    for (int i = 1; i <= steps; ++i)
+    CollisionHit hit;
+    if (context.found)
     {
-        const float t = (float)i / (float)steps;
-        const Vector3 sample = from + (to - from) * t;
-        CollisionBody probe = {};
-        probe.type = ColliderType::Capsule;
-        probe.position = sample;
-        probe.capsule.radius = radius;
-        probe.capsule.halfHeight = halfHeight;
-
-        for (const CollisionBody& body : bodies)
-        {
-            if (!body.active || body.handle == ignore || body.isTrigger)
-                continue;
-            if (OverlapsPair(probe, body))
-            {
-                hit.hit = true;
-                hit.other = body.handle;
-                return hit;
-            }
-        }
+        hit.hit = true;
+        hit.other = context.other;
+        hit.normal = context.normal;
+        hit.fraction = context.fraction;
     }
-
     return hit;
 }
 
@@ -632,28 +592,37 @@ bool CollisionWorld::Raycast(const Ray& ray, RaycastHit& outHit, const RaycastQu
     if (Vector3LengthSq(direction) <= 0.00001f || query.maxDistance < 0.0f)
         return false;
 
-    const Ray normalizedRay = { ray.origin, direction };
+    const b3QueryFilter filter = MakeQueryFilter(query.includeTriggers);
+    const b3Pos origin = b3ToPos(ToB3(ray.origin));
 
-    RaycastHit bestHit = {};
-    for (const CollisionBody& body : bodies)
+    // Box3D ray casts ignore shapes the ray starts inside.
+    const b3Vec3 point = { 0.0f, 0.0f, 0.0f };
+    const b3ShapeProxy pointProxy = { &point, 1, 0.0f };
+    OverlapContext inside;
+    inside.ignore = query.ignore;
+    b3World_OverlapShape(impl->world, origin, &pointProxy, filter, OverlapCallback, &inside);
+    if (inside.found)
     {
-        if (!body.active || body.handle == query.ignore)
-            continue;
-        if (!query.includeTriggers && body.isTrigger)
-            continue;
-
-        RaycastHit candidate = {};
-        if (!RaycastBody(body, normalizedRay, query.maxDistance, candidate))
-            continue;
-
-        if (!bestHit.hit || candidate.distance < bestHit.distance)
-            bestHit = candidate;
+        outHit.hit = true;
+        outHit.other = inside.first;
+        outHit.type = impl->Find(inside.first)->type;
+        outHit.point = ray.origin;
+        outHit.normal = direction * -1.0f;
+        return true;
     }
 
-    if (!bestHit.hit)
+    ClosestCastContext context;
+    context.ignore = query.ignore;
+    b3World_CastRay(impl->world, origin, ToB3(direction * query.maxDistance), filter, ClosestCastCallback, &context);
+    if (!context.found)
         return false;
 
-    outHit = bestHit;
+    outHit.hit = true;
+    outHit.other = context.other;
+    outHit.type = impl->Find(context.other)->type;
+    outHit.point = context.point;
+    outHit.normal = context.normal;
+    outHit.distance = context.fraction * query.maxDistance;
     return true;
 }
 
@@ -666,97 +635,136 @@ std::size_t CollisionWorld::RaycastAll(const Ray& ray, std::vector<RaycastHit>& 
     if (Vector3LengthSq(direction) <= 0.00001f || query.maxDistance < 0.0f)
         return 0;
 
-    const Ray normalizedRay = { ray.origin, direction };
-
-    for (const CollisionBody& body : bodies)
+    struct Context
     {
-        if (!body.active || body.handle == query.ignore)
-            continue;
-        if (!query.includeTriggers && body.isTrigger)
-            continue;
+        const CollisionWorld::Impl* impl;
+        std::vector<RaycastHit>* hits;
+        ColliderHandle ignore;
+        float maxDistance;
+        Vector3 origin;
+        Vector3 direction;
+    } context = { impl.get(), &outHits, query.ignore, query.maxDistance, ray.origin, direction };
 
-        RaycastHit hit = {};
-        if (RaycastBody(body, normalizedRay, query.maxDistance, hit))
-            outHits.push_back(hit);
+    const b3QueryFilter filter = MakeQueryFilter(query.includeTriggers);
+    const b3Pos origin = b3ToPos(ToB3(ray.origin));
+
+    const auto castCallback = [](b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uint64_t, int, int, void* userContext) -> float
+    {
+        auto* cast = static_cast<Context*>(userContext);
+        const ColliderHandle handle = HandleOf(shape);
+        if (handle == cast->ignore)
+            return -1.0f;
+        RaycastHit hit;
+        hit.hit = true;
+        hit.other = handle;
+        hit.type = cast->impl->Find(handle)->type;
+        hit.point = FromB3(point);
+        hit.normal = FromB3(normal);
+        hit.distance = fraction * cast->maxDistance;
+        cast->hits->push_back(hit);
+        return 1.0f;
+    };
+    b3World_CastRay(impl->world, origin, ToB3(direction * query.maxDistance), filter, castCallback, &context);
+
+    // Shapes the ray starts inside, which the cast skips.
+    const auto overlapCallback = [](b3ShapeId shape, void* userContext) -> bool
+    {
+        auto* cast = static_cast<Context*>(userContext);
+        const ColliderHandle handle = HandleOf(shape);
+        if (handle == cast->ignore)
+            return true;
+        RaycastHit hit;
+        hit.hit = true;
+        hit.other = handle;
+        hit.type = cast->impl->Find(handle)->type;
+        hit.point = cast->origin;
+        hit.normal = cast->direction * -1.0f;
+        cast->hits->push_back(hit);
+        return true;
+    };
+    const b3Vec3 point = { 0.0f, 0.0f, 0.0f };
+    const b3ShapeProxy pointProxy = { &point, 1, 0.0f };
+    b3World_OverlapShape(impl->world, origin, &pointProxy, filter, overlapCallback, &context);
+
+    std::stable_sort(outHits.begin(), outHits.end(), [](const RaycastHit& a, const RaycastHit& b) { return a.distance < b.distance; });
+
+    // One hit per collider: bodies can have several shapes.
+    std::vector<RaycastHit> unique;
+    unique.reserve(outHits.size());
+    for (const RaycastHit& hit : outHits)
+    {
+        const bool seen = std::any_of(unique.begin(), unique.end(), [&hit](const RaycastHit& other) { return other.other == hit.other; });
+        if (!seen)
+            unique.push_back(hit);
     }
-
-    std::sort(outHits.begin(), outHits.end(),
-        [](const RaycastHit& a, const RaycastHit& b)
-        {
-            return a.distance < b.distance;
-        });
-
+    outHits.swap(unique);
     return outHits.size();
+}
+
+Vector3 CollisionWorld::MoveCapsule(const Vector3& position, const Vector3& delta, float radius, float halfHeight, ColliderHandle ignore) const
+{
+    KES_ZONE_FN(PHYSICS);
+
+    struct Context
+    {
+        const CollisionWorld::Impl* impl;
+        ColliderHandle ignore;
+        b3CollisionPlane planes[kMaxMoverPlanes];
+        int planeCount;
+    } context = {};
+    context.impl = impl.get();
+    context.ignore = ignore;
+
+    const auto planeCallback = [](b3ShapeId shape, const b3PlaneResult* planes, int planeCount, void* userContext) -> bool
+    {
+        auto* mover = static_cast<Context*>(userContext);
+        const ColliderHandle handle = HandleOf(shape);
+        if (handle == mover->ignore)
+            return true;
+        const bool dynamic = mover->impl->Find(handle)->motion == ColliderMotion::Dynamic;
+        for (int i = 0; i < planeCount && mover->planeCount < kMaxMoverPlanes; ++i)
+        {
+            b3CollisionPlane& plane = mover->planes[mover->planeCount++];
+            plane.plane = planes[i].plane;
+            plane.pushLimit = dynamic ? kDynamicPushLimit : FLT_MAX;
+            plane.push = 0.0f;
+            plane.clipVelocity = !dynamic;
+        }
+        return true;
+    };
+    const auto castFilter = [](b3ShapeId shape, void* userContext) -> bool
+    {
+        return HandleOf(shape) != static_cast<Context*>(userContext)->ignore;
+    };
+
+    const b3Capsule capsule = { { 0.0f, -halfHeight, 0.0f }, { 0.0f, halfHeight, 0.0f }, radius };
+    b3QueryFilter collideFilter = MakeQueryFilter(false);
+    b3QueryFilter sweepFilter = collideFilter;
+    sweepFilter.maskBits = kCategorySolid;   // dynamic bodies are pushed, not hit
+
+    Vector3 current = position;
+    const Vector3 target = position + delta;
+    for (int iteration = 0; iteration < kMaxMoverIterations; ++iteration)
+    {
+        context.planeCount = 0;
+        const b3Pos origin = b3ToPos(ToB3(current));
+        b3World_CollideMover(impl->world, origin, &capsule, collideFilter, planeCallback, &context);
+
+        const b3PlaneSolverResult solved = b3SolvePlanes(ToB3(target - current), context.planes, context.planeCount);
+        const float fraction = b3World_CastMover(impl->world, origin, &capsule, solved.delta, sweepFilter, castFilter, &context);
+        const Vector3 step = FromB3(solved.delta) * fraction;
+        current += step;
+        if (Vector3LengthSq(step) < 0.0001f * 0.0001f)
+            break;
+    }
+    return current;
 }
 
 void CollisionWorld::Clear()
 {
-    bodies.clear();
-    nextHandle = 1;
-}
-
-bool CollisionWorld::OverlapsBody(const CollisionBody& probe, ColliderHandle ignore) const
-{
-    for (const CollisionBody& body : bodies)
-    {
-        if (!body.active || body.handle == ignore)
-            continue;
-        if (OverlapsPair(probe, body))
-            return true;
-    }
-    return false;
-}
-
-bool CollisionWorld::OverlapsPair(const CollisionBody& a, const CollisionBody& b) const
-{
-    const Vector3 aPos = a.position + a.offset;
-    const Vector3 bPos = b.position + b.offset;
-
-    if (a.type == ColliderType::Box && b.type == ColliderType::Box)
-        return BoxVsBox(aPos, a.box.halfExtents, bPos, b.box.halfExtents);
-
-    if (a.type == ColliderType::Sphere && b.type == ColliderType::Sphere)
-        return SphereVsSphere(aPos, a.sphere.radius, bPos, b.sphere.radius);
-
-    if (a.type == ColliderType::Sphere && b.type == ColliderType::Box)
-        return SphereVsBox(aPos, a.sphere.radius, bPos, b.box.halfExtents);
-
-    if (a.type == ColliderType::Box && b.type == ColliderType::Sphere)
-        return SphereVsBox(bPos, b.sphere.radius, aPos, a.box.halfExtents);
-
-    if (a.type == ColliderType::Capsule && b.type == ColliderType::Sphere)
-        return CapsuleVsSphere(aPos, a.capsule.radius, a.capsule.halfHeight, bPos, b.sphere.radius);
-
-    if (a.type == ColliderType::Sphere && b.type == ColliderType::Capsule)
-        return CapsuleVsSphere(bPos, b.capsule.radius, b.capsule.halfHeight, aPos, a.sphere.radius);
-
-    if (a.type == ColliderType::Capsule && b.type == ColliderType::Box)
-        return CapsuleVsBox(aPos, a.capsule.radius, a.capsule.halfHeight, bPos, b.box.halfExtents);
-
-    if (a.type == ColliderType::Box && b.type == ColliderType::Capsule)
-        return CapsuleVsBox(bPos, b.capsule.radius, b.capsule.halfHeight, aPos, a.box.halfExtents);
-
-    if (a.type == ColliderType::Capsule && b.type == ColliderType::Capsule)
-        return CapsuleVsCapsule(aPos, a.capsule.radius, a.capsule.halfHeight, bPos, b.capsule.radius, b.capsule.halfHeight);
-
-    // Convex hulls (map brushes) against the primitive shapes.
-    if (a.type == ColliderType::Convex || b.type == ColliderType::Convex)
-    {
-        if (a.type == ColliderType::Convex && b.type == ColliderType::Convex)
-            return false;   // brush vs brush: both static, never needed
-        const bool aIsHull = a.type == ColliderType::Convex;
-        const CollisionBody& hull = aIsHull ? a : b;
-        const CollisionBody& other = aIsHull ? b : a;
-        const Vector3 hullPos = aIsHull ? aPos : bPos;
-        const Vector3 otherPos = aIsHull ? bPos : aPos;
-        switch (other.type)
-        {
-        case ColliderType::Box:     return ConvexVsBox(hull, hullPos, otherPos, other.box.halfExtents);
-        case ColliderType::Sphere:  return ConvexVsSphere(hull, hullPos, otherPos, other.sphere.radius);
-        case ColliderType::Capsule: return ConvexVsCapsule(hull, hullPos, otherPos, other.capsule.radius, other.capsule.halfHeight);
-        default:                    return false;
-        }
-    }
-
-    return false;
+    b3DestroyWorld(impl->world);
+    impl->entries.clear();
+    impl->dynamicBodies.clear();
+    impl->nextHandle = 1;
+    impl->CreateWorld();
 }

@@ -173,7 +173,7 @@ bool ImportTextureToKTex(const std::string& inputPath, const std::string& output
     }
 
     TextureFileData texture = {};
-    texture.sourcePath = inputPath;
+    texture.sourcePath = std::filesystem::path(inputPath).filename().string();
     texture.width = width;
     texture.height = height;
     texture.format = TexturePixelFormat::RGBA8;

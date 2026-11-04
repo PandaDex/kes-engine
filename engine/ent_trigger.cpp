@@ -2,7 +2,6 @@
 #include "entity_property_utils.h"
 #include "game_context.h"
 #include <cmath>
-#include <unordered_map>
 
 void TriggerEntity::Update(float dt)
 {
@@ -10,37 +9,28 @@ void TriggerEntity::Update(float dt)
     if (!game || !game->entities)
         return;
 
-    std::unordered_set<uint64_t> current;
-    std::unordered_map<uint64_t, Entity*> activeEntities;
+    currentOverlaps.clear();
+    enteredEntities.clear();
     game->entities->ForEachActive([&](Entity& entity)
     {
-        if (&entity == this)
+        if (&entity == this || !IsInside(entity.Position) || (!filterTag.empty() && !entity.HasTag(filterTag)))
             return;
 
-        activeEntities[entity.GetEntityId()] = &entity;
-        if (IsInside(entity.Position))
-            current.insert(entity.GetEntityId());
+        currentOverlaps.insert(entity.GetEntityId());
+        if (overlappingEntities.find(entity.GetEntityId()) == overlappingEntities.end())
+            enteredEntities.push_back(&entity);
     });
 
-    for (uint64_t id : current)
-    {
-        if (overlappingEntities.find(id) == overlappingEntities.end())
-            game->ExecuteCommand(onEntityEnter, this, activeEntities[id]);
-    }
+    for (Entity* entity : enteredEntities)
+        game->ExecuteCommand(onEntityEnter, this, entity);
 
     for (uint64_t id : overlappingEntities)
     {
-        if (current.find(id) == current.end())
-        {
-            Entity* other = nullptr;
-            auto activeIt = activeEntities.find(id);
-            if (activeIt != activeEntities.end())
-                other = activeIt->second;
-            game->ExecuteCommand(onEntityExit, this, other);
-        }
+        if (currentOverlaps.find(id) == currentOverlaps.end())
+            game->ExecuteCommand(onEntityExit, this, game->entities->GetEntityById(id));
     }
 
-    overlappingEntities = std::move(current);
+    overlappingEntities.swap(currentOverlaps);
 }
 
 bool TriggerEntity::ApplyProperty(const std::string& name, const std::string& value)
@@ -54,6 +44,12 @@ bool TriggerEntity::ApplyProperty(const std::string& name, const std::string& va
     if (name == "OnEntityExit")
     {
         onEntityExit = entityprops::ParseString(value);
+        return true;
+    }
+
+    if (name == "Filter")
+    {
+        filterTag = entityprops::ParseString(value);
         return true;
     }
 

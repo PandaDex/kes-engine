@@ -372,7 +372,7 @@ bool ImportSoundToKSound(const std::string& inputPath, const std::string& output
     }
 
     SoundFileData sound = {};
-    sound.sourcePath = inputPath;
+    sound.sourcePath = std::filesystem::path(inputPath).filename().string();
     sound.sampleRate = format.sampleRate;
     sound.channels = format.channels;
 

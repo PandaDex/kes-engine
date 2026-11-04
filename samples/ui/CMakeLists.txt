@@ -16,6 +16,7 @@ set_property(TARGET ui_showcase PROPERTY CXX_STANDARD 20)
 if(WIN32)
     target_compile_definitions(ui_showcase PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
+kes_target_utf8(ui_showcase)
 bundle_runtime_libs(ui_showcase)
 
 # The game's content (startup map, meshes, materials) is copied first so the

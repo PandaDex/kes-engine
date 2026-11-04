@@ -36,11 +36,19 @@ struct SceneObject;
 namespace kes::d3d11
 {
 
+struct GPUMesh;
+
+// Everything per object that doesn't depend on the view, computed once a frame.
 struct DrawItem
 {
     const SceneObject* object = nullptr;
     const MaterialData* material = nullptr;
     float distanceSq = 0.0f;
+    render::Matrix4 world;
+    bool skinned = false;
+    GPUMesh* mesh = nullptr;     // static objects
+    Vector3 boundsCenter = {};   // static objects, world space
+    float boundsRadius = 0.0f;
 };
 
 struct GPUMesh
@@ -82,11 +90,6 @@ struct GPUTexture
 {
     ID3D11Texture2D* texture = nullptr;
     ID3D11ShaderResourceView* srv = nullptr;
-};
-
-struct GPUModelRenderCache
-{
-    std::vector<float> meshBindWorldMatrices;
 };
 
 // Depth texture array with one depth view per slice (shadow maps).
@@ -182,7 +185,6 @@ struct Renderer
     std::unordered_map<GPUModelMeshKey, GPUMesh, GPUModelMeshKeyHasher> gpuModelMeshes;
     std::unordered_map<ShaderHandle, GPUShaderProgram> gpuShaders;
     std::unordered_map<std::string, GPUTexture> gpuTextures;   // key: usage + resolved path
-    std::unordered_map<ModelHandle, GPUModelRenderCache> gpuModelRenderCaches;
     uint64_t assetGeneration = 0;
 
     int windowWidth = 0;

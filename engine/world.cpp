@@ -140,6 +140,14 @@ void World::Update(float dt)
         entities.Update(dt);
         entities.DestroyPending();
     }
+    if (gameContext.mainCamera)
+    {
+        AudioListener listener = {};
+        listener.position = CameraGetPosition(*gameContext.mainCamera);
+        listener.forward = CameraGetForward(*gameContext.mainCamera);
+        listener.up = CameraGetUp(*gameContext.mainCamera);
+        audio.SetListener(listener);
+    }
     audio.Update(dt);
 
     if (pendingMapLoad.empty())
@@ -153,8 +161,10 @@ void World::Update(float dt)
 void World::FixedUpdate(float fixedDt)
 {
     KES_ZONE_FN(WORLD);
-    if (!paused)
-        entities.FixedUpdate(fixedDt);
+    if (paused)
+        return;
+    entities.FixedUpdate(fixedDt);
+    collision.Step(fixedDt);
 }
 
 void World::SetPaused(bool pause)
@@ -170,6 +180,11 @@ bool World::LoadMap(const char* mapName)
 {
     KES_ZONE_FN(WORLD);
     KES_ZONE_TEXTF(WORLD, "%s", mapName ? mapName : "<null>");
+    if (entities.IsUpdating() && mapName && mapName[0])
+    {
+        QueueMapLoad(mapName);
+        return true;
+    }
     EngineLogf("Loading map: %s", mapName ? mapName : "<null>");
 
     CompiledMap map;
@@ -457,6 +472,7 @@ Entity* World::CreatePlayerEntity()
     if (!player)
         return nullptr;
 
+    player->Tags.push_back(kPlayerTag);
     player->Rotation = spawnRotation;
     player->Teleport(spawnPosition);
     return player;

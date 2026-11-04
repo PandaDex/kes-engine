@@ -46,7 +46,16 @@ namespace textparse
 
     inline std::string Quote(const std::string& value)
     {
-        return "\"" + value + "\"";
+        std::string out = "\"";
+        out.reserve(value.size() + 2);
+        for (char ch : value)
+        {
+            if (ch == '\\' || ch == '"')
+                out.push_back('\\');
+            out.push_back(ch);
+        }
+        out.push_back('"');
+        return out;
     }
 
     inline std::string ParseString(const std::string& value)

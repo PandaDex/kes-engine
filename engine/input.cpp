@@ -276,6 +276,7 @@ namespace
             return true;
         }
 
+        EngineLogf("Unknown input key %s", key.c_str());
         return false;
     }
 
@@ -467,7 +468,7 @@ namespace
             if (cursor.pos < cursor.text.size() && cursor.text[cursor.pos] == '}')
             {
                 ++cursor.pos;
-                return binding.keyKind != InputNativeKeyKind::Unknown;
+                return true;
             }
 
             std::string field;
@@ -525,7 +526,9 @@ namespace
             if (!ParseBinding(cursor, binding))
                 return false;
 
-            bindings.push_back(binding);
+            // An unknown key loses this binding, not the whole map.
+            if (binding.keyKind != InputNativeKeyKind::Unknown)
+                bindings.push_back(binding);
         }
 
         return false;
@@ -651,7 +654,8 @@ namespace
         switch (binding.keyKind)
         {
         case InputNativeKeyKind::Keyboard:
-            if (binding.keyboardKey >= 0 && binding.keyboardKey < SDL_SCANCODE_COUNT && input.keys[binding.keyboardKey])
+            if (binding.keyboardKey >= 0 && binding.keyboardKey < SDL_SCANCODE_COUNT &&
+                (input.keys[binding.keyboardKey] || input.keysTapped[binding.keyboardKey]))
                 return { 0.0f, 1.0f, 0.0f };
             return {};
 
@@ -794,7 +798,9 @@ void InputShutdown(InputState& input)
 void InputBeginFrame(InputState& input)
 {
     KES_ZONE_FN(INPUT);
-    std::copy(std::begin(input.keys), std::end(input.keys), std::begin(input.previousKeys));
+    for (int key = 0; key < SDL_SCANCODE_COUNT; ++key)
+        input.previousKeys[key] = input.keys[key] || input.keysTapped[key];
+    std::fill(std::begin(input.keysTapped), std::end(input.keysTapped), false);
     std::copy(std::begin(input.mouseButtons), std::end(input.mouseButtons), std::begin(input.previousMouseButtons));
 
     input.mouseDeltaX = 0.0f;
@@ -815,7 +821,10 @@ void InputProcessEvent(InputState& input, const SDL_Event& e)
     {
     case SDL_EVENT_KEY_DOWN:
         if (!e.key.repeat && e.key.scancode >= 0 && e.key.scancode < SDL_SCANCODE_COUNT)
+        {
             input.keys[e.key.scancode] = true;
+            input.keysTapped[e.key.scancode] = true;
+        }
         break;
 
     case SDL_EVENT_KEY_UP:
@@ -879,6 +888,7 @@ void InputResetState(InputState& input)
 {
     KES_ZONE_FN(INPUT);
     std::fill(std::begin(input.keys), std::end(input.keys), false);
+    std::fill(std::begin(input.keysTapped), std::end(input.keysTapped), false);
     std::fill(std::begin(input.mouseButtons), std::end(input.mouseButtons), false);
     input.mouseDeltaX = 0.0f;
     input.mouseDeltaY = 0.0f;
@@ -1042,15 +1052,15 @@ Vector3 InputActionValue3D(const InputState& input, const char* actionName)
 
 bool InputKeyDown(const InputState& input, SDL_Scancode key)
 {
-    return key >= 0 && key < SDL_SCANCODE_COUNT && input.keys[key];
+    return key >= 0 && key < SDL_SCANCODE_COUNT && (input.keys[key] || input.keysTapped[key]);
 }
 
 bool InputKeyPressed(const InputState& input, SDL_Scancode key)
 {
-    return key >= 0 && key < SDL_SCANCODE_COUNT && input.keys[key] && !input.previousKeys[key];
+    return key >= 0 && key < SDL_SCANCODE_COUNT && (input.keys[key] || input.keysTapped[key]) && !input.previousKeys[key];
 }
 
 bool InputKeyReleased(const InputState& input, SDL_Scancode key)
 {
-    return key >= 0 && key < SDL_SCANCODE_COUNT && !input.keys[key] && input.previousKeys[key];
+    return key >= 0 && key < SDL_SCANCODE_COUNT && !input.keys[key] && !input.keysTapped[key] && input.previousKeys[key];
 }

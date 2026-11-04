@@ -1,7 +1,9 @@
+#include <utility>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_timer.h>
 #include <RmlUi/Core.h>
 #include "engine.h"
+#include "engine_configuration.h"
 #include "file_paths.h"
 
 // Game entry point. Hook up things like the Steam API or Discord RPC here,
@@ -66,6 +68,18 @@ namespace
             (paused && EngineGetUi(app).WasBackPressed()))
             SetPaused(app, example, !paused);
 
+#if ENGINE_ALLOW_DEBUG_MODE
+        // F5 / F6: a sound to the right / left of the camera, to check stereo.
+        for (const auto& [key, side] : { std::pair{ SDL_SCANCODE_F5, 4.0f }, std::pair{ SDL_SCANCODE_F6, -4.0f } })
+        {
+            if (InputKeyPressed(app.input, key))
+            {
+                const Vector3 position = CameraGetPosition(app.camera) + CameraGetRight(app.camera) * side;
+                app.world.GetAudio().Play3D(position, 0.05f, "sounds/default.ksound");
+            }
+        }
+#endif
+
         ++example.frames;
         const Uint64 now = SDL_GetPerformanceCounter();
         const double elapsed = static_cast<double>(now - example.fpsWindowStart) / static_cast<double>(SDL_GetPerformanceFrequency());
@@ -95,10 +109,7 @@ int main(int argc, char* argv[])
     // Override the default player class:
     // EngineRegisterPlayerClass<CLASS_NAME>(app, "CLASS_NAME");
     if (!EngineStart(app))
-    {
-        EngineShutdown(app);
         return 1;
-    }
 
     ExampleUi exampleUi;
     InitExampleUi(app, exampleUi);

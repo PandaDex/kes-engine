@@ -1,4 +1,5 @@
 #include "ent_brush.h"
+#include <algorithm>
 #include "collision_world.h"
 #include "entity_property_utils.h"
 #include "game_context.h"
@@ -29,16 +30,48 @@ void BrushEntity::Start()
         }
     }
 
-    if (game->collision)
+    if (game->collision && IsDynamic() && !geometry.hulls.empty())
+    {
+        // Brush geometry already includes the rotation from the editor.
+        Rotation = {};
+        body.position = Position;
+        const ColliderHandle handle = game->collision->AddRigidHulls(geometry.hulls, body);
+        game->collision->SetActive(handle, solid);
+        colliders.push_back(handle);
+    }
+    else if (game->collision)
     {
         for (const MapEntityGeometry::Hull& hull : geometry.hulls)
         {
             const ColliderHandle handle = game->collision->AddConvex(Position, hull.planes, hull.boundsMin, hull.boundsMax);
-            if (CollisionBody* body = game->collision->Find(handle))
-                body->active = solid;
+            game->collision->SetActive(handle, solid);
             colliders.push_back(handle);
         }
     }
+}
+
+void BrushEntity::Update(float dt)
+{
+    (void)dt;
+    if (!IsDynamic() || colliders.empty() || !game || !game->collision || !game->scene)
+        return;
+
+    if (game->collision->GetBodyPose(colliders.front(), game->fixedStepAlpha, Position, Rotation))
+    {
+        for (uint32_t id : objectIds)
+        {
+            if (SceneObject* object = game->scene->FindObject(id))
+            {
+                object->transform.position = Position;
+                object->transform.rotation = Rotation;
+            }
+        }
+    }
+}
+
+bool BrushEntity::OwnsCollider(ColliderHandle handle) const
+{
+    return std::find(colliders.begin(), colliders.end(), handle) != colliders.end();
 }
 
 void BrushEntity::Teleport(const Vector3& newPosition)
@@ -59,6 +92,8 @@ bool BrushEntity::ApplyProperty(const std::string& name, const std::string& valu
         SetVisible(entityprops::ParseBool(value, visible));
         return true;
     }
+    if (ApplyRigidBodyProperty(body, name, value))
+        return true;
     return Entity::ApplyProperty(name, value);
 }
 
@@ -80,10 +115,7 @@ void BrushEntity::SetSolid(bool value)
     if (!started || !game || !game->collision)
         return;
     for (ColliderHandle handle : colliders)
-    {
-        if (CollisionBody* body = game->collision->Find(handle))
-            body->active = solid;
-    }
+        game->collision->SetActive(handle, solid);
 }
 
 void BrushEntity::SyncTransforms()

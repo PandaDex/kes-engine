@@ -118,6 +118,7 @@ Input modes control the mouse (`EngineSetInputMode`, like Unreal's `SetInputMode
 - **F1** wireframe, **F3** animation debug
 - **F4** switches between GameOnly and GameAndUI
 - **F7** reloads UI documents and `DefaultUi.ini`
+- **F5** / **F6** (example game) play a sound to the right / left of the camera
 - **F8** toggles the UI inspector
 
 Display helpers in `window.h`: `GetDisplayCount()`, `GetDesktopResolution(display)`, `GetSupportedFullscreenResolutions(display)`.
@@ -201,7 +202,7 @@ Use this when you want map files to spawn your own entity classes by name.
 
 ### Default player (`EnginePlayerEntity`)
 
-A first-person fly camera with a collision capsule. It slides along walls instead of stopping, sub-steps fast moves so it can't pass through thin walls, and can move out if it starts inside geometry. It reads these input actions from `config/default.imap`:
+A first-person fly camera with a collision capsule, moved by `CollisionWorld::MoveCapsule`. It slides along walls and can move out if it starts inside geometry. Its capsule is kinematic, so it pushes dynamic bodies. It reads these input actions from `config/default.imap`:
 
 | Action | Type | Default bindings |
 |---|---|---|
@@ -308,6 +309,24 @@ How entities are used today:
 - map files instantiate them by class name
 - string properties from maps are applied through `ApplyProperty`
 - they update through the world/entity manager each frame
+
+## `CollisionWorld`
+
+Collision and rigid bodies, built on [Box3D](https://github.com/erincatto/box3d) (`external/box3d`). Box3D stays inside `collision_world.cpp`; entities reach this API through `game->collision`. `World::FixedUpdate` steps it after the entities' `FixedUpdate`, so a paused world doesn't simulate.
+
+- Static colliders: `AddBox`, `AddSphere`, `AddCapsule`, `AddConvex`
+- Rigid bodies: `AddRigidBox`, `AddRigidSphere`, `AddRigidHulls` with a `RigidBodyDesc` (motion, position, rotation, density, friction, restitution)
+- Bodies: `SetPosition` (teleport), `SetTargetPosition` (kinematic, moves at a velocity), `SetActive`, `Remove`, `ApplyImpulse`, `SetLinearVelocity`, `GetLinearVelocity`
+- Queries: `Raycast`, `RaycastAll`, `CheckBox`, `CheckSphere`, `CheckCapsule`, `SweepCapsule`. Triggers only appear in rays with `includeTriggers`
+- `MoveCapsule`: character movement, slides along surfaces. Dynamic bodies don't stop it; a kinematic capsule following it pushes them
+- `GetBodyPose(handle, game->fixedStepAlpha, ...)`: a dynamic body's pose between the last two steps, for smooth drawing at any frame rate
+
+Dynamic bodies from a map:
+
+- `BrushEntity`: `Dynamic`, `Density`, `Friction`, `Restitution`, `RollingResistance`
+- `SkinnedModelEntity` / `StaticMeshEntity`: the same, plus `Collider` (`Box` or `Sphere`, fitted to the mesh bounds). Without `Dynamic` the collider is static.
+
+The built-in `UseGravity` property is separate: it only drops an entity onto what is below it, with no rigid body.
 
 ## `EntityManager`
 

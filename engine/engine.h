@@ -60,6 +60,7 @@ struct EngineApp
     int debugFrameCount = 0;          // -debug-gpu-fault
 };
 
+// On failure the player has been told why and everything is already shut down.
 bool EngineStart(EngineApp& app);
 bool EngineTick(EngineApp& app);
 void EngineShutdown(EngineApp& app);

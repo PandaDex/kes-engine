@@ -1166,6 +1166,20 @@ bool UiSystem::ProcessEvent(const SDL_Event &event)
     if (impl.input)
         impl.input->uiTextInput = WantsTextInput();
 
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && pointerOverUi)
+    {
+        for (Rml::Element *element = impl.context->GetHoverElement(); element; element = element->GetParentNode())
+        {
+            if (element == element->GetOwnerDocument())
+                break;
+            if (Impl::IsTabFocusable(element))
+            {
+                impl.PlaySound(impl.config.acceptSound);
+                break;
+            }
+        }
+    }
+
     switch (event.type)
     {
     case SDL_EVENT_MOUSE_BUTTON_DOWN:

@@ -76,6 +76,7 @@ struct GPUShaderProgram
     VkShaderModule vertexShader = VK_NULL_HANDLE;
     VkShaderModule pixelShader = VK_NULL_HANDLE;
     VkPipeline pipelines[kMeshPipelineVariantCount] = {};
+    uint32_t failedVariants = 0;   // bit per variant, so a failed pipeline isn't retried on every draw
 };
 
 struct GPUTexture
@@ -105,20 +106,15 @@ struct GPUShadowArray
     int layers = 0;
 };
 
-struct GPUModelRenderCache
-{
-    std::vector<float> meshBindWorldMatrices;
-};
-
 struct GPUDynamicRingBuffer
 {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint8_t* mapped = nullptr;
-    VkDeviceSize slotStride = 0;   // per-draw slot size, aligned to minUniformBufferOffsetAlignment
-    VkDeviceSize slotDataSize = 0; // logical (unaligned) struct size
-    uint32_t slotCapacity = 0;     // number of slots currently allocated
-    uint32_t cursor = 0;           // next free slot this frame
+    VkDeviceSize size = 0;
+    VkDeviceSize rangeSize = 0;   // descriptor range: the whole struct, even when a draw writes less of it
+    VkDeviceSize alignment = 1;   // minUniformBufferOffsetAlignment
+    VkDeviceSize cursor = 0;      // next free byte this frame
 };
 
 // Everything the CPU writes or records for one frame. kMaxFramesInFlight
@@ -167,11 +163,17 @@ struct FrameResources
     GPUStreamBuffer uiIndices;
 };
 
+// Everything per object that doesn't depend on the view, computed once a frame.
 struct DrawItem
 {
     const SceneObject* object = nullptr;
     const MaterialData* material = nullptr;
     float distanceSq = 0.0f;
+    render::Matrix4 world;
+    bool skinned = false;
+    GPUMesh* mesh = nullptr;     // static objects
+    Vector3 boundsCenter = {};   // static objects, world space
+    float boundsRadius = 0.0f;
 };
 
 struct Renderer
@@ -231,6 +233,9 @@ struct Renderer
     bool globalSetDirty = true;
     float exposure = 1.0f;
     GraphicsOptions options = {};
+    bool depthBiasClampSupported = false;
+    GraphicsOptions deferredOptions = {};   // set during a frame, applied after Present
+    bool hasDeferredOptions = false;
 
     // Descriptor / pipeline layouts
     VkDescriptorSetLayout uboSetLayout = VK_NULL_HANDLE;       // set 0: SceneCB, ModelCB(dyn), MaterialCB(dyn)
@@ -304,7 +309,6 @@ struct Renderer
     std::unordered_map<ShaderHandle, GPUShaderProgram> gpuShaders;
     std::unordered_map<std::string, GPUTexture> gpuTextures;   // key: usage + resolved path
     std::unordered_map<std::string, GPUMaterialSet> gpuMaterialSets;   // key: the five texture paths
-    std::unordered_map<ModelHandle, GPUModelRenderCache> gpuModelRenderCaches;
     uint64_t assetGeneration = 0;
 
     int windowWidth = 0;

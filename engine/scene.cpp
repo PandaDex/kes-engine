@@ -2,43 +2,40 @@
 
 uint32_t Scene::CreateObject(const SceneObject& object)
 {
-    SceneObject copy = object;
-    copy.id = nextObjectId++;
-    objects.push_back(copy);
-    return copy.id;
+    const uint32_t id = nextObjectId++;
+    objects.push_back(object);
+    objects.back().id = id;
+    objectIndices[id] = objects.size() - 1;
+    return id;
 }
 
 bool Scene::RemoveObject(uint32_t id)
 {
-    for (size_t i = 0; i < objects.size(); ++i)
+    const auto found = objectIndices.find(id);
+    if (found == objectIndices.end())
+        return false;
+
+    const size_t index = found->second;
+    objectIndices.erase(found);
+    if (index + 1 != objects.size())
     {
-        if (objects[i].id == id)
-        {
-            objects.erase(objects.begin() + (long long)i);
-            return true;
-        }
+        objects[index] = std::move(objects.back());
+        objectIndices[objects[index].id] = index;
     }
-    return false;
+    objects.pop_back();
+    return true;
 }
 
 SceneObject* Scene::FindObject(uint32_t id)
 {
-    for (SceneObject& object : objects)
-    {
-        if (object.id == id)
-            return &object;
-    }
-    return nullptr;
+    const auto found = objectIndices.find(id);
+    return found != objectIndices.end() ? &objects[found->second] : nullptr;
 }
 
 const SceneObject* Scene::FindObject(uint32_t id) const
 {
-    for (const SceneObject& object : objects)
-    {
-        if (object.id == id)
-            return &object;
-    }
-    return nullptr;
+    const auto found = objectIndices.find(id);
+    return found != objectIndices.end() ? &objects[found->second] : nullptr;
 }
 
 uint32_t Scene::CreateLight(const Light& light)
@@ -85,6 +82,7 @@ const Light* Scene::FindLight(uint32_t id) const
 void Scene::Clear()
 {
     objects.clear();
+    objectIndices.clear();
     lights.clear();
     sky = {};
     fog = {};

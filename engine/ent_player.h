@@ -22,6 +22,7 @@ public:
     void Update(float dt) override;
     void FixedUpdate(float fixedDt) override;
     void Teleport(const Vector3& newPosition) override;
+    bool OwnsCollider(ColliderHandle handle) const override;
 
     void SetMoveSpeed(float metersPerSecond) { moveSpeed = metersPerSecond; }
     float GetMoveSpeed() const { return moveSpeed; }
@@ -51,7 +52,6 @@ private:
     void SyncRuntimeCameraFromEntity() const;
     bool SyncEntityFromActiveCamera();
     void OnDestroy() override;
-    bool IsBlocked(const Vector3& from, const Vector3& to) const;
 
     uint64_t lastBoundCameraEntityId = 0;
 };

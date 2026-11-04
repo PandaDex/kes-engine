@@ -22,6 +22,37 @@ bool Entity::ApplyProperty(const std::string& name, const std::string& value)
     return false;
 }
 
+bool Entity::ApplyRigidBodyProperty(RigidBodyDesc& desc, const std::string& name, const std::string& value)
+{
+    if (name == "Dynamic")
+    {
+        const bool dynamic = entityprops::ParseBool(value, desc.motion == ColliderMotion::Dynamic);
+        desc.motion = dynamic ? ColliderMotion::Dynamic : ColliderMotion::Static;
+        return true;
+    }
+    if (name == "Density")
+    {
+        desc.density = entityprops::ParseFloat(value, desc.density);
+        return true;
+    }
+    if (name == "Friction")
+    {
+        desc.friction = entityprops::ParseFloat(value, desc.friction);
+        return true;
+    }
+    if (name == "Restitution")
+    {
+        desc.restitution = entityprops::ParseFloat(value, desc.restitution);
+        return true;
+    }
+    if (name == "RollingResistance")
+    {
+        desc.rollingResistance = entityprops::ParseFloat(value, desc.rollingResistance);
+        return true;
+    }
+    return false;
+}
+
 void Entity::RunBuiltinPhysics(float fixedDt)
 {
     KES_ZONE(PHYSICS, "Entity::RunBuiltinPhysics");
@@ -35,16 +66,23 @@ void Entity::RunBuiltinPhysics(float fixedDt)
 
     if (game && game->collision && nextPosition.y <= Position.y)
     {
-        RaycastHit hit = {};
         RaycastQuery query = {};
         query.maxDistance = (Position.y - nextPosition.y) + 0.05f;
         query.includeTriggers = false;
 
         const Ray ray = { Position, { 0.0f, -1.0f, 0.0f } };
-        if (game->collision->Raycast(ray, hit, query) && hit.normal.y > 0.25f)
+        std::vector<RaycastHit> hits;
+        game->collision->RaycastAll(ray, hits, query);
+        for (const RaycastHit& hit : hits)
         {
-            nextPosition.y = hit.point.y;
-            verticalVelocity = 0.0f;
+            if (OwnsCollider(hit.other))
+                continue;
+            if (hit.normal.y > 0.25f)
+            {
+                nextPosition.y = hit.point.y;
+                verticalVelocity = 0.0f;
+            }
+            break;
         }
     }
 

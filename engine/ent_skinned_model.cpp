@@ -1,10 +1,12 @@
 #include "ent_skinned_model.h"
 #include <algorithm>
+#include <cfloat>
 #include "animation_clip.h"
 #include "animation_pose.h"
 #include "asset_system.h"
 #include "entity_property_utils.h"
 #include "game_context.h"
+#include "logger.h"
 #include "scene.h"
 #include "profiler.h"
 
@@ -30,17 +32,55 @@ void SkinnedModelEntity::Start()
     }
 
     objectId = game->scene->CreateObject(object);
+    CreateCollider();
     SyncSceneObject(0.0f);
+}
+
+void SkinnedModelEntity::CreateCollider()
+{
+    if (colliderShape.empty() || !game->collision)
+        return;
+    const MeshData* mesh = game->assets ? game->assets->GetMesh(meshHandle) : nullptr;
+    if (!mesh || mesh->vertices.empty())
+    {
+        EngineLogf("Model %s has no mesh to fit a collider to.", modelPath.c_str());
+        return;
+    }
+
+    Vector3 minV = { FLT_MAX, FLT_MAX, FLT_MAX };
+    Vector3 maxV = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+    for (const MeshVertex& vertex : mesh->vertices)
+    {
+        minV = { std::min(minV.x, vertex.px), std::min(minV.y, vertex.py), std::min(minV.z, vertex.pz) };
+        maxV = { std::max(maxV.x, vertex.px), std::max(maxV.y, vertex.py), std::max(maxV.z, vertex.pz) };
+    }
+    const Vector3 center = (minV + maxV) * 0.5f;
+    const Vector3 offset = { center.x * scale.x, center.y * scale.y, center.z * scale.z };
+    const Vector3 half = { (maxV.x - minV.x) * 0.5f * std::fabs(scale.x), (maxV.y - minV.y) * 0.5f * std::fabs(scale.y),
+                           (maxV.z - minV.z) * 0.5f * std::fabs(scale.z) };
+
+    body.position = Position;
+    body.rotation = Rotation;
+    if (colliderShape == "Sphere")
+        collider = game->collision->AddRigidSphere(std::max({ half.x, half.y, half.z }), offset, body);
+    else if (colliderShape == "Box")
+        collider = game->collision->AddRigidBox(half, offset, body);
+    else
+        EngineLogf("Unknown collider \"%s\" on %s; use Box or Sphere.", colliderShape.c_str(), modelPath.c_str());
 }
 
 void SkinnedModelEntity::Update(float dt)
 {
+    if (collider != 0 && body.motion == ColliderMotion::Dynamic && game && game->collision)
+        game->collision->GetBodyPose(collider, game->fixedStepAlpha, Position, Rotation);
     SyncSceneObject(dt);
 }
 
 void SkinnedModelEntity::Teleport(const Vector3& newPosition)
 {
     Entity::Teleport(newPosition);
+    if (collider != 0 && game && game->collision)
+        game->collision->SetPosition(collider, newPosition);
     SyncSceneObject(0.0f);
 }
 
@@ -76,6 +116,15 @@ bool SkinnedModelEntity::ApplyProperty(const std::string& name, const std::strin
         return true;
     }
 
+    if (name == "Collider")
+    {
+        colliderShape = entityprops::ParseString(value);
+        return true;
+    }
+
+    if (ApplyRigidBodyProperty(body, name, value))
+        return true;
+
     return Entity::ApplyProperty(name, value);
 }
 
@@ -84,12 +133,14 @@ void SkinnedModelEntity::SetModelPath(const std::string& path)
     modelPath = path;
     meshHandle = 0;
     modelHandle = 0;
+    assetsDirty = true;
 }
 
 void SkinnedModelEntity::SetMaterialPath(const std::string& path)
 {
     materialPath = path;
     materialHandle = 0;
+    assetsDirty = true;
 }
 
 void SkinnedModelEntity::SetAnimationGraphPath(const std::string& path)
@@ -97,6 +148,7 @@ void SkinnedModelEntity::SetAnimationGraphPath(const std::string& path)
     animationGraphPath = path;
     animator = {};
     animationGraphHandle = 0;
+    graphLoadAttempted = false;
     playbackClipHandle = 0;
     cachedPlaybackClipPath.clear();
 }
@@ -116,8 +168,9 @@ void SkinnedModelEntity::SetScale(const Vector3& value)
 
 void SkinnedModelEntity::RefreshAssetHandles()
 {
-    if (!game || !game->assets)
+    if (!assetsDirty || !game || !game->assets)
         return;
+    assetsDirty = false;
 
     if (modelPath.empty())
     {
@@ -130,6 +183,10 @@ void SkinnedModelEntity::RefreshAssetHandles()
             meshHandle = game->assets->LoadMesh(modelPath.c_str());
         if (modelHandle == 0)
             modelHandle = game->assets->LoadModel(modelPath.c_str());
+        const KModelData* model = game->assets->GetModel(modelHandle);
+        if (model && model->bones.size() > SceneObject::MaxSkinMatrices)
+            EngineLogf("Model %s has %zu bones; only the first %u are animated.", modelPath.c_str(), model->bones.size(),
+                       SceneObject::MaxSkinMatrices);
     }
 
     if (materialPath.empty())
@@ -147,8 +204,11 @@ const AnimationGraphData* SkinnedModelEntity::ResolveAnimationGraph()
     if (!game || !game->assets || animationGraphPath.empty())
         return nullptr;
 
-    if (animationGraphHandle == 0)
+    if (!graphLoadAttempted)
+    {
+        graphLoadAttempted = true;
         animationGraphHandle = game->assets->LoadAnimationGraph(animationGraphPath.c_str());
+    }
     return game->assets->GetAnimationGraph(animationGraphHandle);
 }
 
@@ -160,11 +220,8 @@ const AnimationClipData* SkinnedModelEntity::ResolveAnimationClipHandle(const st
     if (cachedPath != path)
     {
         cachedPath = path;
-        handle = 0;
-    }
-
-    if (handle == 0)
         handle = game->assets->LoadAnimationClip(path.c_str());
+    }
     return game->assets->GetAnimationClip(handle);
 }
 
@@ -249,16 +306,14 @@ void SkinnedModelEntity::SyncSceneObject(float dt)
         return;
 
     object->skinMatrixCount = (uint32_t)std::min<size_t>(model->bones.size(), SceneObject::MaxSkinMatrices);
-    if (object->skinMatrixCount > 0)
-    {
-        const size_t copyCount = (size_t)object->skinMatrixCount * 16;
-        for (size_t index = 0; index < copyCount; ++index)
-            object->skinMatrices[index] = skinMatricesScratch[index];
-    }
+    object->skinMatrices.assign(skinMatricesScratch.begin(), skinMatricesScratch.begin() + (size_t)object->skinMatrixCount * 16);
 }
 
 void SkinnedModelEntity::OnDestroy()
 {
     if (game && game->scene)
         game->scene->RemoveObject(objectId);
+    if (game && game->collision && collider != 0)
+        game->collision->Remove(collider);
+    collider = 0;
 }

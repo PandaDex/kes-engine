@@ -890,10 +890,9 @@ namespace render
         outRadius = std::sqrt(radiusSq);
     }
 
-    void TransformSphere(const Transform& transform, const Vector3& localCenter, float localRadius, Vector3& outCenter, float& outRadius)
+    void TransformSphere(const Matrix4& world, const Vector3& scale, const Vector3& localCenter, float localRadius, Vector3& outCenter, float& outRadius)
     {
-        outCenter = TransformPoint(TransformToMatrix(transform), localCenter);
-        const float scale = std::max({std::fabs(transform.scale.x), std::fabs(transform.scale.y), std::fabs(transform.scale.z)});
-        outRadius = localRadius * scale;
+        outCenter = TransformPoint(world, localCenter);
+        outRadius = localRadius * std::max({std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z)});
     }
 }

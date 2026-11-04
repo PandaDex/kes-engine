@@ -27,7 +27,7 @@ namespace
         }
 
         KModelData model = {};
-        model.sourcePath = inputPath;
+        model.sourcePath = std::filesystem::path(inputPath).filename().string();
 
         KModelMesh kmesh = {};
         ConvertMeshDataToKModelMesh(mesh, kmesh, std::filesystem::path(inputPath).stem().string().c_str());

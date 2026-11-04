@@ -2,8 +2,9 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
+#include <type_traits>
 
+#include "binary_reader.h"
 #include "pak_file_system.h"
 #include "profiler.h"
 
@@ -12,17 +13,13 @@ namespace
     static constexpr uint32_t kKModelMagic = 0x4C444D4Bu; // KMDL
     static constexpr uint32_t kKModelVersion = 1u;
 
+    // Vertices are read and written field by field in this order, without padding.
+    static_assert(sizeof(KModelVertex) == 88 && std::is_trivially_copyable_v<KModelVertex>, "KModelVertex file layout");
+
     template<typename T>
     static bool WriteValue(std::ofstream& file, const T& value)
     {
         file.write(reinterpret_cast<const char*>(&value), sizeof(T));
-        return file.good();
-    }
-
-    template<typename T>
-    static bool ReadValue(std::istream& file, T& value)
-    {
-        file.read(reinterpret_cast<char*>(&value), sizeof(T));
         return file.good();
     }
 
@@ -35,27 +32,9 @@ namespace
         return file.good();
     }
 
-    static bool ReadString(std::istream& file, std::string& value)
-    {
-        uint32_t length = 0;
-        if (!ReadValue(file, length))
-            return false;
-        value.resize(length);
-        if (length == 0)
-            return true;
-        file.read(value.data(), length);
-        return file.good();
-    }
-
     static bool WriteFloatArray(std::ofstream& file, const float* values, size_t count)
     {
         file.write(reinterpret_cast<const char*>(values), (std::streamsize)(sizeof(float) * count));
-        return file.good();
-    }
-
-    static bool ReadFloatArray(std::istream& file, float* values, size_t count)
-    {
-        file.read(reinterpret_cast<char*>(values), (std::streamsize)(sizeof(float) * count));
         return file.good();
     }
 
@@ -351,6 +330,61 @@ bool SaveKModelFile(const char* path, const KModelData& model, std::string* outE
     return true;
 }
 
+namespace
+{
+    // Everything later code indexes without checking.
+    const char* FindKModelError(const KModelData& model)
+    {
+        const int32_t materialCount = (int32_t)model.materials.size();
+        const int32_t meshCount = (int32_t)model.meshes.size();
+        const int32_t nodeCount = (int32_t)model.nodes.size();
+        const int32_t boneCount = (int32_t)model.bones.size();
+
+        for (const KModelMesh& mesh : model.meshes)
+        {
+            for (uint32_t index : mesh.indices)
+            {
+                if (index >= mesh.vertices.size())
+                    return "KModel index is out of range";
+            }
+            for (const KModelPrimitive& primitive : mesh.primitives)
+            {
+                if ((uint64_t)primitive.firstIndex + primitive.indexCount > mesh.indices.size())
+                    return "KModel primitive is out of range";
+                if (primitive.materialIndex < -1 || primitive.materialIndex >= materialCount)
+                    return "KModel primitive references a missing material";
+            }
+        }
+
+        for (int32_t nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex)
+        {
+            const KModelNode& node = model.nodes[(size_t)nodeIndex];
+            if (node.meshIndex < -1 || node.meshIndex >= meshCount)
+                return "KModel node references a missing mesh";
+            if (node.boneIndex < -1 || node.boneIndex >= boneCount)
+                return "KModel node references a missing bone";
+
+            int32_t steps = 0;
+            for (int32_t parent = node.parentIndex; parent != -1; parent = model.nodes[(size_t)parent].parentIndex)
+            {
+                if (parent < -1 || parent >= nodeCount)
+                    return "KModel node references a missing parent";
+                if (++steps > nodeCount)
+                    return "KModel node hierarchy has a cycle";
+            }
+        }
+
+        for (const KModelBone& bone : model.bones)
+        {
+            if (bone.nodeIndex < 0 || bone.nodeIndex >= nodeCount)
+                return "KModel bone references a missing node";
+            if (bone.parentBoneIndex < -1 || bone.parentBoneIndex >= boneCount)
+                return "KModel bone references a missing parent";
+        }
+        return nullptr;
+    }
+}
+
 bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outError)
 {
     KES_ZONE_FN(ASSETS);
@@ -361,47 +395,32 @@ bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outErro
     if (!LoadAssetFileBytes(path, fileBytes, outError))
         return false;
 
-    const std::string fileData(reinterpret_cast<const char*>(fileBytes.data()), fileBytes.size());
-    std::istringstream file(fileData, std::ios::binary);
-
-    uint32_t magic = 0;
-    uint32_t version = 0;
-    if (!ReadValue(file, magic) ||
-        !ReadValue(file, version) ||
-        !ReadString(file, outModel.sourcePath))
+    const auto fail = [&](const char* message)
     {
         if (outError)
-            *outError = "Failed to read kmodel header";
+            *outError = message;
+        outModel = {};
         return false;
-    }
+    };
 
+    BinaryReader file(fileBytes);
+    const uint32_t magic = file.u32();
+    const uint32_t version = file.u32();
+    if (!file.ok())
+        return fail("Failed to read kmodel header");
     if (magic != kKModelMagic)
-    {
-        if (outError)
-            *outError = "Invalid kmodel magic";
-        return false;
-    }
-
+        return fail("Invalid kmodel magic");
     if (version != kKModelVersion)
-    {
-        if (outError)
-            *outError = "Unsupported kmodel version";
-        return false;
-    }
+        return fail("Unsupported kmodel version");
 
-    uint32_t materialCount = 0;
-    uint32_t meshCount = 0;
-    uint32_t nodeCount = 0;
-    uint32_t boneCount = 0;
-    if (!ReadValue(file, materialCount) ||
-        !ReadValue(file, meshCount) ||
-        !ReadValue(file, nodeCount) ||
-        !ReadValue(file, boneCount))
-    {
-        if (outError)
-            *outError = "Failed to read kmodel counts";
-        return false;
-    }
+    outModel.sourcePath = file.string();
+    const uint32_t materialCount = file.u32();
+    const uint32_t meshCount = file.u32();
+    const uint32_t nodeCount = file.u32();
+    const uint32_t boneCount = file.u32();
+    // Smallest possible size of each element in the file.
+    if (!file.count(materialCount, 8) || !file.count(meshCount, 16) || !file.count(nodeCount, 56) || !file.count(boneCount, 76))
+        return fail("Failed to read kmodel counts");
 
     outModel.materials.resize(materialCount);
     outModel.meshes.resize(meshCount);
@@ -410,110 +429,65 @@ bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outErro
 
     for (KModelMaterial& material : outModel.materials)
     {
-        if (!ReadString(file, material.name) ||
-            !ReadString(file, material.materialPath))
-        {
-            if (outError)
-                *outError = "Failed to read kmodel material";
-            return false;
-        }
+        material.name = file.string();
+        material.materialPath = file.string();
     }
+    if (!file.ok())
+        return fail("Failed to read kmodel material");
 
     for (KModelMesh& mesh : outModel.meshes)
     {
-        uint32_t vertexCount = 0;
-        uint32_t indexCount = 0;
-        uint32_t primitiveCount = 0;
-        if (!ReadString(file, mesh.name) ||
-            !ReadValue(file, vertexCount) ||
-            !ReadValue(file, indexCount) ||
-            !ReadValue(file, primitiveCount))
-        {
-            if (outError)
-                *outError = "Failed to read kmodel mesh header";
-            return false;
-        }
+        mesh.name = file.string();
+        const uint32_t vertexCount = file.u32();
+        const uint32_t indexCount = file.u32();
+        const uint32_t primitiveCount = file.u32();
+        if (!file.count(vertexCount, sizeof(KModelVertex)))
+            return fail("Failed to read kmodel mesh header");
 
         mesh.vertices.resize(vertexCount);
+        file.bytes(mesh.vertices.data(), vertexCount * sizeof(KModelVertex));
+        if (!file.count(indexCount, sizeof(uint32_t)))
+            return fail("Failed to read kmodel indices");
+
         mesh.indices.resize(indexCount);
+        file.bytes(mesh.indices.data(), indexCount * sizeof(uint32_t));
+        if (!file.count(primitiveCount, 12))
+            return fail("Failed to read kmodel primitives");
+
         mesh.primitives.resize(primitiveCount);
-
-        for (KModelVertex& vertex : mesh.vertices)
-        {
-            if (!ReadValue(file, vertex.px) || !ReadValue(file, vertex.py) || !ReadValue(file, vertex.pz) ||
-                !ReadValue(file, vertex.nx) || !ReadValue(file, vertex.ny) || !ReadValue(file, vertex.nz) ||
-                !ReadValue(file, vertex.tx) || !ReadValue(file, vertex.ty) || !ReadValue(file, vertex.tz) || !ReadValue(file, vertex.tw) ||
-                !ReadValue(file, vertex.u) || !ReadValue(file, vertex.v) ||
-                !ReadValue(file, vertex.r) || !ReadValue(file, vertex.g) || !ReadValue(file, vertex.b) || !ReadValue(file, vertex.a))
-            {
-                if (outError)
-                    *outError = "Failed to read kmodel vertex";
-                return false;
-            }
-
-            file.read(reinterpret_cast<char*>(vertex.boneIndices), sizeof(vertex.boneIndices));
-            file.read(reinterpret_cast<char*>(vertex.boneWeights), sizeof(vertex.boneWeights));
-            if (!file.good())
-            {
-                if (outError)
-                    *outError = "Failed to read kmodel skin weights";
-                return false;
-            }
-        }
-
-        if (!mesh.indices.empty())
-        {
-            file.read(reinterpret_cast<char*>(mesh.indices.data()), (std::streamsize)(sizeof(uint32_t) * mesh.indices.size()));
-            if (!file.good())
-            {
-                if (outError)
-                    *outError = "Failed to read kmodel indices";
-                return false;
-            }
-        }
-
         for (KModelPrimitive& primitive : mesh.primitives)
         {
-            if (!ReadValue(file, primitive.firstIndex) ||
-                !ReadValue(file, primitive.indexCount) ||
-                !ReadValue(file, primitive.materialIndex))
-            {
-                if (outError)
-                    *outError = "Failed to read kmodel primitive";
-                return false;
-            }
+            primitive.firstIndex = file.u32();
+            primitive.indexCount = file.u32();
+            primitive.materialIndex = file.i32();
         }
     }
 
     for (KModelNode& node : outModel.nodes)
     {
-        if (!ReadString(file, node.name) ||
-            !ReadValue(file, node.parentIndex) ||
-            !ReadValue(file, node.meshIndex) ||
-            !ReadValue(file, node.boneIndex) ||
-            !ReadFloatArray(file, node.translation, 3) ||
-            !ReadFloatArray(file, node.rotation, 4) ||
-            !ReadFloatArray(file, node.scale, 3))
-        {
-            if (outError)
-                *outError = "Failed to read kmodel node";
-            return false;
-        }
+        node.name = file.string();
+        node.parentIndex = file.i32();
+        node.meshIndex = file.i32();
+        node.boneIndex = file.i32();
+        file.bytes(node.translation, sizeof(node.translation));
+        file.bytes(node.rotation, sizeof(node.rotation));
+        file.bytes(node.scale, sizeof(node.scale));
     }
+    if (!file.ok())
+        return fail("Failed to read kmodel node");
 
     for (KModelBone& bone : outModel.bones)
     {
-        if (!ReadString(file, bone.name) ||
-            !ReadValue(file, bone.nodeIndex) ||
-            !ReadValue(file, bone.parentBoneIndex) ||
-            !ReadFloatArray(file, bone.inverseBindMatrix, 16))
-        {
-            if (outError)
-                *outError = "Failed to read kmodel bone";
-            return false;
-        }
+        bone.name = file.string();
+        bone.nodeIndex = file.i32();
+        bone.parentBoneIndex = file.i32();
+        file.bytes(bone.inverseBindMatrix, sizeof(bone.inverseBindMatrix));
     }
+    if (!file.ok())
+        return fail("Failed to read kmodel bone");
 
+    if (const char* error = FindKModelError(outModel))
+        return fail(error);
     return true;
 }
 

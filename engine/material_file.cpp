@@ -153,6 +153,7 @@ bool LoadMaterialFile(const char* path, MaterialFileData& outMaterialFile, std::
             }
             if (const std::string* transparent = FindTextBlockProperty(block, "Transparent"))
             {
+                outMaterialFile.transparencySet = true;
                 if (textparse::ParseBool(*transparent, false))
                     outMaterialFile.authorFlags |= MaterialFlag_Transparent;
                 else
@@ -378,13 +379,12 @@ bool EvaluateMaterialGraph(MaterialFileData& materialFile, std::string* outError
     }
 
     materialFile.material.alphaCutoff = std::clamp(materialFile.material.alphaCutoff, 0.0f, 1.0f);
-    if (materialFile.material.baseColor[3] < 0.999f)
+    const bool transparent = materialFile.transparencySet ? (materialFile.authorFlags & MaterialFlag_Transparent) != 0
+                                                          : materialFile.material.baseColor[3] < 0.999f;
+    if (transparent)
         materialFile.material.flags |= MaterialFlag_Transparent;
     else
         materialFile.material.flags &= ~MaterialFlag_Transparent;
-
-    if ((materialFile.authorFlags & MaterialFlag_Transparent) != 0)
-        materialFile.material.flags |= MaterialFlag_Transparent;
 
     (void)outError;
     return true;

@@ -1,9 +1,10 @@
 #include "animation_clip.h"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 
+#include "binary_reader.h"
 #include "kmodel.h"
 #include "pak_file_system.h"
 #include "profiler.h"
@@ -13,17 +14,23 @@ namespace
     constexpr uint32_t kKAnimMagic = 0x4D494E41u; // ANIM
     constexpr uint32_t kKAnimVersion = 1u;
 
+    // Keys are time followed by the value, the same in memory and in the file.
+    static_assert(sizeof(AnimationVec3Key) == 16 && sizeof(AnimationQuatKey) == 20, "Animation key file layout");
+
+    // First key at or after `timeSeconds`. The caller has handled the ends of
+    // the track, so the result is never the first key.
+    template<typename Key>
+    static size_t FindNextKey(const std::vector<Key>& keys, float timeSeconds)
+    {
+        const auto next = std::lower_bound(keys.begin(), keys.end(), timeSeconds,
+                                           [](const Key& key, float time) { return key.time < time; });
+        return static_cast<size_t>(next - keys.begin());
+    }
+
     template<typename T>
     static bool WriteValue(std::ofstream& file, const T& value)
     {
         file.write(reinterpret_cast<const char*>(&value), sizeof(T));
-        return file.good();
-    }
-
-    template<typename T>
-    static bool ReadValue(std::istream& file, T& value)
-    {
-        file.read(reinterpret_cast<char*>(&value), sizeof(T));
         return file.good();
     }
 
@@ -37,26 +44,9 @@ namespace
         return file.good();
     }
 
-    static bool ReadString(std::istream& file, std::string& value)
-    {
-        uint32_t length = 0;
-        if (!ReadValue(file, length))
-            return false;
-        value.resize(length);
-        if (length > 0)
-            file.read(value.data(), length);
-        return file.good();
-    }
-
     static bool WriteFloatArray(std::ofstream& file, const float* values, size_t count)
     {
         file.write(reinterpret_cast<const char*>(values), (std::streamsize)(sizeof(float) * count));
-        return file.good();
-    }
-
-    static bool ReadFloatArray(std::istream& file, float* values, size_t count)
-    {
-        file.read(reinterpret_cast<char*>(values), (std::streamsize)(sizeof(float) * count));
         return file.good();
     }
 
@@ -111,19 +101,13 @@ namespace
             return;
         }
 
-        for (size_t index = 1; index < keys.size(); ++index)
-        {
-            const AnimationVec3Key& next = keys[index];
-            if (timeSeconds > next.time)
-                continue;
-
-            const AnimationVec3Key& prev = keys[index - 1];
-            const float span = next.time - prev.time;
-            const float t = span > 0.000001f ? (timeSeconds - prev.time) / span : 0.0f;
-            for (int component = 0; component < 3; ++component)
-                outValue[component] = prev.value[component] + (next.value[component] - prev.value[component]) * t;
-            return;
-        }
+        const size_t index = FindNextKey(keys, timeSeconds);
+        const AnimationVec3Key& next = keys[index];
+        const AnimationVec3Key& prev = keys[index - 1];
+        const float span = next.time - prev.time;
+        const float t = span > 0.000001f ? (timeSeconds - prev.time) / span : 0.0f;
+        for (int component = 0; component < 3; ++component)
+            outValue[component] = prev.value[component] + (next.value[component] - prev.value[component]) * t;
     }
 
     static void SampleQuatKeys(const std::vector<AnimationQuatKey>& keys, float timeSeconds, float outValue[4])
@@ -145,30 +129,24 @@ namespace
             return;
         }
 
-        for (size_t index = 1; index < keys.size(); ++index)
+        const size_t index = FindNextKey(keys, timeSeconds);
+        const AnimationQuatKey& next = keys[index];
+        const AnimationQuatKey& prev = keys[index - 1];
+        const float span = next.time - prev.time;
+        const float t = span > 0.000001f ? (timeSeconds - prev.time) / span : 0.0f;
+
+        float from[4] = { prev.value[0], prev.value[1], prev.value[2], prev.value[3] };
+        float to[4] = { next.value[0], next.value[1], next.value[2], next.value[3] };
+        const float dot = from[0] * to[0] + from[1] * to[1] + from[2] * to[2] + from[3] * to[3];
+        if (dot < 0.0f)
         {
-            const AnimationQuatKey& next = keys[index];
-            if (timeSeconds > next.time)
-                continue;
-
-            const AnimationQuatKey& prev = keys[index - 1];
-            const float span = next.time - prev.time;
-            const float t = span > 0.000001f ? (timeSeconds - prev.time) / span : 0.0f;
-
-            float from[4] = { prev.value[0], prev.value[1], prev.value[2], prev.value[3] };
-            float to[4] = { next.value[0], next.value[1], next.value[2], next.value[3] };
-            const float dot = from[0] * to[0] + from[1] * to[1] + from[2] * to[2] + from[3] * to[3];
-            if (dot < 0.0f)
-            {
-                for (float& component : to)
-                    component = -component;
-            }
-
-            for (int component = 0; component < 4; ++component)
-                outValue[component] = from[component] + (to[component] - from[component]) * t;
-            NormalizeQuaternion(outValue);
-            return;
+            for (float& component : to)
+                component = -component;
         }
+
+        for (int component = 0; component < 4; ++component)
+            outValue[component] = from[component] + (to[component] - from[component]) * t;
+        NormalizeQuaternion(outValue);
     }
 }
 
@@ -182,98 +160,60 @@ bool LoadAnimationClipFile(const char* path, AnimationClipData& outClip, std::st
     if (!LoadAssetFileBytes(path, fileBytes, outError))
         return false;
 
-    const std::string fileData(reinterpret_cast<const char*>(fileBytes.data()), fileBytes.size());
-    std::istringstream file(fileData, std::ios::binary);
-
-    uint32_t magic = 0;
-    uint32_t version = 0;
-    if (!ReadValue(file, magic) ||
-        !ReadValue(file, version) ||
-        !ReadString(file, outClip.name) ||
-        !ReadString(file, outClip.sourcePath) ||
-        !ReadString(file, outClip.modelPath) ||
-        !ReadValue(file, outClip.duration) ||
-        !ReadValue(file, outClip.looping))
+    const auto fail = [&](const char* message)
     {
         if (outError)
-            *outError = "Failed to read animation clip header";
+            *outError = message;
+        outClip = {};
         return false;
-    }
+    };
 
+    BinaryReader file(fileBytes);
+    const uint32_t magic = file.u32();
+    const uint32_t version = file.u32();
+    if (!file.ok())
+        return fail("Failed to read animation clip header");
     if (magic != kKAnimMagic)
-    {
-        if (outError)
-            *outError = "Invalid animation clip magic";
-        return false;
-    }
-
+        return fail("Invalid animation clip magic");
     if (version != kKAnimVersion)
-    {
-        if (outError)
-            *outError = "Unsupported animation clip version";
-        return false;
-    }
+        return fail("Unsupported animation clip version");
 
-    uint32_t trackCount = 0;
-    if (!ReadValue(file, trackCount))
-    {
-        if (outError)
-            *outError = "Failed to read animation clip track count";
-        return false;
-    }
+    outClip.name = file.string();
+    outClip.sourcePath = file.string();
+    outClip.modelPath = file.string();
+    outClip.duration = file.f32();
+    outClip.looping = file.u8() != 0;
+
+    const uint32_t trackCount = file.u32();
+    if (!file.count(trackCount, 20))
+        return fail("Failed to read animation clip header");
 
     outClip.tracks.resize(trackCount);
     for (AnimationNodeTrack& track : outClip.tracks)
     {
-        uint32_t translationCount = 0;
-        uint32_t rotationCount = 0;
-        uint32_t scaleCount = 0;
-        if (!ReadString(file, track.nodeName) ||
-            !ReadValue(file, track.nodeIndex) ||
-            !ReadValue(file, translationCount) ||
-            !ReadValue(file, rotationCount) ||
-            !ReadValue(file, scaleCount))
-        {
-            if (outError)
-                *outError = "Failed to read animation track header";
-            return false;
-        }
-
+        track.nodeName = file.string();
+        track.nodeIndex = file.i32();
+        const uint32_t translationCount = file.u32();
+        const uint32_t rotationCount = file.u32();
+        const uint32_t scaleCount = file.u32();
+        if (!file.count(translationCount, sizeof(AnimationVec3Key)))
+            return fail("Failed to read animation track");
         track.translationKeys.resize(translationCount);
+        file.bytes(track.translationKeys.data(), translationCount * sizeof(AnimationVec3Key));
+
+        if (!file.count(rotationCount, sizeof(AnimationQuatKey)))
+            return fail("Failed to read animation track");
         track.rotationKeys.resize(rotationCount);
+        file.bytes(track.rotationKeys.data(), rotationCount * sizeof(AnimationQuatKey));
+
+        if (!file.count(scaleCount, sizeof(AnimationVec3Key)))
+            return fail("Failed to read animation track");
         track.scaleKeys.resize(scaleCount);
-
-        for (AnimationVec3Key& key : track.translationKeys)
-        {
-            if (!ReadValue(file, key.time) || !ReadFloatArray(file, key.value, 3))
-            {
-                if (outError)
-                    *outError = "Failed to read translation key";
-                return false;
-            }
-        }
-
-        for (AnimationQuatKey& key : track.rotationKeys)
-        {
-            if (!ReadValue(file, key.time) || !ReadFloatArray(file, key.value, 4))
-            {
-                if (outError)
-                    *outError = "Failed to read rotation key";
-                return false;
-            }
-        }
-
-        for (AnimationVec3Key& key : track.scaleKeys)
-        {
-            if (!ReadValue(file, key.time) || !ReadFloatArray(file, key.value, 3))
-            {
-                if (outError)
-                    *outError = "Failed to read scale key";
-                return false;
-            }
-        }
+        file.bytes(track.scaleKeys.data(), scaleCount * sizeof(AnimationVec3Key));
     }
 
+    if (!file.ok())
+        return fail("Failed to read animation track");
     return true;
 }
 

@@ -44,6 +44,15 @@ namespace
         int m_spawnCount;
     };
 
+    class DestroyOnDestroyEntity : public Entity
+    {
+    public:
+        Entity* target = nullptr;
+
+    protected:
+        void OnDestroy() override { target->Destroy(); }
+    };
+
     class DestroyingEntity : public Entity
     {
     public:
@@ -53,6 +62,40 @@ namespace
     private:
         Entity** m_target;
     };
+}
+
+TEST_CASE("entities: an unstarted entity destroyed from OnDestroy never starts")
+{
+    Counters counters;
+    EntityManager manager;
+    auto* killer = manager.CreateEntity<DestroyOnDestroyEntity>();
+    manager.StartPending();
+
+    killer->target = manager.CreateEntity<CountingEntity>(counters);
+    killer->Destroy();
+    manager.DestroyPending();
+
+    manager.StartPending();   // used to touch the freed entity
+    CHECK(counters.started == 0);
+    CHECK(counters.destroyed == 1);
+}
+
+TEST_CASE("entities: IsUpdating covers the update loop only")
+{
+    class Probe : public Entity
+    {
+    public:
+        explicit Probe(EntityManager& owner) : manager(owner) {}
+        void Update(float) override { sawUpdating = manager.IsUpdating(); }
+        EntityManager& manager;
+        bool sawUpdating = false;
+    };
+
+    EntityManager manager;
+    auto* probe = manager.CreateEntity<Probe>(manager);
+    manager.Update(0.0f);
+    CHECK(probe->sawUpdating);
+    CHECK(!manager.IsUpdating());
 }
 
 TEST_CASE("entities: start once, then update every frame")

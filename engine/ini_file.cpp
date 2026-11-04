@@ -45,6 +45,8 @@ void IniFile::LoadFromString(std::string_view text)
 {
     m_sections.clear();
     Section* current = nullptr;
+    if (text.substr(0, 3) == "\xEF\xBB\xBF")
+        text.remove_prefix(3);   // UTF-8 BOM
 
     size_t start = 0;
     while (start <= text.size())

@@ -112,6 +112,7 @@ add_library(engine STATIC
     "file_paths.cpp"
     "pak_file_system.h"
     "pak_file_system.cpp"
+    "binary_reader.h"
     "map_file.h"
     "map_file.cpp"
     "project_file.h"
@@ -140,6 +141,9 @@ target_sources(engine PRIVATE
 target_include_directories(engine PRIVATE "${KES_RMLUI_BACKENDS_DIR}")
 target_compile_definitions(engine PRIVATE RMLUI_SDL_VERSION_MAJOR=3)
 target_link_libraries(engine PUBLIC RmlUi::RmlUi)
+
+# Physics (cmake/KesPhysics.cmake)
+target_link_libraries(engine PRIVATE box3d::box3d)
 
 # Crash reporting (KES_CRASH_REPORTER, cmake/KesCrash.cmake)
 kes_target_crash_reporter(engine)

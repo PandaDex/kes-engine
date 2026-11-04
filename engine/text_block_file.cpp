@@ -51,6 +51,9 @@ bool LoadTextBlockFile(const char* path, std::vector<TextBlock>& outBlocks, std:
         return false;
     }
 
+    if (fileText.rfind("\xEF\xBB\xBF", 0) == 0)
+        fileText.erase(0, 3);   // UTF-8 BOM
+
     std::istringstream file(fileText);
     bool inBlock = false;
     bool waitingForBrace = false;

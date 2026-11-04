@@ -1679,10 +1679,7 @@ int main(int argc, char* argv[])
 
     EngineApp app = {};
     if (!EngineStart(app))
-    {
-        EngineShutdown(app);
         return 1;
-    }
 
     Showcase showcase;
     if (!InitShowcase(app, showcase))

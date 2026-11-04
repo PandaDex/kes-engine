@@ -124,8 +124,9 @@ namespace
         std::vector<char> commandLine(command.begin(), command.end());
         commandLine.push_back('\0');
 
+        // No application name: the bare "FBX2glTF" fallback has to search PATH.
         const BOOL created = CreateProcessA(
-            executable.c_str(),
+            nullptr,
             commandLine.data(),
             nullptr,
             nullptr,

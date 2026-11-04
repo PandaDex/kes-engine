@@ -470,9 +470,32 @@ namespace
             if (outputComponents == 0)
                 continue;
 
-            const cgltf_size sampleCount = std::min(input->count, output->count);
+            // Cubic-spline output stores in-tangent, value, out-tangent per key.
+            // The tangents are dropped, keys interpolate linearly.
+            const bool cubic = channel.sampler->interpolation == cgltf_interpolation_type_cubic_spline;
+            const bool step = channel.sampler->interpolation == cgltf_interpolation_type_step;
+            const cgltf_size outputStride = cubic ? 3 : 1;
+            const cgltf_size outputOffset = cubic ? 1 : 0;
+            const cgltf_size sampleCount = std::min(input->count, output->count / outputStride);
             AnimationNodeTrack& track = outClip.tracks[trackIndex];
             float values[4] = {};
+            float previousValues[4] = {};
+
+            const auto addKey = [&](float time, const float* value)
+            {
+                if (channel.target_path == cgltf_animation_path_type_translation)
+                {
+                    track.translationKeys.push_back({ time, { value[0], value[1], value[2] } });
+                }
+                else if (channel.target_path == cgltf_animation_path_type_rotation)
+                {
+                    track.rotationKeys.push_back({ time, { value[0], value[1], value[2], outputComponents > 3 ? value[3] : 1.0f } });
+                }
+                else if (channel.target_path == cgltf_animation_path_type_scale)
+                {
+                    track.scaleKeys.push_back({ time, { value[0], value[1], value[2] } });
+                }
+            };
 
             if (channel.target_path == cgltf_animation_path_type_translation)
                 track.translationKeys.reserve(track.translationKeys.size() + sampleCount);
@@ -489,7 +512,7 @@ namespace
                     error = "Failed to read animation time";
                     return false;
                 }
-                if (!cgltf_accessor_read_float(output, sampleIndex, values, outputComponents))
+                if (!cgltf_accessor_read_float(output, sampleIndex * outputStride + outputOffset, values, outputComponents))
                 {
                     error = "Failed to read animation value";
                     return false;
@@ -497,34 +520,11 @@ namespace
 
                 outClip.duration = std::max(outClip.duration, time);
 
-                if (channel.target_path == cgltf_animation_path_type_translation)
-                {
-                    AnimationVec3Key key = {};
-                    key.time = time;
-                    key.value[0] = values[0];
-                    key.value[1] = values[1];
-                    key.value[2] = values[2];
-                    track.translationKeys.push_back(key);
-                }
-                else if (channel.target_path == cgltf_animation_path_type_rotation)
-                {
-                    AnimationQuatKey key = {};
-                    key.time = time;
-                    key.value[0] = values[0];
-                    key.value[1] = values[1];
-                    key.value[2] = values[2];
-                    key.value[3] = outputComponents > 3 ? values[3] : 1.0f;
-                    track.rotationKeys.push_back(key);
-                }
-                else if (channel.target_path == cgltf_animation_path_type_scale)
-                {
-                    AnimationVec3Key key = {};
-                    key.time = time;
-                    key.value[0] = values[0];
-                    key.value[1] = values[1];
-                    key.value[2] = values[2];
-                    track.scaleKeys.push_back(key);
-                }
+                // Step keys hold their value until just before the next one.
+                if (step && sampleIndex > 0)
+                    addKey(time - 0.0001f, previousValues);
+                addKey(time, values);
+                std::memcpy(previousValues, values, sizeof(values));
             }
         }
 
@@ -545,8 +545,8 @@ namespace
             const cgltf_animation& sourceAnimation = data.animations[animationIndex];
             AnimationClipData clip = {};
             clip.name = sourceAnimation.name ? sourceAnimation.name : ("Anim" + std::to_string(animationIndex));
-            clip.sourcePath = inputPath;
-            clip.modelPath = outputPath;
+            clip.sourcePath = fs::path(inputPath).filename().string();
+            clip.modelPath = modelPath.filename().string();
             clip.looping = true;
 
             if (!ImportAnimationChannels(sourceAnimation, data, clip, error))
@@ -596,7 +596,7 @@ bool ImportGltfToKModel(const std::string& inputPath, const std::string& outputP
     }
 
     KModelData model = {};
-    model.sourcePath = inputPath;
+    model.sourcePath = std::filesystem::path(inputPath).filename().string();   // shipped with the game
 
     ImportNodes(*data, model);
     ImportBones(*data, model);

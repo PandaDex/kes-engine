@@ -6,12 +6,12 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
-#include <sstream>
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
 
+#include "binary_reader.h"
 #include "engine_configuration.h"
 #include "file_paths.h"
 #include "profiler.h"
@@ -26,7 +26,7 @@ namespace
     constexpr uint32_t kPakFlagEncrypted = 1u << 0;
     constexpr size_t kPakEncryptionKeySize = 32u;
     constexpr size_t kPakNonceSize = 12u;
-    constexpr uint64_t kPakHeaderSize = 40u;
+    constexpr uint64_t kPakHeaderSize = 48u;
 
     using PakEncryptionKey = std::array<uint8_t, kPakEncryptionKeySize>;
     using PakNonce = std::array<uint8_t, kPakNonceSize>;
@@ -68,18 +68,6 @@ namespace
     bool WriteValue(std::ostream& stream, const T& value)
     {
         stream.write(reinterpret_cast<const char*>(&value), sizeof(T));
-        return stream.good();
-    }
-
-    bool ReadString(std::istream& stream, std::string& value)
-    {
-        uint32_t length = 0;
-        if (!ReadValue(stream, length))
-            return false;
-
-        value.resize(length);
-        if (length > 0)
-            stream.read(value.data(), length);
         return stream.good();
     }
 
@@ -385,7 +373,7 @@ namespace
         outData.resize(static_cast<size_t>(entry.size));
         if (entry.size > 0)
             file.read(reinterpret_cast<char*>(outData.data()), static_cast<std::streamsize>(entry.size));
-        if (!file.good() && !file.eof())
+        if (!file.good())
         {
             if (outError)
                 *outError = "Failed to read pak entry payload: " + pak.pakPath;
@@ -437,6 +425,60 @@ namespace
         if (magic != kPakMagic || version != kPakVersion)
             return false;
 
+        return true;
+    }
+
+    // Reads, decrypts and validates the index the header points at.
+    bool ReadPakIndex(std::ifstream& file, bool encrypted, const PakEncryptionKey& key, const PakNonce& nonce, uint32_t fileCount,
+                      uint64_t indexOffset, uint64_t indexSize, std::vector<MountedPakEntry>& outEntries, std::string* outError)
+    {
+        const auto fail = [outError](const std::string& message)
+        {
+            if (outError)
+                *outError = message;
+            return false;
+        };
+
+        file.seekg(0, std::ios::end);
+        const uint64_t fileSize = static_cast<uint64_t>(file.tellg());
+        if (indexOffset > fileSize || indexSize > fileSize || indexOffset + indexSize > fileSize)
+            return fail("Pak index range is invalid");
+
+        file.seekg(static_cast<std::streamoff>(indexOffset), std::ios::beg);
+        std::vector<uint8_t> indexBytes(static_cast<size_t>(indexSize));
+        if (indexSize > 0)
+            file.read(reinterpret_cast<char*>(indexBytes.data()), static_cast<std::streamsize>(indexSize));
+        if (!file.good())
+            return fail("Failed to read pak index");
+
+        if (encrypted && !indexBytes.empty())
+            XorChaCha20(key, nonce, indexOffset, indexBytes.data(), indexBytes.size());
+
+        BinaryReader index(indexBytes);
+        const uint32_t indexMagic = index.u32();
+        const uint32_t indexedFileCount = index.u32();
+        if (!index.ok())
+            return fail("Failed to read pak index header");
+        if (indexMagic != kPakIndexMagic || indexedFileCount != fileCount)
+            return fail("Pak index header is invalid");
+        if (!index.count(fileCount, 20))
+            return fail("Failed to parse pak index");
+
+        outEntries.resize(fileCount);
+        for (MountedPakEntry& entry : outEntries)
+        {
+            entry.path = index.string();
+            entry.offset = index.read<uint64_t>();
+            entry.size = index.read<uint64_t>();
+            if (!index.ok())
+                return fail("Failed to parse pak index");
+
+            entry.path = NormalizePakEntryPath(entry.path);
+            if (entry.path.empty())
+                return fail("Pak contains an empty file path");
+            if (entry.offset > fileSize || entry.size > fileSize || entry.offset + entry.size > fileSize || entry.offset < kPakHeaderSize)
+                return fail("Pak entry range is invalid for " + entry.path);
+        }
         return true;
     }
 
@@ -608,80 +650,13 @@ bool MountPakFile(const char* pakPath, std::string* outError)
             return false;
     }
 
-    file.seekg(0, std::ios::end);
-    const uint64_t fileSize = static_cast<uint64_t>(file.tellg());
-    if (indexOffset > fileSize || indexSize > fileSize || indexOffset + indexSize > fileSize)
-    {
-        if (outError)
-            *outError = "Pak index range is invalid";
-        return false;
-    }
-
-    file.seekg(static_cast<std::streamoff>(indexOffset), std::ios::beg);
-    std::vector<uint8_t> indexBytes(static_cast<size_t>(indexSize));
-    if (indexSize > 0)
-        file.read(reinterpret_cast<char*>(indexBytes.data()), static_cast<std::streamsize>(indexSize));
-    if (!file.good() && !file.eof())
-    {
-        if (outError)
-            *outError = "Failed to read pak index";
-        return false;
-    }
-
-    if (encrypted && !indexBytes.empty())
-        XorChaCha20(key, nonce, indexOffset, indexBytes.data(), indexBytes.size());
-
-    std::string indexText(reinterpret_cast<const char*>(indexBytes.data()), indexBytes.size());
-    std::istringstream indexStream(indexText, std::ios::binary);
-    uint32_t indexMagic = 0;
-    uint32_t indexedFileCount = 0;
-    if (!ReadValue(indexStream, indexMagic) || !ReadValue(indexStream, indexedFileCount))
-    {
-        if (outError)
-            *outError = "Failed to read pak index header";
-        return false;
-    }
-
-    if (indexMagic != kPakIndexMagic || indexedFileCount != fileCount)
-    {
-        if (outError)
-            *outError = "Pak index header is invalid";
-        return false;
-    }
-
     MountedPakFile pak = {};
     pak.pakPath = fs::path(pakPath).lexically_normal().string();
     pak.encrypted = encrypted;
     pak.key = key;
     pak.nonce = nonce;
-    pak.entries.resize(fileCount);
-
-    for (MountedPakEntry& entry : pak.entries)
-    {
-        if (!ReadString(indexStream, entry.path) ||
-            !ReadValue(indexStream, entry.offset) ||
-            !ReadValue(indexStream, entry.size))
-        {
-            if (outError)
-                *outError = "Failed to parse pak index";
-            return false;
-        }
-
-        entry.path = NormalizePakEntryPath(entry.path);
-        if (entry.path.empty())
-        {
-            if (outError)
-                *outError = "Pak contains an empty file path";
-            return false;
-        }
-
-        if (entry.offset > fileSize || entry.size > fileSize || entry.offset + entry.size > fileSize || entry.offset < kPakHeaderSize)
-        {
-            if (outError)
-                *outError = "Pak entry range is invalid for " + entry.path;
-            return false;
-        }
-    }
+    if (!ReadPakIndex(file, encrypted, key, nonce, fileCount, indexOffset, indexSize, pak.entries, outError))
+        return false;
 
     const size_t pakIndex = gMountedPaks.size();
     gMountedPaks.push_back(std::move(pak));
@@ -930,7 +905,7 @@ bool CreatePakFile(const char* sourceDirectory, const char* outputPath, const ch
 }
 
 
-bool ExtractPakFile(const char* pakPath, const char* outputDirectory, std::string* outError)
+bool ExtractPakFile(const char* pakPath, const char* outputDirectory, std::string* outError, const char* encryptionKeyHex)
 {
     if (!pakPath || !pakPath[0] || !outputDirectory || !outputDirectory[0])
     {
@@ -959,89 +934,31 @@ bool ExtractPakFile(const char* pakPath, const char* outputDirectory, std::strin
         return false;
     }
 
-    if (flags & kPakFlagEncrypted)
-    {
-        if (outError)
-            *outError = "Extraction is not supported for encrypted pak files";
-        return false;
-    }
-
-    file.seekg(0, std::ios::end);
-    const uint64_t fileSize = static_cast<uint64_t>(file.tellg());
-    if (indexOffset > fileSize || indexSize > fileSize || indexOffset + indexSize > fileSize)
-    {
-        if (outError)
-            *outError = "Pak index range is invalid";
-        return false;
-    }
-
-    file.seekg(static_cast<std::streamoff>(indexOffset), std::ios::beg);
-    std::vector<uint8_t> indexBytes(static_cast<size_t>(indexSize));
-    if (indexSize > 0)
-        file.read(reinterpret_cast<char*>(indexBytes.data()), static_cast<std::streamsize>(indexSize));
-    if (!file.good() && !file.eof())
-    {
-        if (outError)
-            *outError = "Failed to read pak index";
-        return false;
-    }
-
-    std::istringstream indexStream(
-        std::string(reinterpret_cast<const char*>(indexBytes.data()), indexBytes.size()),
-        std::ios::binary);
-
-    uint32_t indexMagic = 0;
-    uint32_t indexedFileCount = 0;
-    if (!ReadValue(indexStream, indexMagic) || !ReadValue(indexStream, indexedFileCount))
-    {
-        if (outError)
-            *outError = "Failed to read pak index header";
-        return false;
-    }
-
-    if (indexMagic != kPakIndexMagic || indexedFileCount != fileCount)
-    {
-        if (outError)
-            *outError = "Pak index header is invalid";
-        return false;
-    }
-
-    std::vector<MountedPakEntry> entries(fileCount);
-    for (MountedPakEntry& entry : entries)
-    {
-        if (!ReadString(indexStream, entry.path) ||
-            !ReadValue(indexStream, entry.offset) ||
-            !ReadValue(indexStream, entry.size))
-        {
-            if (outError)
-                *outError = "Failed to parse pak index entry";
-            return false;
-        }
-
-        entry.path = NormalizePakEntryPath(entry.path);
-        if (entry.path.empty())
-        {
-            if (outError)
-                *outError = "Pak contains an entry with an empty path";
-            return false;
-        }
-
-        if (entry.offset < kPakHeaderSize ||
-            entry.offset > fileSize ||
-            entry.size > fileSize ||
-            entry.offset + entry.size > fileSize)
-        {
-            if (outError)
-                *outError = "Pak entry range is invalid for: " + entry.path;
-            return false;
-        }
-    }
-
-    const fs::path outputRoot = fs::absolute(fs::path(outputDirectory)).lexically_normal();
-
     MountedPakFile pakDesc;
     pakDesc.pakPath = fs::path(pakPath).lexically_normal().string();
-    pakDesc.encrypted = false;
+    pakDesc.encrypted = (flags & kPakFlagEncrypted) != 0;
+    pakDesc.nonce = nonce;
+    if (pakDesc.encrypted)
+    {
+        const std::string keyHex = encryptionKeyHex && encryptionKeyHex[0] ? std::string(encryptionKeyHex) : GetEffectivePakEncryptionKeyHex();
+        if (keyHex.empty())
+        {
+            if (outError)
+                *outError = "Pak is encrypted; pass the key";
+            return false;
+        }
+        if (!ParsePakEncryptionKeyHex(keyHex, pakDesc.key, outError))
+            return false;
+    }
+
+    std::vector<MountedPakEntry> entries;
+    if (!ReadPakIndex(file, pakDesc.encrypted, pakDesc.key, nonce, fileCount, indexOffset, indexSize, entries, outError))
+        return false;
+
+    // A trailing separator would leave an empty last path element.
+    fs::path outputRoot = fs::absolute(fs::path(outputDirectory)).lexically_normal();
+    if (!outputRoot.has_filename())
+        outputRoot = outputRoot.parent_path();
 
     for (const MountedPakEntry& entry : entries)
     {

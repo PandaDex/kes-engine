@@ -35,6 +35,7 @@ void EntityManager::StartPending()
 void EntityManager::Update(float dt)
 {
     KES_ZONE_FN(WORLD);
+    updating = true;
     StartPending();
 
     const size_t count = entities.size();
@@ -49,11 +50,13 @@ void EntityManager::Update(float dt)
             entity->Update(dt);
         }
     }
+    updating = false;
 }
 
 void EntityManager::FixedUpdate(float fixedDt)
 {
     KES_ZONE_FN(WORLD);
+    updating = true;
     StartPending();
 
     const size_t count = entities.size();
@@ -68,21 +71,13 @@ void EntityManager::FixedUpdate(float fixedDt)
             entity->RunBuiltinPhysics(fixedDt);
         }
     }
+    updating = false;
 }
 
 void EntityManager::DestroyPending()
 {
     KES_ZONE_FN(WORLD);
-    pendingStart.erase(
-        std::remove_if(
-            pendingStart.begin(),
-            pendingStart.end(),
-            [](Entity* entity)
-            {
-                return entity == nullptr || entity->IsPendingDestroy();
-            }),
-        pendingStart.end());
-
+    updating = true;
     // OnDestroy may destroy or create other entities: indexed, and repeated
     // until a pass finds nothing new to destroy.
     for (bool ran = true; ran;)
@@ -99,6 +94,18 @@ void EntityManager::DestroyPending()
             }
         }
     }
+    updating = false;
+
+    // After OnDestroy, which may have marked entities that haven't started yet.
+    pendingStart.erase(
+        std::remove_if(
+            pendingStart.begin(),
+            pendingStart.end(),
+            [](Entity* entity)
+            {
+                return entity == nullptr || entity->IsPendingDestroy();
+            }),
+        pendingStart.end());
 
     entities.erase(
         std::remove_if(

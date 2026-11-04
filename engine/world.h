@@ -22,6 +22,8 @@ public:
     void Update(float dt);
     void FixedUpdate(float fixedDt);
     // Loads synchronously. If the map can't be loaded, the current level stays.
+    // Called from an entity, the load is queued for the end of the frame and
+    // the result is always true.
     bool LoadMap(const char* mapName);
     const std::string& GetCurrentMapName() const { return currentMapName; }
 

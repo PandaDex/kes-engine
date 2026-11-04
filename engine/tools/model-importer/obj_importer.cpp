@@ -119,6 +119,11 @@ bool LoadObjMeshFromFile(const char* path, MeshData& outMesh)
                 if (!ParseFaceToken(token, key))
                     return false;
 
+                // Absolute indices: a negative one means something else on every line.
+                key.v = FixObjIndex(key.v, (int)positions.size());
+                key.vt = FixObjIndex(key.vt, (int)uvs.size());
+                key.vn = FixObjIndex(key.vn, (int)normals.size());
+
                 auto it = vertexMap.find(key);
                 if (it != vertexMap.end())
                 {
@@ -132,9 +137,9 @@ bool LoadObjMeshFromFile(const char* path, MeshData& outMesh)
                 vertex.b = 1.0f;
                 vertex.a = 1.0f;
 
-                const int posIndex = FixObjIndex(key.v, (int)positions.size());
-                const int uvIndex = FixObjIndex(key.vt, (int)uvs.size());
-                const int normalIndex = FixObjIndex(key.vn, (int)normals.size());
+                const int posIndex = key.v;
+                const int uvIndex = key.vt;
+                const int normalIndex = key.vn;
 
                 if (posIndex < 0 || posIndex >= (int)positions.size())
                 {

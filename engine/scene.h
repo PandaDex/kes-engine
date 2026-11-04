@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "engine_types.h"
 #include "entity_manager.h"
@@ -25,7 +26,7 @@ struct SceneObject
     ModelHandle model = 0;
     MaterialHandle material = 0;
     uint32_t skinMatrixCount = 0;
-    float skinMatrices[MaxSkinMatrices * 16] = {};
+    std::vector<float> skinMatrices;   // skinMatrixCount * 16, empty for static objects
     bool active = true;
 };
 
@@ -86,6 +87,7 @@ public:
     Light* FindLight(uint32_t id);
     const Light* FindLight(uint32_t id) const;
 
+    // Order isn't stable: removing an object moves the last one into its place.
     std::vector<SceneObject>& GetObjects() { return objects; }
     const std::vector<SceneObject>& GetObjects() const { return objects; }
 
@@ -126,6 +128,7 @@ public:
 
 private:
     std::vector<SceneObject> objects;
+    std::unordered_map<uint32_t, size_t> objectIndices;   // id -> index in objects
     std::vector<Light> lights;
     SkySettings sky;
     FogSettings fog;

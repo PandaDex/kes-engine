@@ -4,8 +4,8 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 
+#include "binary_reader.h"
 #include "file_paths.h"
 #include "pak_file_system.h"
 #include "profiler.h"
@@ -22,13 +22,6 @@ namespace
         return file.good();
     }
 
-    template<typename T>
-    bool ReadValue(std::istream& file, T& value)
-    {
-        file.read(reinterpret_cast<char*>(&value), sizeof(T));
-        return file.good();
-    }
-
     bool WriteString(std::ofstream& file, const std::string& value)
     {
         const uint32_t length = static_cast<uint32_t>(value.size());
@@ -37,18 +30,6 @@ namespace
 
         if (length > 0)
             file.write(value.data(), length);
-        return file.good();
-    }
-
-    bool ReadString(std::istream& file, std::string& value)
-    {
-        uint32_t length = 0;
-        if (!ReadValue(file, length))
-            return false;
-
-        value.resize(length);
-        if (length > 0)
-            file.read(value.data(), length);
         return file.good();
     }
 
@@ -90,64 +71,43 @@ bool LoadKSoundFile(const char* path, SoundFileData& outSound, std::string* outE
     if (!LoadAssetFileBytes(path, fileBytes, outError))
         return false;
 
-    const std::string fileData(reinterpret_cast<const char*>(fileBytes.data()), fileBytes.size());
-    std::istringstream file(fileData, std::ios::binary);
-
-    uint32_t magic = 0;
-    uint32_t version = 0;
-    uint32_t sampleCount = 0;
-    if (!ReadValue(file, magic) ||
-        !ReadValue(file, version) ||
-        !ReadString(file, outSound.sourcePath) ||
-        !ReadValue(file, outSound.sampleRate) ||
-        !ReadValue(file, outSound.channels) ||
-        !ReadValue(file, outSound.frameCount) ||
-        !ReadValue(file, sampleCount))
+    const auto fail = [&](const char* message)
     {
         if (outError)
-            *outError = "Failed to read sound header";
+            *outError = message;
+        outSound = {};
         return false;
-    }
+    };
 
+    BinaryReader file(fileBytes);
+    const uint32_t magic = file.u32();
+    const uint32_t version = file.u32();
+    if (!file.ok())
+        return fail("Failed to read sound header");
     if (magic != kKSoundMagic)
-    {
-        if (outError)
-            *outError = "Invalid sound magic";
-        return false;
-    }
-
+        return fail("Invalid sound magic");
     if (version != kKSoundVersion)
-    {
-        if (outError)
-            *outError = "Unsupported sound version";
-        return false;
-    }
+        return fail("Unsupported sound version");
+
+    outSound.sourcePath = file.string();
+    outSound.sampleRate = file.u32();
+    outSound.channels = file.u32();
+    outSound.frameCount = file.u32();
+    const uint32_t sampleCount = file.u32();
+    if (!file.ok())
+        return fail("Failed to read sound header");
 
     if (outSound.sampleRate == 0 || outSound.channels == 0 || outSound.channels > 2)
-    {
-        if (outError)
-            *outError = "Invalid sound format";
-        return false;
-    }
+        return fail("Invalid sound format");
 
     const uint64_t expectedSampleCount = static_cast<uint64_t>(outSound.frameCount) * static_cast<uint64_t>(outSound.channels);
     if (sampleCount != expectedSampleCount)
-    {
-        if (outError)
-            *outError = "Sound sample count does not match frame count";
-        return false;
-    }
+        return fail("Sound sample count does not match frame count");
+    if (!file.count(sampleCount, sizeof(float)))
+        return fail("Failed to read sound samples");
 
     outSound.samples.resize(sampleCount);
-    if (sampleCount > 0)
-        file.read(reinterpret_cast<char*>(outSound.samples.data()), static_cast<std::streamsize>(sampleCount * sizeof(float)));
-    if (!file.good())
-    {
-        if (outError)
-            *outError = "Failed to read sound samples";
-        return false;
-    }
-
+    file.bytes(outSound.samples.data(), sampleCount * sizeof(float));
     return true;
 }
 

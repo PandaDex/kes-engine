@@ -1,4 +1,8 @@
 #include "test_framework.h"
+#include <cstring>
+#include <filesystem>
+#include <sstream>
+#include "animation_clip.h"
 #include "kmodel.h"
 #include "sound_file.h"
 #include "texture_file.h"
@@ -93,6 +97,151 @@ namespace
     {
         TextureFileData texture;
         return LoadKTexFile(path.c_str(), texture);
+    }
+}
+
+TEST_CASE("assets: everything shipped passes the loaders' validation")
+{
+    namespace fs = std::filesystem;
+    std::istringstream roots(KES_TEST_CONTENT_DIRS);
+    int loaded = 0;
+    for (std::string root; std::getline(roots, root, '|');)
+    {
+        for (const fs::directory_entry& entry : fs::recursive_directory_iterator(root))
+        {
+            const std::string path = entry.path().string();
+            const std::string extension = entry.path().extension().string();
+            std::string error;
+            bool ok = true;
+            if (extension == ".kmodel")
+            {
+                KModelData model;
+                ok = LoadKModelFile(path.c_str(), model, &error);
+            }
+            else if (extension == ".ksound")
+            {
+                SoundFileData sound;
+                ok = LoadKSoundFile(path.c_str(), sound, &error);
+            }
+            else if (extension == ".ktex")
+            {
+                TextureFileData texture;
+                ok = LoadKTexFile(path.c_str(), texture, &error);
+            }
+            else if (extension == ".kanim")
+            {
+                AnimationClipData clip;
+                ok = LoadAnimationClipFile(path.c_str(), clip, &error);
+            }
+            else
+            {
+                continue;
+            }
+            ++loaded;
+            if (!ok)
+                kestest::ReportFailure(__FILE__, __LINE__, path + ": " + error);
+        }
+    }
+    CHECK(loaded > 0);
+}
+
+TEST_CASE("kmodel: broken references are rejected")
+{
+    kestest::TempDir dir;
+    const std::string path = dir.File("model.kmodel");
+    const auto rejects = [&](const KModelData& model)
+    {
+        REQUIRE(SaveKModelFile(path.c_str(), model));
+        KModelData loaded;
+        std::string error;
+        return !LoadKModelFile(path.c_str(), loaded, &error) && !error.empty();
+    };
+
+    KModelData model = MakeModel();
+    model.meshes[0].indices[0] = 3;
+    CHECK(rejects(model));
+
+    model = MakeModel();
+    model.meshes[0].primitives[0].indexCount = 4;
+    CHECK(rejects(model));
+
+    model = MakeModel();
+    model.meshes[0].primitives[0].materialIndex = 1;
+    CHECK(rejects(model));
+
+    model = MakeModel();
+    model.nodes[0].parentIndex = 5;
+    CHECK(rejects(model));
+
+    model = MakeModel();
+    model.nodes[0].parentIndex = 0;   // a cycle used to hang mesh building
+    CHECK(rejects(model));
+
+    model = MakeModel();
+    model.bones[0].nodeIndex = 1;
+    CHECK(rejects(model));
+}
+
+TEST_CASE("kmodel: a huge element count fails instead of allocating")
+{
+    kestest::TempDir dir;
+    const std::string path = dir.File("model.kmodel");
+    KModelData model = MakeModel();
+    model.sourcePath.clear();
+    REQUIRE(SaveKModelFile(path.c_str(), model));
+
+    std::vector<uint8_t> bytes = kestest::ReadBytes(path);
+    const uint32_t huge = 0xFFFFFFFFu;
+    std::memcpy(bytes.data() + 12, &huge, sizeof(huge));   // magic, version, source path length, material count
+    kestest::WriteBytes(path, bytes);
+    CHECK(!LoadModel(path));
+}
+
+TEST_CASE("kanim: round trip keeps the clip and sampling interpolates")
+{
+    kestest::TempDir dir;
+    const std::string path = dir.File("clip.kanim");
+
+    AnimationClipData clip;
+    clip.name = "walk";
+    clip.duration = 2.0f;
+    clip.looping = false;
+    AnimationNodeTrack track;
+    track.nodeName = "root";
+    track.nodeIndex = 0;
+    track.translationKeys = { { 0.0f, { 0.0f, 0.0f, 0.0f } }, { 1.0f, { 2.0f, 0.0f, 0.0f } }, { 2.0f, { 2.0f, 4.0f, 0.0f } } };
+    track.rotationKeys = { { 0.0f, { 0.0f, 0.0f, 0.0f, 1.0f } } };
+    clip.tracks.push_back(track);
+    REQUIRE(SaveAnimationClipFile(path.c_str(), clip));
+
+    AnimationClipData loaded;
+    REQUIRE(LoadAnimationClipFile(path.c_str(), loaded));
+    CHECK(loaded.name == "walk");
+    CHECK(!loaded.looping);
+    REQUIRE(loaded.tracks.size() == 1);
+    REQUIRE(loaded.tracks[0].translationKeys.size() == 3);
+
+    KModelData model = MakeModel();
+    std::vector<AnimationTransform> pose;
+    REQUIRE(SampleAnimationClip(model, loaded, 0.5f, pose));
+    CHECK_NEAR(pose[0].translation[0], 1.0, 1e-5);
+    REQUIRE(SampleAnimationClip(model, loaded, 1.5f, pose));
+    CHECK_NEAR(pose[0].translation[1], 2.0, 1e-5);
+    REQUIRE(SampleAnimationClip(model, loaded, 1.0f, pose));
+    CHECK_NEAR(pose[0].translation[0], 2.0, 1e-5);
+
+    const auto load = [](const std::string& file)
+    {
+        AnimationClipData result;
+        return LoadAnimationClipFile(file.c_str(), result);
+    };
+    const std::vector<uint8_t> valid = kestest::ReadBytes(path);
+    const std::string corrupt = dir.File("corrupt.kanim");
+    for (size_t size = 0; size < valid.size(); ++size)
+    {
+        kestest::WriteBytes(corrupt, valid.data(), size);
+        if (load(corrupt))
+            kestest::ReportFailure(__FILE__, __LINE__, "accepted a clip truncated to " + std::to_string(size) + " bytes");
     }
 }
 

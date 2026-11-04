@@ -125,6 +125,8 @@ void SetAssetRootOverride(const char* path)
     if (!overridePath.is_absolute())
         overridePath = fs::absolute(overridePath);
     gAssetRootOverride = overridePath.lexically_normal();
+    if (!gAssetRootOverride.has_filename())
+        gAssetRootOverride = gAssetRootOverride.parent_path();   // no empty last element from a trailing separator
 }
 
 std::string GetAssetRootOverride()

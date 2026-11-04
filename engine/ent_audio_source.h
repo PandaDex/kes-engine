@@ -35,6 +35,7 @@ private:
     float volume = 1.0f;
     float pitch = 1.0f;
     bool loop = false;
+    bool autoPlay = false;   // looping sounds always start with the map
     bool spatial = true;
     AudioVoiceId voiceId = 0;
 };

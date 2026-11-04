@@ -12,6 +12,7 @@ endif()
 
 target_link_libraries(game PUBLIC engine)
 kes_target_warnings(game)
+kes_target_utf8(game)
 
 if (CMAKE_VERSION VERSION_GREATER 3.21)
   set_property(TARGET game PROPERTY CXX_STANDARD 20)

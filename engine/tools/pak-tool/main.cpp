@@ -18,7 +18,7 @@ namespace
     {
         std::cout << "Usage:\n";
         std::cout << "  Pack:   pak-tool <source-dir> <output.pak> [--encrypt <hex-key> | --generate-key]\n";
-        std::cout << "  Unpack: pak-tool --unpack <input.pak> <output-dir>\n";
+        std::cout << "  Unpack: pak-tool --unpack <input.pak> <output-dir> [--decrypt <hex-key>]\n";
         std::cout << "\nExamples:\n";
         std::cout << "  pak-tool game/assets out/content/game_data0.pak\n";
         std::cout << "  pak-tool game/assets out/content/game_data0.pak --generate-key\n";
@@ -34,6 +34,7 @@ int main(int argc, char* argv[])
 {
     std::vector<std::string> positional;
     std::string encryptionKeyHex;
+    std::string decryptionKeyHex;
     bool generateKey = false;
     Mode mode = Mode::Pack;
 
@@ -50,6 +51,25 @@ int main(int argc, char* argv[])
         if (argument == "--generate-key")
         {
             generateKey = true;
+            continue;
+        }
+
+        if (argument == "--decrypt" || StartsWithOption(argument, "--decrypt"))
+        {
+            if (StartsWithOption(argument, "--decrypt"))
+            {
+                decryptionKeyHex = argument.substr(std::string_view("--decrypt=").size());
+            }
+            else
+            {
+                if (index + 1 >= argc || !argv[index + 1] || !argv[index + 1][0])
+                {
+                    std::cerr << "Missing value for " << argument << "\n";
+                    PrintUsage();
+                    return 1;
+                }
+                decryptionKeyHex = argv[++index];
+            }
             continue;
         }
 
@@ -106,7 +126,7 @@ int main(int argc, char* argv[])
     if (mode == Mode::Unpack)
     {
         std::string error;
-        if (!ExtractPakFile(positional[0].c_str(), positional[1].c_str(), &error))
+        if (!ExtractPakFile(positional[0].c_str(), positional[1].c_str(), &error, decryptionKeyHex.c_str()))
         {
             std::cerr << "Pak unpack failed: " << error << "\n";
             return 2;

@@ -1,7 +1,6 @@
 #include "ent_player.h"
 #include <algorithm>
 #include <cmath>
-#include "audio_system.h"
 #include "ent_camera.h"
 #include "game_context.h"
 #include "game_settings.h"
@@ -41,7 +40,7 @@ void EnginePlayerEntity::Start()
     SyncEntityFromActiveCamera();
 
     if (game && game->collision)
-        collider = game->collision->AddCapsule(Position, colliderRadius, colliderHalfHeight, false);
+        collider = game->collision->AddCapsule(Position, colliderRadius, colliderHalfHeight, false, {}, ColliderMotion::Kinematic);
 }
 
 Vector3 EnginePlayerEntity::GetForward() const
@@ -104,28 +103,7 @@ void EnginePlayerEntity::Update(float dt)
     if (length > 0.0001f && dt > 0.0f)
         MoveWithCollision(moveDir * (moveSpeed * dt));
 
-    if (game && game->collision && collider != 0)
-        game->collision->SetPosition(collider, Position);
-
-    if (game && game->audio)
-    {
-        AudioListener listener = {};
-        listener.position = Position;
-        listener.forward = GetForward();
-        listener.up = { 0.0f, 1.0f, 0.0f };
-        game->audio->SetListener(listener);
-    }
-
     SyncRuntimeCameraFromEntity();
-}
-
-bool EnginePlayerEntity::IsBlocked(const Vector3& from, const Vector3& to) const
-{
-    // Enough samples that no step is longer than half the radius: fast moves
-    // (low frame rate, high speed) can't skip through thin walls.
-    const float distance = Vector3Length(to - from);
-    const int steps = std::clamp(static_cast<int>(std::ceil(distance / (colliderRadius * 0.5f))), 1, 64);
-    return game->collision->SweepCapsule(from, to, colliderRadius, colliderHalfHeight, collider, steps).hit;
 }
 
 void EnginePlayerEntity::MoveWithCollision(const Vector3& delta)
@@ -136,41 +114,14 @@ void EnginePlayerEntity::MoveWithCollision(const Vector3& delta)
         return;
     }
 
-    // Started inside geometry (spawned in a wall, a brush moved into us):
-    // move freely until clear instead of being stuck forever.
-    if (game->collision->CheckCapsule(Position, colliderRadius, colliderHalfHeight, collider))
-    {
-        Position += delta;
-        return;
-    }
-
-    const Vector3 target = Position + delta;
-    if (!IsBlocked(Position, target))
-    {
-        Position = target;
-        return;
-    }
-
-    // Blocked: slide by keeping the free axis components, largest first, so
-    // running diagonally into a wall moves along it.
-    float components[3] = { delta.x, delta.y, delta.z };
-    int order[3] = { 0, 1, 2 };
-    std::sort(std::begin(order), std::end(order),
-              [&](int a, int b) { return std::fabs(components[a]) > std::fabs(components[b]); });
-    for (int axis : order)
-    {
-        if (std::fabs(components[axis]) < 0.00001f)
-            continue;
-        Vector3 step = {};
-        (axis == 0 ? step.x : axis == 1 ? step.y : step.z) = components[axis];
-        if (!IsBlocked(Position, Position + step))
-            Position += step;
-    }
+    Position = game->collision->MoveCapsule(Position, delta, colliderRadius, colliderHalfHeight, collider);
 }
 
 void EnginePlayerEntity::FixedUpdate(float fixedDt)
 {
-    (void)fixedDt;
+    // Follows at a velocity, which is what lets the capsule push dynamic bodies.
+    if (game && game->collision && collider != 0)
+        game->collision->SetTargetPosition(collider, Position, fixedDt);
 }
 
 void EnginePlayerEntity::Teleport(const Vector3& newPosition)
@@ -214,6 +165,11 @@ bool EnginePlayerEntity::SyncEntityFromActiveCamera()
     }
 
     return false;
+}
+
+bool EnginePlayerEntity::OwnsCollider(ColliderHandle handle) const
+{
+    return handle == collider;
 }
 
 void EnginePlayerEntity::OnDestroy()

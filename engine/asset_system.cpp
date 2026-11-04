@@ -4,6 +4,7 @@
 #include "mesh_file.h"
 #include "material_file.h"
 #include "shader.h"
+#include "logger.h"
 #include "profiler.h"
 
 AssetSystem::AssetSystem()
@@ -11,9 +12,9 @@ AssetSystem::AssetSystem()
     Clear();
 }
 
-MeshHandle AssetSystem::CreateMesh(const MeshData& mesh)
+MeshHandle AssetSystem::CreateMesh(MeshData mesh)
 {
-    meshes.push_back(mesh);
+    meshes.push_back(std::move(mesh));
     return (MeshHandle)(meshes.size() - 1);
 }
 
@@ -27,9 +28,14 @@ MeshHandle AssetSystem::LoadMesh(const char* path)
         return cached->second;
 
     MeshData mesh;
-    if (!LoadMeshFromFile(resolvedPath.c_str(), mesh))
+    std::string error;
+    if (!LoadMeshFromFile(resolvedPath.c_str(), mesh, &error))
+    {
+        EngineLogf("Failed to load mesh %s: %s", resolvedPath.c_str(), error.c_str());
+        meshFiles[resolvedPath] = 0;
         return 0;
-    const MeshHandle handle = CreateMesh(mesh);
+    }
+    const MeshHandle handle = CreateMesh(std::move(mesh));
     meshFiles[resolvedPath] = handle;
     return handle;
 }
@@ -96,8 +102,13 @@ ModelHandle AssetSystem::LoadModel(const char* path)
         return cached->second;
 
     KModelData model = {};
-    if (!LoadKModelFile(resolvedPath.c_str(), model))
+    std::string error;
+    if (!LoadKModelFile(resolvedPath.c_str(), model, &error))
+    {
+        EngineLogf("Failed to load model %s: %s", resolvedPath.c_str(), error.c_str());
+        modelFiles[resolvedPath] = 0;
         return 0;
+    }
 
     models.push_back(std::move(model));
     const ModelHandle handle = (ModelHandle)(models.size() - 1);
@@ -121,8 +132,13 @@ ShaderHandle AssetSystem::LoadShader(const char* path)
         return cached->second;
 
     ShaderData shader;
-    if (!LoadShaderFile(resolvedPath.c_str(), shader))
+    std::string error;
+    if (!LoadShaderFile(resolvedPath.c_str(), shader, &error))
+    {
+        EngineLogf("Failed to load shader %s: %s", resolvedPath.c_str(), error.c_str());
+        shaderFiles[resolvedPath] = 0;
         return 0;
+    }
 
     if (shader.name.empty())
         shader.name = resolvedPath;
@@ -153,8 +169,13 @@ MaterialHandle AssetSystem::LoadMaterial(const char* path)
         return cached->second;
 
     MaterialFileData materialFile;
-    if (!LoadMaterialFile(resolvedPath.c_str(), materialFile))
+    std::string error;
+    if (!LoadMaterialFile(resolvedPath.c_str(), materialFile, &error))
+    {
+        EngineLogf("Failed to load material %s: %s", resolvedPath.c_str(), error.c_str());
+        materialFiles[resolvedPath] = 0;
         return 0;
+    }
 
     EvaluateMaterialGraph(materialFile);
     MaterialData& material = materialFile.material;
@@ -182,8 +203,13 @@ AnimationClipHandle AssetSystem::LoadAnimationClip(const char* path)
         return cached->second;
 
     AnimationClipData clip = {};
-    if (!LoadAnimationClipFile(resolvedPath.c_str(), clip))
+    std::string error;
+    if (!LoadAnimationClipFile(resolvedPath.c_str(), clip, &error))
+    {
+        EngineLogf("Failed to load animation clip %s: %s", resolvedPath.c_str(), error.c_str());
+        animationClipFiles[resolvedPath] = 0;
         return 0;
+    }
 
     animationClips.push_back(std::move(clip));
     const AnimationClipHandle handle = (AnimationClipHandle)(animationClips.size() - 1);
@@ -201,8 +227,13 @@ AnimationGraphHandle AssetSystem::LoadAnimationGraph(const char* path)
         return cached->second;
 
     AnimationGraphData graph = {};
-    if (!LoadAnimationGraphFile(resolvedPath.c_str(), graph))
+    std::string error;
+    if (!LoadAnimationGraphFile(resolvedPath.c_str(), graph, &error))
+    {
+        EngineLogf("Failed to load animation graph %s: %s", resolvedPath.c_str(), error.c_str());
+        animationGraphFiles[resolvedPath] = 0;
         return 0;
+    }
 
     animationGraphs.push_back(std::move(graph));
     const AnimationGraphHandle handle = (AnimationGraphHandle)(animationGraphs.size() - 1);

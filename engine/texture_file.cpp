@@ -4,8 +4,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <SDL3/SDL.h>
+#include "binary_reader.h"
 #include "file_paths.h"
 #include "pak_file_system.h"
 #include "profiler.h"
@@ -22,13 +22,6 @@ namespace
         return file.good();
     }
 
-    template<typename T>
-    static bool ReadValue(std::istream& file, T& value)
-    {
-        file.read(reinterpret_cast<char*>(&value), sizeof(T));
-        return file.good();
-    }
-
     static bool WriteString(std::ofstream& file, const std::string& value)
     {
         const uint32_t length = (uint32_t)value.size();
@@ -36,17 +29,6 @@ namespace
             return false;
         if (length > 0)
             file.write(value.data(), length);
-        return file.good();
-    }
-
-    static bool ReadString(std::istream& file, std::string& value)
-    {
-        uint32_t length = 0;
-        if (!ReadValue(file, length))
-            return false;
-        value.resize(length);
-        if (length > 0)
-            file.read(value.data(), length);
         return file.good();
     }
 
@@ -148,75 +130,48 @@ bool LoadKTexFile(const char* path, TextureFileData& outTexture, std::string* ou
     if (!LoadAssetFileBytes(path, fileBytes, outError))
         return false;
 
-    const std::string fileData(reinterpret_cast<const char*>(fileBytes.data()), fileBytes.size());
-    std::istringstream file(fileData, std::ios::binary);
-
-    uint32_t magic = 0;
-    uint32_t version = 0;
-    uint32_t format = 0;
-    uint32_t pixelDataSize = 0;
-    if (!ReadValue(file, magic) ||
-        !ReadValue(file, version) ||
-        !ReadString(file, outTexture.sourcePath) ||
-        !ReadValue(file, outTexture.width) ||
-        !ReadValue(file, outTexture.height) ||
-        !ReadValue(file, format) ||
-        !ReadValue(file, outTexture.flags) ||
-        !ReadValue(file, outTexture.mipCount) ||
-        !ReadValue(file, pixelDataSize))
+    const auto fail = [&](const char* message)
     {
         if (outError)
-            *outError = "Failed to read texture header";
+            *outError = message;
+        outTexture = {};
         return false;
-    }
+    };
 
+    BinaryReader file(fileBytes);
+    const uint32_t magic = file.u32();
+    const uint32_t version = file.u32();
+    if (!file.ok())
+        return fail("Failed to read texture header");
     if (magic != kKTexMagic)
-    {
-        if (outError)
-            *outError = "Invalid texture magic";
-        return false;
-    }
-
+        return fail("Invalid texture magic");
     if (version != kKTexVersion)
-    {
-        if (outError)
-            *outError = "Unsupported texture version";
-        return false;
-    }
+        return fail("Unsupported texture version");
+
+    outTexture.sourcePath = file.string();
+    outTexture.width = file.u32();
+    outTexture.height = file.u32();
+    const uint32_t format = file.u32();
+    outTexture.flags = file.u32();
+    outTexture.mipCount = file.u32();
+    const uint32_t pixelDataSize = file.u32();
+    if (!file.ok())
+        return fail("Failed to read texture header");
 
     outTexture.format = static_cast<TexturePixelFormat>(format);
     if (outTexture.format != TexturePixelFormat::RGBA8)
-    {
-        if (outError)
-            *outError = "Unsupported texture pixel format";
-        return false;
-    }
-
+        return fail("Unsupported texture pixel format");
     if (outTexture.width == 0 || outTexture.height == 0 || outTexture.mipCount == 0)
-    {
-        if (outError)
-            *outError = "Invalid texture dimensions";
-        return false;
-    }
+        return fail("Invalid texture dimensions");
 
     const uint64_t minimumSize = static_cast<uint64_t>(outTexture.width) * static_cast<uint64_t>(outTexture.height) * 4u;
     if (pixelDataSize < minimumSize)
-    {
-        if (outError)
-            *outError = "Texture pixel payload is too small";
-        return false;
-    }
+        return fail("Texture pixel payload is too small");
+    if (!file.count(pixelDataSize, 1))
+        return fail("Failed to read texture pixel payload");
 
     outTexture.pixels.resize(pixelDataSize);
-    if (pixelDataSize > 0)
-        file.read(reinterpret_cast<char*>(outTexture.pixels.data()), pixelDataSize);
-    if (!file.good())
-    {
-        if (outError)
-            *outError = "Failed to read texture pixel payload";
-        return false;
-    }
-
+    file.bytes(outTexture.pixels.data(), pixelDataSize);
     return true;
 }
 

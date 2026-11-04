@@ -39,7 +39,7 @@ Documentation is located in `docs` directory.
 
 ## Submodules
 
-Tracy, RmlUi, FreeType and sentry-native are git submodules. Clone with `--recursive`, or fetch them afterwards: <br/>
+Tracy, RmlUi, FreeType, sentry-native and Box3D are git submodules. Clone with `--recursive`, or fetch them afterwards: <br/>
 `git submodule update --init --recursive` <br/>
 
 ## External binaries

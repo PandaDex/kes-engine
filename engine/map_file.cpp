@@ -1,4 +1,5 @@
 #include "map_file.h"
+#include "binary_reader.h"
 #include <cmath>
 #include <cstring>
 #include "engine_configuration.h"
@@ -10,89 +11,15 @@ namespace
     constexpr uint32_t kMapVersion = 2;
     constexpr float kDegToRad = 3.14159265358979f / 180.0f;
 
-    // Bounds-checked little-endian reader over the file bytes.
-    class Reader
+    Vector3 ReadVec3(BinaryReader& r)
     {
-    public:
-        Reader(const uint8_t* data, size_t size) : m_data(data), m_size(size) {}
+        const float x = r.f32();
+        const float y = r.f32();
+        const float z = r.f32();
+        return { x, y, z };
+    }
 
-        bool ok() const { return m_ok; }
-        size_t position() const { return m_pos; }
-        size_t remaining() const { return m_ok ? m_size - m_pos : 0; }
-
-        bool bytes(void* out, size_t count)
-        {
-            if (!m_ok || count > m_size - m_pos)
-            {
-                m_ok = false;
-                return false;
-            }
-            std::memcpy(out, m_data + m_pos, count);
-            m_pos += count;
-            return true;
-        }
-
-        template<typename T>
-        T read()
-        {
-            T value{};
-            bytes(&value, sizeof(T));
-            return value;
-        }
-
-        float f32() { return read<float>(); }
-        uint32_t u32() { return read<uint32_t>(); }
-        int32_t i32() { return read<int32_t>(); }
-        uint8_t u8() { return read<uint8_t>(); }
-
-        Vector3 vec3()
-        {
-            const float x = f32();
-            const float y = f32();
-            const float z = f32();
-            return { x, y, z };
-        }
-
-        std::string string()
-        {
-            const uint32_t length = u32();
-            if (!m_ok || length > remaining())
-            {
-                m_ok = false;
-                return {};
-            }
-            std::string value(reinterpret_cast<const char*>(m_data + m_pos), length);
-            m_pos += length;
-            return value;
-        }
-
-        // Guards element counts against the bytes actually left, so a corrupt
-        // count can't trigger a huge allocation.
-        bool count(uint32_t value, size_t minBytesPerElement)
-        {
-            if (minBytesPerElement > 0 && value > remaining() / minBytesPerElement)
-                m_ok = false;
-            return m_ok;
-        }
-
-        void skip(size_t count)
-        {
-            if (!m_ok || count > m_size - m_pos)
-            {
-                m_ok = false;
-                return;
-            }
-            m_pos += count;
-        }
-
-    private:
-        const uint8_t* m_data;
-        size_t m_size;
-        size_t m_pos = 0;
-        bool m_ok = true;
-    };
-
-    bool ReadMaterials(Reader& r, CompiledMap& map)
+    bool ReadMaterials(BinaryReader& r, CompiledMap& map)
     {
         const uint32_t count = r.u32();
         if (!r.count(count, 4))
@@ -103,7 +30,7 @@ namespace
         return r.ok();
     }
 
-    bool ReadGeometry(Reader& r, CompiledMap& map)
+    bool ReadGeometry(BinaryReader& r, CompiledMap& map)
     {
         const uint32_t count = r.u32();
         if (!r.count(count, 16))
@@ -120,8 +47,8 @@ namespace
             mesh.vertices.resize(vertexCount);
             for (MapVertex& v : mesh.vertices)
             {
-                v.position = r.vec3();
-                v.normal = r.vec3();
+                v.position = ReadVec3(r);
+                v.normal = ReadVec3(r);
                 v.u = r.f32();
                 v.v = r.f32();
             }
@@ -139,7 +66,7 @@ namespace
         return r.ok();
     }
 
-    bool ReadEntities(Reader& r, CompiledMap& map)
+    bool ReadEntities(BinaryReader& r, CompiledMap& map)
     {
         const uint32_t count = r.u32();
         if (!r.count(count, 4))
@@ -150,10 +77,10 @@ namespace
             e.className = r.string();
             e.name = r.string();
             e.solid = r.u8() != 0;
-            e.origin = r.vec3();
-            e.angles = r.vec3();
-            e.mins = r.vec3();
-            e.maxs = r.vec3();
+            e.origin = ReadVec3(r);
+            e.angles = ReadVec3(r);
+            e.mins = ReadVec3(r);
+            e.maxs = ReadVec3(r);
 
             const uint32_t kvCount = r.u32();
             if (!r.count(kvCount, 8))
@@ -182,7 +109,7 @@ namespace
         return r.ok();
     }
 
-    bool ReadBrushes(Reader& r, CompiledMap& map)
+    bool ReadBrushes(BinaryReader& r, CompiledMap& map)
     {
         const uint32_t count = r.u32();
         if (!r.count(count, 32))
@@ -191,15 +118,15 @@ namespace
         for (MapBrush& brush : map.brushes)
         {
             brush.entity = r.i32();
-            brush.mins = r.vec3();
-            brush.maxs = r.vec3();
+            brush.mins = ReadVec3(r);
+            brush.maxs = ReadVec3(r);
             const uint32_t planeCount = r.u32();
             if (!r.count(planeCount, 16))
                 return false;
             brush.planes.resize(planeCount);
             for (MapPlane& plane : brush.planes)
             {
-                plane.normal = r.vec3();
+                plane.normal = ReadVec3(r);
                 plane.dist = r.f32();
             }
         }
@@ -225,7 +152,7 @@ bool LoadCompiledMap(const char* path, CompiledMap& outMap, std::string* outErro
     if (!LoadAssetFileBytes(path, bytes, &error))
         return fail(error.empty() ? "Failed to read map file" : error);
 
-    Reader r(bytes.data(), bytes.size());
+    BinaryReader r(bytes.data(), bytes.size());
     char magic[8] = {};
     r.bytes(magic, sizeof(magic));
     if (!r.ok() || std::memcmp(magic, "FORGECMP", 8) != 0)
@@ -245,7 +172,7 @@ bool LoadCompiledMap(const char* path, CompiledMap& outMap, std::string* outErro
         if (!r.ok() || size > r.remaining())
             return fail("Truncated chunk in map file");
 
-        Reader chunk(bytes.data() + r.position(), size);
+        BinaryReader chunk(bytes.data() + r.position(), size);
         bool chunkOk = true;
         if (std::memcmp(id, "MATL", 4) == 0)
             chunkOk = ReadMaterials(chunk, outMap);

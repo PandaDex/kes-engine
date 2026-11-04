@@ -13,6 +13,13 @@ TEST_CASE("ini: parses sections, ignoring case and comments")
     CHECK(ini.GetString("Video", "Name") == "kes");
 }
 
+TEST_CASE("ini: a UTF-8 BOM doesn't lose the first section")
+{
+    IniFile ini;
+    ini.LoadFromString("\xEF\xBB\xBF[Video]\nWidth=1280\n");
+    CHECK(ini.GetInt("Video", "Width", 0) == 1280);
+}
+
 TEST_CASE("ini: missing keys return the fallback")
 {
     IniFile ini;

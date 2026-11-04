@@ -9,6 +9,10 @@
 #include "material.h"
 #include "mesh.h"
 
+// Properties beyond the model and animation paths:
+//   Collider  "Box" or "Sphere": a collider fitted to the mesh bounds (default none)
+//   Dynamic   true/false  simulate it as a rigid body (default false)
+//   Density, Friction, Restitution  for dynamic models
 class SkinnedModelEntity : public Entity
 {
 public:
@@ -16,6 +20,7 @@ public:
     void Update(float dt) override;
     void Teleport(const Vector3& newPosition) override;
     bool ApplyProperty(const std::string& name, const std::string& value) override;
+    bool OwnsCollider(ColliderHandle handle) const override { return handle != 0 && handle == collider; }
 
     void SetModelPath(const std::string& path);
     void SetMaterialPath(const std::string& path);
@@ -39,9 +44,20 @@ private:
     const AnimationGraphData* ResolveAnimationGraph();
     const AnimationClipData* ResolveAnimationClipHandle(const std::string& path, AnimationClipHandle& handle, std::string& cachedPath);
     void SyncSceneObject(float dt);
+    void CreateCollider();
     void OnDestroy() override;
 
     uint32_t objectId = 0;
+    std::string colliderShape;
+    ColliderHandle collider = 0;
+    RigidBodyDesc body = MakeStaticDesc();
+
+    static RigidBodyDesc MakeStaticDesc()
+    {
+        RigidBodyDesc desc;
+        desc.motion = ColliderMotion::Static;
+        return desc;
+    }
     Vector3 scale = { 1.0f, 1.0f, 1.0f };
     std::string modelPath;
     std::string materialPath;
@@ -56,6 +72,8 @@ private:
     AnimationClipHandle animationClipHandle = 0;
     AnimationGraphHandle animationGraphHandle = 0;
     AnimationClipHandle playbackClipHandle = 0;
+    bool assetsDirty = true;          // model or material path changed; each path is loaded once
+    bool graphLoadAttempted = false;
     float clipTime = 0.0f;
     float currentAnimationTime = 0.0f;
     int currentAnimationFrame = 0;
