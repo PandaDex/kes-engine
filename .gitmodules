@@ -7,3 +7,7 @@
 [submodule "external/freetype"]
 	path = external/freetype
 	url = https://github.com/freetype/freetype.git
+[submodule "tools/shaderGraph"]
+	path = tools/shaderGraph
+	url = https://github.com/PandaDex/kes-shaderGraph
+	branch = master
