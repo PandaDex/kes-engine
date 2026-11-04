@@ -1,3 +1,7 @@
 [submodule "external/tracy"]
 	path = external/tracy
 	url = https://github.com/wolfpld/tracy.git
+[submodule "tools/shaderGraph"]
+	path = tools/shaderGraph
+	url = https://github.com/PandaDex/kes-shaderGraph
+	branch = master
