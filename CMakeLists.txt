@@ -44,6 +44,7 @@ if(NOT KES_PROJECT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(KesBuildChecks) # Compiler warnings and sanitizers
 include(KesPlatform)    # KES_PLATFORM: Windows, GDK, GDKX, Linux
 include(KesRenderers)   # KES_RENDERERS_<PLATFORM>: which renderer backends are built
 include(KesShaders)     # Slang -> SPIR-V / DXBC at build time
@@ -63,4 +64,9 @@ add_subdirectory ("game")
 option(KES_BUILD_SAMPLES "Build the sample programs in samples/" ON)
 if(KES_BUILD_SAMPLES)
     add_subdirectory ("samples")
+endif()
+
+option(KES_BUILD_TESTS "Build the unit tests in tests/" ON)
+if(KES_BUILD_TESTS)
+    add_subdirectory ("tests")
 endif()

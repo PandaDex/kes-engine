@@ -13,16 +13,6 @@ namespace
         float m[4][4];
     };
 
-    static float4x4 Identity()
-    {
-        float4x4 r = {};
-        r.m[0][0] = 1.0f;
-        r.m[1][1] = 1.0f;
-        r.m[2][2] = 1.0f;
-        r.m[3][3] = 1.0f;
-        return r;
-    }
-
     static float4x4 Multiply(const float4x4& a, const float4x4& b)
     {
         float4x4 r = {};

@@ -23,12 +23,12 @@ public:
         return "unknown";
     }
 
-    virtual Vector2 get_display_resolution(int displayIndex)
+    virtual Vector2 get_display_resolution(int)
     {
         return Vector2(0,0);
     }
 
-    virtual String get_display_name(int displayIndex)
+    virtual String get_display_name(int)
     {
         return String("");
     }

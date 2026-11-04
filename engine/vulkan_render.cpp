@@ -426,7 +426,7 @@ static bool CreateInstance(Renderer& r, SDL_Window* window)
 
     std::vector<const char*> extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
 
-#ifdef _DEBUG
+#ifndef NDEBUG
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 #endif
 
@@ -442,7 +442,7 @@ static bool CreateInstance(Renderer& r, SDL_Window* window)
     instanceInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     instanceInfo.ppEnabledExtensionNames = extensions.data();
 
-#ifdef _DEBUG
+#ifndef NDEBUG
     const char* validationLayer = "VK_LAYER_KHRONOS_validation";
     uint32_t layerCount = 0;
     vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
@@ -462,7 +462,7 @@ static bool CreateInstance(Renderer& r, SDL_Window* window)
 
     VK_CHECK_RET(vkCreateInstance(&instanceInfo, nullptr, &r.instance), "vkCreateInstance", false);
 
-#ifdef _DEBUG
+#ifndef NDEBUG
     if (haveValidation)
     {
         auto createDebugUtils = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
@@ -3367,7 +3367,7 @@ void RendererShutdown(Renderer& r)
 
     if (r.surface) { SDL_Vulkan_DestroySurface(r.instance, r.surface, nullptr); r.surface = VK_NULL_HANDLE; }
 
-#ifdef _DEBUG
+#ifndef NDEBUG
     if (r.debugMessenger)
     {
         auto destroyDebugUtils = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(

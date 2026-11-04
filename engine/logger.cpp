@@ -10,6 +10,10 @@
 #include "engine_types.h"
 #include "profiler.h"
 
+#if PLATFORM_WINDOWS
+#include <share.h>
+#endif
+
 namespace
 {
     namespace fs = std::filesystem;
@@ -318,13 +322,10 @@ bool LoggerInitialize(String executablePath)
         g_logger.directory / FormatFilenameTimestamp(startupTime);
 
 #if PLATFORM_WINDOWS
-    if (fopen_s(
-            &g_logger.file,
-            g_logger.currentFile.string().c_str(),
-            "a") != 0)
-    {
-        g_logger.file = nullptr;
-    }
+    g_logger.file = _fsopen(
+        g_logger.currentFile.string().c_str(),
+        "a",
+        _SH_DENYNO);
 #elif PLATFORM_LINUX
     g_logger.file = std::fopen(
         g_logger.currentFile.string().c_str(),

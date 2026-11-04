@@ -96,8 +96,8 @@ bool LoadMaterialFile(const char* path, MaterialFileData& outMaterialFile, std::
                 outMaterialFile.shaderPath = textparse::Unquote(*shader);
             if (const std::string* texture = FindTextBlockProperty(block, "BaseTexture"))
                 outMaterialFile.legacyBaseTexturePath = textparse::Unquote(*texture);
-            else if (const std::string* texture = FindTextBlockProperty(block, "Texture"))
-                outMaterialFile.legacyBaseTexturePath = textparse::Unquote(*texture);
+            else if (const std::string* legacyTexture = FindTextBlockProperty(block, "Texture"))
+                outMaterialFile.legacyBaseTexturePath = textparse::Unquote(*legacyTexture);
             if (const std::string* baseColor = FindTextBlockProperty(block, "BaseColor"))
                 textparse::ParseColor4(*baseColor, outMaterialFile.material.baseColor, outMaterialFile.material.baseColor);
             if (const std::string* emissive = FindTextBlockProperty(block, "Emissive"))

@@ -110,6 +110,14 @@
             }
         },
         {
+            "name": "linux-sanitize",
+            "displayName": "Linux Debug (ASan + UBSan)",
+            "inherits": "linux-debug",
+            "cacheVariables": {
+                "KES_SANITIZE": "ON"
+            }
+        },
+        {
             "name": "package-windows",
             "displayName": "Package: Windows",
             "description": "Used by package.ps1. Visual Studio generator, so no developer prompt is needed.",
@@ -118,7 +126,8 @@
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "cacheVariables": {
                 "KES_PLATFORM": "Windows",
-                "KES_DEBUG_TOOLS": "OFF"
+                "KES_DEBUG_TOOLS": "OFF",
+                "KES_BUILD_TESTS": "OFF"
             },
             "condition": {
                 "type": "equals",
@@ -141,7 +150,8 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "KES_PLATFORM": "Linux",
-                "KES_DEBUG_TOOLS": "OFF"
+                "KES_DEBUG_TOOLS": "OFF",
+                "KES_BUILD_TESTS": "OFF"
             }
         }
     ],

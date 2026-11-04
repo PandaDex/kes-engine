@@ -11,6 +11,7 @@ add_executable(game ${GAME_SOURCES})
 endif()
 
 target_link_libraries(game PUBLIC engine)
+kes_target_warnings(game)
 
 if (CMAKE_VERSION VERSION_GREATER 3.21)
   set_property(TARGET game PROPERTY CXX_STANDARD 20)

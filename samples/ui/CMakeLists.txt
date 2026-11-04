@@ -11,6 +11,7 @@ else()
 endif()
 
 target_link_libraries(ui_showcase PUBLIC engine)
+kes_target_warnings(ui_showcase)
 set_property(TARGET ui_showcase PROPERTY CXX_STANDARD 20)
 if(WIN32)
     target_compile_definitions(ui_showcase PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

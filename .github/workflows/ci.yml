@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SDL_TAG: release-3.4.16
+  VULKAN_SDK_VERSION: 1.4.350.0
+
+jobs:
+  linux:
+    name: Linux (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+      # LeakSanitizer needs ptrace.
+      options: --cap-add=SYS_PTRACE
+    steps:
+      - name: Install packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates cmake curl git libvulkan-dev ninja-build unzip zstd
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Cache SDL3
+        id: sdl-cache
+        uses: actions/cache@v6
+        with:
+          path: /opt/sdl3
+          key: sdl3-trixie-${{ env.SDL_TAG }}
+
+      - name: Build SDL3
+        if: steps.sdl-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$SDL_TAG" https://github.com/libsdl-org/SDL.git /tmp/SDL
+          cmake -S /tmp/SDL -B /tmp/SDL/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/sdl3 -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_TESTS=OFF
+          cmake --build /tmp/SDL/build --target install
+
+      - name: Download external binaries
+        run: ./external/download_external.sh
+
+      - name: Configure
+        run: cmake --preset linux-sanitize -DCMAKE_PREFIX_PATH=/opt/sdl3 -DKES_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build out/build/linux-sanitize
+
+      - name: Test
+        run: ctest --test-dir out/build/linux-sanitize --output-on-failure
+
+  windows:
+    name: Windows
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Cache Vulkan SDK
+        id: vulkan-cache
+        uses: actions/cache@v6
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}
+
+      - name: Install Vulkan SDK
+        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $installer = "vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/$installer" -OutFile $installer
+          Start-Process -Wait -FilePath ".\$installer" -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install'
+
+      - name: Download external binaries
+        shell: pwsh
+        run: ./external/download_external.ps1
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $env:VULKAN_SDK = "C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
+          cmake -S . -B out/build/ci -A x64 -DKES_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build out/build/ci --config Debug --parallel
+
+      - name: Test
+        run: ctest --test-dir out/build/ci -C Debug --output-on-failure

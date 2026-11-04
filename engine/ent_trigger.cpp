@@ -22,18 +22,18 @@ void TriggerEntity::Update(float dt)
             current.insert(entity.GetEntityId());
     });
 
-    for (uint64_t entityId : current)
+    for (uint64_t id : current)
     {
-        if (overlappingEntities.find(entityId) == overlappingEntities.end())
-            game->ExecuteCommand(onEntityEnter, this, activeEntities[entityId]);
+        if (overlappingEntities.find(id) == overlappingEntities.end())
+            game->ExecuteCommand(onEntityEnter, this, activeEntities[id]);
     }
 
-    for (uint64_t entityId : overlappingEntities)
+    for (uint64_t id : overlappingEntities)
     {
-        if (current.find(entityId) == current.end())
+        if (current.find(id) == current.end())
         {
             Entity* other = nullptr;
-            auto activeIt = activeEntities.find(entityId);
+            auto activeIt = activeEntities.find(id);
             if (activeIt != activeEntities.end())
                 other = activeIt->second;
             game->ExecuteCommand(onEntityExit, this, other);

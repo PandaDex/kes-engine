@@ -587,11 +587,6 @@ namespace
         return { a.x + b.x, a.y + b.y, a.z + b.z };
     }
 
-    Vector3 Scale(const Vector3& value, float scalar)
-    {
-        return { value.x * scalar, value.y * scalar, value.z * scalar };
-    }
-
     float Length2D(float x, float y)
     {
         return std::sqrt(x * x + y * y);

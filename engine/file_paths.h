@@ -21,7 +21,7 @@ std::string ResolveAssetWritePath(const char* path);
 int ApplyAssetRootOverrideArgument(int argc, const char* const* argv, int index);
 std::vector<std::string> CollectPositionalCommandLineArguments(int argc, const char* const* argv, int firstIndex = 1);
 
-static std::filesystem::path GetExecutableDirectory()
+inline std::filesystem::path GetExecutableDirectory()
 {
 #if PLATFORM_WINDOWS
     char modulePath[MAX_PATH] = {};

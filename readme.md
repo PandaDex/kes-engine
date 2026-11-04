@@ -46,6 +46,10 @@ Windows: ```powershell -ExecutionPolicy Bypass -File external/download_external.
 Linux: ```./external/download_external.sh``` <br/>
 To publish new binaries, upload `external.zip` to a release tagged `external-v<N>` and put `<N>` in `external/external_version`.
 
+## Tests
+Unit tests are in `tests/` and don't need a GPU or a window. Build the `kes_tests` target, then run `ctest --test-dir <build folder> -C Debug --output-on-failure`, or run `kes_tests` directly with part of a test name to filter (`kes_tests pak`). <br/>
+`KES_WARNINGS_AS_ERRORS` makes warnings fatal, and `KES_SANITIZE` (or the `linux-sanitize` preset) enables ASan and UBSan. CI runs both on Linux, and warnings as errors on Windows.
+
 ## Packaging
 Windows: ```./package.ps1 all``` (zip + GDK msixvc) <br/>
 Linux: ```./package.sh``` (tar.gz) <br/>

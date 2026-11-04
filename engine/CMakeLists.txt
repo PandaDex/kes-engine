@@ -160,6 +160,7 @@ kes_add_slang_shaders(engine_shaders
 add_dependencies(engine engine_shaders)
 
 set_property(TARGET engine PROPERTY CXX_STANDARD 20)
+kes_target_warnings(engine)
 
 # Platform (KES_PLATFORM, cmake/KesPlatform.cmake)
 # Definitions are PUBLIC: headers such as file_paths.h branch on them, so tools

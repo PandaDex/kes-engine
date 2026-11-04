@@ -12,3 +12,4 @@ if (CMAKE_VERSION VERSION_GREATER 3.12)
 endif()
 
 target_link_libraries(pak-tool PRIVATE engine)
+kes_target_warnings(pak-tool)

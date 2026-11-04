@@ -41,8 +41,4 @@ bool LoadMeshFromFile(const char* path, MeshData& outMesh, std::string* outError
         LoadKModelFile(ResolveAssetPath("engine/fallback.kmodel").c_str(), model, outError);
         return BuildMeshDataFromKModel(model, outMesh, outError);
     }
-
-    if (outError)
-        *outError = "Unsupported mesh format: " + extension;
-    return false;
 }

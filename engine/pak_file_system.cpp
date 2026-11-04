@@ -83,17 +83,6 @@ namespace
         return stream.good();
     }
 
-    bool WriteString(std::ostream& stream, const std::string& value)
-    {
-        const uint32_t length = static_cast<uint32_t>(value.size());
-        if (!WriteValue(stream, length))
-            return false;
-
-        if (length > 0)
-            stream.write(value.data(), length);
-        return stream.good();
-    }
-
     bool PathComponentEquals(const fs::path& a, const fs::path& b)
     {
         const std::string left = a.generic_string();

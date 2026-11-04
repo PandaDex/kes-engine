@@ -1,4 +1,5 @@
 #include "render_backend.h"
+#include <SDL3/SDL_stdinc.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -105,7 +106,7 @@ namespace
 
     RendererBackend ReadEnvironmentRequest()
     {
-        const char* value = std::getenv("KES_RENDERER");
+        const char* value = SDL_getenv("KES_RENDERER");
         RendererBackend backend = RendererBackend::Auto;
         if (value && value[0] && !ParseRendererBackend(value, backend))
             EngineLogf("Ignoring unknown KES_RENDERER value \"%s\".", value);
