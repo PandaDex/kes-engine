@@ -52,7 +52,7 @@ namespace render
         float cameraPosition[4];       // xyz
         float cameraForward[4];        // xyz (view depth for cascade selection)
         float ambientSH[9][4];        // irradiance / pi, pre-convolved (rgb)
-        float environmentParams[4];    // x = specular mip count, y = environment intensity
+        float environmentParams[4];    // x = specular mip count, y = environment intensity, z = time in seconds
         float lightCounts[4];          // x = light count
         GPULight lights[kMaxLights];
         float fogColor[4];

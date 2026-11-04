@@ -35,7 +35,7 @@ cbuffer SceneCB : register(b0)
     float4 uCameraPosition;
     float4 uCameraForward;
     float4 uAmbientSH[9];          // irradiance / pi
-    float4 uEnvironmentParams;     // x = specular mip count, y = intensity
+    float4 uEnvironmentParams;     // x = specular mip count, y = intensity, z = time in seconds
     float4 uLightCounts;           // x = light count
     GPULight uLights[kMaxLights];
     float4 uFogColor;
@@ -72,6 +72,11 @@ static const uint kMaterialFlagHasNormal = 16u;
 static const uint kMaterialFlagHasMetallicRoughness = 32u;
 static const uint kMaterialFlagHasOcclusion = 64u;
 static const uint kMaterialFlagHasEmissive = 128u;
+
+float KesTime()
+{
+    return uEnvironmentParams.z;
+}
 
 bool KesMaterialHas(uint flag)
 {
@@ -298,53 +303,88 @@ struct SurfaceInput
     bool frontFace;
 };
 
-// Full material: textures, direct lights with shadows, image-based ambient,
-// emissive and fog. Returns linear HDR color with alpha. Discards below the
-// alpha cutoff.
-float4 KesShadeSurface(SurfaceInput s)
+// Inputs of the lighting model. KesMaterialSurface fills it from the .mat values
+// and textures; a material shader can override fields before KesShadeMaterial.
+struct KesSurface
+{
+    float3 baseColor;
+    float alpha;
+    float3 emissive;
+    float3 normal;     // world space
+    float metallic;
+    float roughness;
+    float occlusion;
+};
+
+float3 KesGeometricNormal(SurfaceInput s)
+{
+    float3 n = normalize(s.worldNormal);
+    return !s.frontFace && KesMaterialHas(kMaterialFlagDoubleSided) ? -n : n;
+}
+
+float3 KesTangentNormal(SurfaceInput s, float3 tangentNormal)
+{
+    return KesPerturbNormal(KesGeometricNormal(s), s.worldPosition, s.uv, normalize(tangentNormal));
+}
+
+KesSurface KesMaterialSurface(SurfaceInput s)
 {
     float4 baseColor = uBaseColor * s.vertexColor;
     if (KesMaterialHas(kMaterialFlagHasBase))
         baseColor *= uBaseTexture.Sample(s.uv);
-    if (uEmissive.a > 0.0 && baseColor.a < uEmissive.a)
+
+    KesSurface m;
+    m.baseColor = baseColor.rgb;
+    m.alpha = baseColor.a;
+    m.emissive = uEmissive.rgb;
+    if (KesMaterialHas(kMaterialFlagHasEmissive))
+        m.emissive *= uEmissiveTexture.Sample(s.uv).rgb;
+    m.normal = KesGeometricNormal(s);
+    m.metallic = uPbr.x;
+    m.roughness = uPbr.y;
+    m.occlusion = 1.0;
+
+    if (KesMaterialHas(kMaterialFlagLit))
+    {
+        if (KesMaterialHas(kMaterialFlagHasNormal))
+        {
+            float3 tangentNormal = uNormalTexture.Sample(s.uv).xyz * 2.0 - 1.0;
+            tangentNormal.xy *= uPbr.z;
+            m.normal = KesTangentNormal(s, tangentNormal);
+        }
+        if (KesMaterialHas(kMaterialFlagHasMetallicRoughness))
+        {
+            float4 mr = uMetallicRoughnessTexture.Sample(s.uv);
+            m.roughness *= mr.g;
+            m.metallic *= mr.b;
+        }
+        if (KesMaterialHas(kMaterialFlagHasOcclusion))
+            m.occlusion = lerp(1.0, uOcclusionTexture.Sample(s.uv).r, uPbr.w);
+    }
+    return m;
+}
+
+// Direct lights with shadows, image-based ambient, emissive and fog. Returns
+// linear HDR color with alpha. Discards below the alpha cutoff.
+float4 KesShadeMaterial(SurfaceInput s, KesSurface m)
+{
+    if (uEmissive.a > 0.0 && m.alpha < uEmissive.a)
         discard;
 
-    float3 emissive = uEmissive.rgb;
-    if (KesMaterialHas(kMaterialFlagHasEmissive))
-        emissive *= uEmissiveTexture.Sample(s.uv).rgb;
-
     if (!KesMaterialHas(kMaterialFlagLit))
-        return float4(KesApplyFog(baseColor.rgb + emissive, s.worldPosition), baseColor.a);
+        return float4(KesApplyFog(m.baseColor + m.emissive, s.worldPosition), m.alpha);
 
-    float3 geometricNormal = normalize(s.worldNormal);
-    if (!s.frontFace && KesMaterialHas(kMaterialFlagDoubleSided))
-        geometricNormal = -geometricNormal;
-    float3 n = geometricNormal;
-    if (KesMaterialHas(kMaterialFlagHasNormal))
-    {
-        float3 tangentNormal = uNormalTexture.Sample(s.uv).xyz * 2.0 - 1.0;
-        tangentNormal.xy *= uPbr.z;
-        n = KesPerturbNormal(geometricNormal, s.worldPosition, s.uv, normalize(tangentNormal));
-    }
-
-    float metallic = uPbr.x;
-    float roughness = uPbr.y;
-    if (KesMaterialHas(kMaterialFlagHasMetallicRoughness))
-    {
-        float4 mr = uMetallicRoughnessTexture.Sample(s.uv);
-        roughness *= mr.g;
-        metallic *= mr.b;
-    }
-    roughness = clamp(roughness, 0.03, 1.0);
-    float occlusion = 1.0;
-    if (KesMaterialHas(kMaterialFlagHasOcclusion))
-        occlusion = lerp(1.0, uOcclusionTexture.Sample(s.uv).r, uPbr.w);
+    float3 geometricNormal = KesGeometricNormal(s);
+    float3 n = m.normal;
+    float metallic = saturate(m.metallic);
+    float roughness = clamp(m.roughness, 0.03, 1.0);
+    float occlusion = m.occlusion;
 
     float3 v = normalize(uCameraPosition.xyz - s.worldPosition);
     float NoV = max(dot(n, v), 1e-4);
     float a = roughness * roughness;
-    float3 f0 = lerp(float3(0.04, 0.04, 0.04), baseColor.rgb, metallic);
-    float3 diffuseColor = baseColor.rgb * (1.0 - metallic);
+    float3 f0 = lerp(float3(0.04, 0.04, 0.04), m.baseColor, metallic);
+    float3 diffuseColor = m.baseColor * (1.0 - metallic);
 
     float3 direct = float3(0.0, 0.0, 0.0);
     int lightCount = int(uLightCounts.x);
@@ -398,6 +438,12 @@ float4 KesShadeSurface(SurfaceInput s)
     float3 ambient = (diffuseColor * KesAmbientIrradiance(n) + prefiltered * KesEnvironmentBRDF(f0, roughness, NoV)) *
                      (occlusion * uEnvironmentParams.y);
 
-    float3 color = direct + ambient + emissive;
-    return float4(KesApplyFog(color, s.worldPosition), baseColor.a);
+    float3 color = direct + ambient + m.emissive;
+    return float4(KesApplyFog(color, s.worldPosition), m.alpha);
+}
+
+// Full material as authored in the .mat file.
+float4 KesShadeSurface(SurfaceInput s)
+{
+    return KesShadeMaterial(s, KesMaterialSurface(s));
 }

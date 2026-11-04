@@ -72,3 +72,5 @@ The source is the `SkyboxEntity` gradient (without the sun disc, which a directi
 ## Custom material shaders
 
 A `.shader` asset can replace the mesh program for a material. Start from `engine/shaders/mesh_fallback.slang`: `KesMeshVertex` does skinning and transforms, `KesShadeSurface` does the full material, and smaller helpers (`KesApplyFog`, `KesAmbientIrradiance`, `KesEnvironmentBRDF`, ...) are available for custom lighting. Bindings are listed at the top of `kes_common.slang`.
+
+To change only what the surface is, keep the engine lighting: `KesMaterialSurface` returns a `KesSurface` filled from the `.mat` values and textures, and `KesShadeMaterial` lights it. Override fields in between (`KesTangentNormal` converts a tangent-space normal). `KesTime()` is seconds since the first frame. The shader graph tool generates shaders of this form. The shadow pass doesn't run material shaders, so alpha changed in a shader doesn't affect shadows.

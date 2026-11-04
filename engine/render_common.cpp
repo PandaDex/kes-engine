@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include "profiler.h"
@@ -388,6 +389,8 @@ namespace render
         cb = {};
         std::memcpy(cb.ambientSH, sh, sizeof(sh));
         std::memcpy(cb.environmentParams, environmentParams, sizeof(environmentParams));
+        static const auto startTime = std::chrono::steady_clock::now();
+        cb.environmentParams[2] = std::chrono::duration<float>(std::chrono::steady_clock::now() - startTime).count();
 
         CameraViewData cameraData = {};
         CameraBuildMatrices(camera, aspect, cameraData);

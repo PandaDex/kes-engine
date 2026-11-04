@@ -173,6 +173,12 @@ Reference the shader from a material through a `.shader` descriptor (`Source = "
 
 Note: with Visual Studio generators, the first build after adding or removing a `.slang` file regenerates the project, and after a removal it can fail once. Build again and it goes through. Ninja does not have this problem.
 
+## Shader Graph
+
+`tools/shaderGraph` (a git submodule, `git submodule update --init tools/shaderGraph`) is a Qt 6 node editor for Slang shaders, with a live material preview. It builds separately from the engine, see its README.
+
+**File > Export Material** writes `materials/<name>.mat` and, when the graph drives the surface, `shaders/<name>.shader` and `shaders/<name>.slang` under the project's content folder. The shader is compiled by the next game build like any other. Graph sources (`.slangnodes`) are left out of paks.
+
 ## Map Editor: Forge
 
 `tools/forgeMapEditor` is a Qt 6 brush editor in the style of Hammer. It produces the maps the engine loads.
