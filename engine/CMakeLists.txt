@@ -6,6 +6,14 @@ if(WIN32)
 endif()
 find_package(SDL3 REQUIRED CONFIG)
 
+# Imported targets are scoped to this directory, so bundle_runtime_libs() can't
+# ask for SDL's location from game/ or tests/.
+if(UNIX AND NOT APPLE)
+    get_target_property(_kes_sdl3_location SDL3::SDL3 LOCATION)
+    get_filename_component(_kes_sdl3_dir "${_kes_sdl3_location}" DIRECTORY)
+    set_property(GLOBAL PROPERTY KES_SDL3_LIBRARY_DIR "${_kes_sdl3_dir}")
+endif()
+
 # Renderer backends come from KES_RENDERERS_<PLATFORM> (cmake/KesRenderers.cmake).
 if(KES_RENDERER_VULKAN)
     find_package(Vulkan REQUIRED)

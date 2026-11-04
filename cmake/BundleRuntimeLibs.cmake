@@ -1,4 +1,4 @@
-# Usage: cmake -DTARGET_FILE=<exe> -DOUT_DIR=<dir> -P BundleRuntimeLibs.cmake
+# Usage: cmake -DTARGET_FILE=<exe> -DOUT_DIR=<dir> [-DEXTRA_DIRS=<dirs>] -P BundleRuntimeLibs.cmake
 file(GET_RUNTIME_DEPENDENCIES
     EXECUTABLES "${TARGET_FILE}"
     RESOLVED_DEPENDENCIES_VAR deps
@@ -16,5 +16,5 @@ foreach(dep IN LISTS deps)
 endforeach()
 
 if(unresolved)
-    message(WARNING "Unresolved runtime dependencies: ${unresolved}")
+    message(FATAL_ERROR "Unresolved runtime dependencies: ${unresolved}")
 endif()

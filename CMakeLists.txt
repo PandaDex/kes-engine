@@ -17,10 +17,12 @@ function(bundle_runtime_libs target)
             INSTALL_RPATH "\$ORIGIN")
         # Use DT_RPATH (applies to transitive deps) instead of DT_RUNPATH
         target_link_options(${target} PRIVATE -Wl,--disable-new-dtags)
+        get_property(_sdl3_dir GLOBAL PROPERTY KES_SDL3_LIBRARY_DIR)
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND}
                     -DTARGET_FILE=$<TARGET_FILE:${target}>
                     -DOUT_DIR=$<TARGET_FILE_DIR:${target}>
+                    -DEXTRA_DIRS=${_sdl3_dir}
                     -P "${CMAKE_SOURCE_DIR}/cmake/BundleRuntimeLibs.cmake")
     endif()
 endfunction()
