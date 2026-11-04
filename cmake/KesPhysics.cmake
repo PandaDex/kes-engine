@@ -10,3 +10,9 @@ endif()
 
 # Its samples, tests and benchmarks are only defined when it is the top-level project.
 add_subdirectory("${_kes_box3d_dir}" "${CMAKE_BINARY_DIR}/external/box3d" EXCLUDE_FROM_ALL)
+
+# b3LoadV (src/simd_sse2.h) reads 8 bytes of a 4-byte aligned float[3] through a
+# double*. Fine on x86, but UBSan aborts on it. Other sanitizer checks stay on.
+if(KES_SANITIZE AND NOT MSVC)
+    target_compile_options(box3d PRIVATE -fno-sanitize=alignment)
+endif()
