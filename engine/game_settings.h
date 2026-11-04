@@ -108,6 +108,11 @@ public:
     void SetLookYInverted(bool inverted) { m_invertLookY = inverted; }
     bool IsLookYInverted() const { return m_invertLookY; }
 
+    // Player consent to upload crash reports (docs/crash-reporting.md). Off until
+    // the game asks; applied live.
+    void SetCrashReportUploadEnabled(bool enabled);
+    bool IsCrashReportUploadEnabled() const { return m_crashReportUpload; }
+
     // Takes effect on the next launch (the renderer can't be swapped live).
     void SetPreferredRenderer(RendererBackend backend) { m_preferredRenderer = backend; }
     RendererBackend GetPreferredRenderer() const { return m_preferredRenderer; }
@@ -197,6 +202,7 @@ private:
     float m_mouseSensitivity = 1.0f;       // MouseSensitivity
     float m_gamepadLookSensitivity = 1.0f; // GamepadLookSensitivity
     bool m_invertLookY = false;            // bInvertLookY
+    bool m_crashReportUpload = false;      // bCrashReportUpload
 
     IniFile m_ini; // whole document, so unknown sections survive a save
     bool m_loaded = false;

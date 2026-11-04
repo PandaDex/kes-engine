@@ -11,3 +11,6 @@
 	path = tools/shaderGraph
 	url = https://github.com/PandaDex/kes-shaderGraph
 	branch = master
+[submodule "external/sentry-native"]
+	path = external/sentry-native
+	url = https://github.com/getsentry/sentry-native

@@ -6,9 +6,13 @@
 #include <utility>
 #include <vector>
 #include <SDL3/SDL_init.h>
+#include <SDL3/SDL_messagebox.h>
 #include <SDL3/SDL_timer.h>
+#include "build_info.h"
 #include "command_line.h"
+#include "crash_reporter.h"
 #include "engine_configuration.h"
+#include "file_paths.h"
 #include "logger.h"
 #include "pak_file_system.h"
 #include "profiler.h"
@@ -193,6 +197,31 @@ namespace
                (event.key.mod & SDL_KMOD_ALT) != 0;
     }
 
+    // The device can't be recovered without reloading every GPU resource, so
+    // tell the player what happened and leave instead of showing a dead window.
+    void ExitOnGpuFailure(EngineApp &app)
+    {
+        std::string error = app.renderer->GetFatalError();
+#if ENGINE_ALLOW_DEBUG_MODE
+        int faultFrame = 0;
+        if (error.empty() && CommandLineGetInt("debug-gpu-fault", faultFrame) && ++app.debugFrameCount == faultFrame)
+            error = "simulated with -debug-gpu-fault";
+#endif
+        if (error.empty())
+            return;
+
+        EngineLogf("Fatal GPU error: %s", error.c_str());
+        CrashReporterReportFatal("Fatal GPU error: " + error);
+        app.running = false;
+        app.exitCode = 1;
+
+        SetAppWindowCursor(app.window, true, false);
+        SDL_HideWindow(app.window.handle);
+        const std::string message = "The graphics device stopped responding, so the game has to close.\n\n"
+                                    "Updating your graphics driver may help.\n\n" + error;
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, ENGINE_PROJECT_NAME, message.c_str(), nullptr);
+    }
+
     bool IsKeyPress(const SDL_Event &event, SDL_Scancode scancode)
     {
         return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == scancode;
@@ -224,10 +253,26 @@ bool EngineStart(EngineApp &app)
     app.platform = new platform_linux();
 #endif
 
-    if (!LoggerInitialize(app.platform->get_executable_path()))
+    // An installed GDK package is read-only.
+#if PLATFORM_GDK
+    const String logRoot = GetUserDataDirectory().string();
+#else
+    const String logRoot = app.platform->get_executable_path();
+#endif
+    if (!LoggerInitialize(logRoot))
         std::printf("[Engine] Logger initialization failed. Continuing with console-only logging.\n");
 
     EngineLogf("Engine startup begin (platform: %s).", app.platform->get_name());
+    EngineLogf("Build: %s.", BuildInfoDescription().c_str());
+
+    {
+        const std::u8string crashDirectory = (GetUserDataDirectory() / "crashes").u8string();
+        CrashReporterConfig crashConfig;
+        crashConfig.databaseDirectory.assign(crashDirectory.begin(), crashDirectory.end());
+        crashConfig.logFilePath = GetCurrentLogFilePath();
+        if (CrashReporterInitialize(crashConfig) && CrashReporterCrashedLastRun())
+            EngineLog("The previous run crashed.");
+    }
 
     if (!app.platform->initialize())
         return failStartup();
@@ -277,9 +322,23 @@ bool EngineStart(EngineApp &app)
         KES_ZONE(CORE, "Load settings");
         app.settings->LoadSettings();
     }
+    CrashReporterSetUploadConsent(app.settings->IsCrashReportUploadEnabled());
+
+#if ENGINE_ALLOW_DEBUG_MODE
+    // Before the window, so the crash path can be tested without a GPU.
+    if (CommandLineHasFlag("debug-crash-upload"))
+        CrashReporterSetUploadConsent(true);
+    if (CommandLineHasFlag("debug-crash"))
+    {
+        EngineLog("Crashing on purpose (-debug-crash).");
+        volatile int *volatile target = nullptr;
+        *target = 1;
+    }
+#endif
 
     if (!CreateWindowAndRenderer(app))
         return failStartup();
+    CrashReporterSetTag("renderer", RendererBackendName(app.renderer->GetBackend()));
 
     // Window mode, resolution, vsync and render resolution from the settings
     app.settings->AttachEngine(&app.window, app.renderer.get(), &app.config);
@@ -443,6 +502,7 @@ bool EngineTick(EngineApp &app)
             KES_ZONE(RENDER, "Present");
             app.renderer->Present();
         }
+        ExitOnGpuFailure(app);
     }
 
     LimitFrameRate(app);
@@ -578,5 +638,6 @@ void EngineShutdown(EngineApp &app)
         app.platform = nullptr;
     }
     EngineLog("Engine shutdown complete.");
+    CrashReporterShutdown();
     LoggerShutdown();
 }

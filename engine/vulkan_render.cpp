@@ -137,6 +137,29 @@ static VkCommandBuffer BeginSingleTimeCommands(Renderer& r)
     return cmd;
 }
 
+static const char* VkResultName(VkResult result)
+{
+    switch (result)
+    {
+    case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
+    case VK_ERROR_SURFACE_LOST_KHR: return "VK_ERROR_SURFACE_LOST_KHR";
+    case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+    default: return "unknown VkResult";
+    }
+}
+
+// Errors here don't recover: the swapchain's own out-of-date results are
+// handled by the callers before this.
+static bool CheckGpuResult(Renderer& r, VkResult result, const char* call)
+{
+    if (result >= VK_SUCCESS)
+        return true;
+    if (r.fatalError.empty())
+        r.fatalError = std::string(call) + " failed: " + VkResultName(result) + " (" + std::to_string(static_cast<int>(result)) + ")";
+    return false;
+}
+
 static void EndSingleTimeCommands(Renderer& r, VkCommandBuffer cmd)
 {
     vkEndCommandBuffer(cmd);
@@ -145,8 +168,8 @@ static void EndSingleTimeCommands(Renderer& r, VkCommandBuffer cmd)
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
 
-    vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(r.graphicsQueue); // asset loading is not perf critical here; mirrors D3D11's synchronous immediate-context uploads
+    CheckGpuResult(r, vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE), "vkQueueSubmit (upload)");
+    CheckGpuResult(r, vkQueueWaitIdle(r.graphicsQueue), "vkQueueWaitIdle"); // asset loading is not perf critical here; mirrors D3D11's synchronous immediate-context uploads
 
     vkFreeCommandBuffers(r.device, r.transferCommandPool, 1, &cmd);
 }
@@ -2660,7 +2683,7 @@ static void RenderSkyBackground(Renderer& r, const Camera& camera, const Scene& 
 // call is made (D3D11's immediate context has no explicit "begin frame").
 static void BeginFrameIfNeeded(Renderer& r)
 {
-    if (r.frameActive)
+    if (r.frameActive || !r.fatalError.empty())
         return;
 
     KES_ZONE_FN(RENDER);
@@ -2668,7 +2691,8 @@ static void BeginFrameIfNeeded(Renderer& r)
     {
         // Time blocked here = CPU waiting on the GPU (or on vsync).
         KES_ZONE(RENDER, "Wait for GPU (in-flight fence)");
-        vkWaitForFences(r.device, 1, &frame.inFlightFence, VK_TRUE, UINT64_MAX);
+        if (!CheckGpuResult(r, vkWaitForFences(r.device, 1, &frame.inFlightFence, VK_TRUE, UINT64_MAX), "vkWaitForFences"))
+            return;
 
         // Under vsync, running a frame ahead only makes the CPU wait in bursts
         // (alternating ~0 ms and two refresh intervals), and the uneven frame
@@ -2677,7 +2701,8 @@ static void BeginFrameIfNeeded(Renderer& r)
         if (r.vsync)
         {
             const FrameResources& previous = r.frames[(r.frameIndex + kMaxFramesInFlight - 1) % kMaxFramesInFlight];
-            vkWaitForFences(r.device, 1, &previous.inFlightFence, VK_TRUE, UINT64_MAX);
+            if (!CheckGpuResult(r, vkWaitForFences(r.device, 1, &previous.inFlightFence, VK_TRUE, UINT64_MAX), "vkWaitForFences"))
+                return;
         }
     }
     vkResetFences(r.device, 1, &frame.inFlightFence);
@@ -2875,6 +2900,9 @@ static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
 
 void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
 {
+    if (!r.fatalError.empty())
+        return;
+
     if (r.assetGeneration != assets.GetGeneration())
     {
         // No pending command buffer may still reference the caches, and this
@@ -2927,6 +2955,8 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
     r.exposure = std::max(scene.exposure, 0.0f);
 
     BeginFrameIfNeeded(r);
+    if (!r.frameActive)
+        return;
     std::memcpy(r.frames[r.frameIndex].sceneCBMapped, &r.frame.scene, sizeof(r.frame.scene));
 
     // Draw lists (shared by shadow and scene passes).
@@ -3021,9 +3051,8 @@ void RendererBeginBackbufferOverlay(Renderer& r)
         r.haveSwapchainImage = false;
         return;
     }
-    if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR)
+    if (!CheckGpuResult(r, acquireResult, "vkAcquireNextImageKHR"))
     {
-        EngineLogf("vkAcquireNextImageKHR failed: %d", static_cast<int>(acquireResult));
         r.haveSwapchainImage = false;
         return;
     }
@@ -3230,7 +3259,8 @@ void RendererPresent(Renderer& r)
 
     {
         KES_ZONE(RENDER, "vkQueueSubmit");
-        vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, r.frames[r.frameIndex].inFlightFence);
+        if (!CheckGpuResult(r, vkQueueSubmit(r.graphicsQueue, 1, &submitInfo, r.frames[r.frameIndex].inFlightFence), "vkQueueSubmit"))
+            r.haveSwapchainImage = false;
     }
 
     if (r.haveSwapchainImage)
@@ -3249,8 +3279,8 @@ void RendererPresent(Renderer& r)
         }
         if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
             r.swapchainNeedsRecreate = true;
-        else if (presentResult != VK_SUCCESS)
-            EngineLogf("vkQueuePresentKHR failed: %d", static_cast<int>(presentResult));
+        else
+            CheckGpuResult(r, presentResult, "vkQueuePresentKHR");
     }
 
     r.frameActive = false;
@@ -3432,6 +3462,7 @@ namespace
         void RenderUi(const UiDrawList& drawList) override { kes::vk::RendererRenderUi(m_state, drawList); }
 
         void Present() override { kes::vk::RendererPresent(m_state); }
+        const std::string& GetFatalError() const override { return m_state.fatalError; }
 
     private:
         kes::vk::Renderer m_state = {};

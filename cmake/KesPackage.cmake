@@ -17,12 +17,14 @@
 # Packaging ("kes_package" target, built on demand):
 #   cmake --build <build> --config Release --target kes_package
 #   -> ${KES_PACKAGE_DIR}/<name>-<platform>/   staged, shippable folder
-#        <exe>, runtime libraries, config/, content/game.pak, content/engine.pak
+#        <exe>, runtime libraries, crash handler, config/, content/game.pak, content/engine.pak
 #   -> plus the platform format (KES_PACKAGE_FORMAT_<PLATFORM>):
 #        zip     <name>-<platform>-<version>.zip
 #        tar.gz  <name>-<platform>-<version>.tar.gz
 #        msixvc  msixvc/*.msixvc via makepkg (GDK)
 #        folder  staged folder only
+#   -> <name>-<platform>-symbols-<version>.zip   PDBs / .debug files for crash reports.
+#      Keep one per release and don't ship it.
 #   Paks are encrypted when KES_PAK_ENCRYPTION_KEY is set.
 
 include_guard(GLOBAL)
@@ -74,6 +76,8 @@ function(kes_add_game target)
     kes_deploy_shaders(${target} engine_shaders "content/engine/shaders")
     kes_deploy_shaders(${target} ${target}_shaders "content")
 
+    kes_deploy_crash_handler(${target})
+
     if(ARG_CONFIG_DIR)
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND "${CMAKE_COMMAND}" -E remove_directory "${_exe_dir}/config"
@@ -123,6 +127,11 @@ function(kes_add_game target)
 
     string(REPLACE ";" "|" _platform_files_arg "${_platform_files}")
     string(TOLOWER "${KES_PLATFORM}" _platform_lower)
+    string(REPLACE ";" "|" _crash_files_arg "${KES_CRASH_RUNTIME_FILES}")
+    set(_symbol_files_arg "")
+    if(MSVC)
+        set(_symbol_files_arg "$<TARGET_PDB_FILE:${target}>")
+    endif()
 
     add_custom_target(kes_package
         COMMAND "${CMAKE_COMMAND}"
@@ -133,6 +142,9 @@ function(kes_add_game target)
             "-DEXE=$<TARGET_FILE:${target}>"
             "-DEXE_DIR=${_exe_dir}"
             "-DRUNTIME_FILES=$<JOIN:$<TARGET_RUNTIME_DLLS:${target}>,|>"
+            "-DCRASH_FILES=${_crash_files_arg}"
+            "-DSYMBOL_FILES=${_symbol_files_arg}"
+            "-DOBJCOPY=${CMAKE_OBJCOPY}"
             "-DPAK_TOOL=$<TARGET_FILE:pak-tool>"
             "-DPAK_KEY=${KES_PAK_ENCRYPTION_KEY}"
             "-DGAME_CONTENT_DIR=${ARG_CONTENT_DIR}"
@@ -148,5 +160,5 @@ function(kes_add_game target)
         DEPENDS "${_KES_PACKAGE_STAGE_SCRIPT}"
         COMMENT "Packaging ${KES_PROJECT_NAME} for ${KES_PLATFORM} ($<CONFIG>, ${_format})"
         VERBATIM)
-    add_dependencies(kes_package ${target} pak-tool ${target}_shaders engine_shaders)
+    add_dependencies(kes_package ${target} pak-tool ${target}_shaders engine_shaders ${KES_CRASH_RUNTIME_TARGETS})
 endfunction()

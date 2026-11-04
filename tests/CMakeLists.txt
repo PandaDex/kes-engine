@@ -15,3 +15,13 @@ kes_target_warnings(kes_tests)
 bundle_runtime_libs(kes_tests)
 
 add_test(NAME kes_tests COMMAND kes_tests)
+
+if(TARGET sentry::sentry)
+    add_executable(kes_crash_smoke "crash_smoke.cpp")
+    set_property(TARGET kes_crash_smoke PROPERTY CXX_STANDARD 20)
+    target_link_libraries(kes_crash_smoke PRIVATE engine)
+    kes_target_warnings(kes_crash_smoke)
+    bundle_runtime_libs(kes_crash_smoke)
+    kes_deploy_crash_handler(kes_crash_smoke)
+    add_test(NAME kes_crash_smoke COMMAND kes_crash_smoke)
+endif()

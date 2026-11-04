@@ -100,6 +100,8 @@ struct GPUShadowArray
 
 struct Renderer
 {
+    std::string fatalError;   // IRenderer::GetFatalError
+
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;
     IDXGISwapChain* swapChain = nullptr;

@@ -47,6 +47,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(KesBuildChecks) # Compiler warnings and sanitizers
+include(KesCrash)       # KES_CRASH_REPORTER: Crashpad minidumps, Release debug info
 include(KesPlatform)    # KES_PLATFORM: Windows, GDK, GDKX, Linux
 include(KesRenderers)   # KES_RENDERERS_<PLATFORM>: which renderer backends are built
 include(KesShaders)     # Slang -> SPIR-V / DXBC at build time

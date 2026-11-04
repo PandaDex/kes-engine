@@ -1737,6 +1737,20 @@ void RendererRenderUi(Renderer& r, const UiDrawList& drawList)
     r.context->PSSetShaderResources(0, 1, &nullSRV);
 }
 
+static const char* DeviceRemovedReasonName(HRESULT reason)
+{
+    switch (reason)
+    {
+    case S_OK: return "none";
+    case DXGI_ERROR_DEVICE_HUNG: return "DEVICE_HUNG (GPU timeout)";
+    case DXGI_ERROR_DEVICE_REMOVED: return "DEVICE_REMOVED (GPU removed or driver updated)";
+    case DXGI_ERROR_DEVICE_RESET: return "DEVICE_RESET (bad commands)";
+    case DXGI_ERROR_DRIVER_INTERNAL_ERROR: return "DRIVER_INTERNAL_ERROR";
+    case DXGI_ERROR_INVALID_CALL: return "INVALID_CALL";
+    default: return "unknown";
+    }
+}
+
 void RendererPresent(Renderer& r)
 {
     // Vsync off: present immediately; ALLOW_TEARING lets flip-model swapchains
@@ -1745,7 +1759,14 @@ void RendererPresent(Renderer& r)
     const UINT presentFlags = (!r.vsync && r.tearingSupported) ? DXGI_PRESENT_ALLOW_TEARING : 0u;
     {
         KES_ZONE(RENDER, "IDXGISwapChain::Present");
-        r.swapChain->Present(syncInterval, presentFlags);
+        const HRESULT result = r.swapChain->Present(syncInterval, presentFlags);
+        if (FAILED(result) && r.fatalError.empty())
+        {
+            char message[128];
+            std::snprintf(message, sizeof(message), "IDXGISwapChain::Present failed: 0x%08lX, device removed reason %s",
+                          static_cast<unsigned long>(result), DeviceRemovedReasonName(r.device->GetDeviceRemovedReason()));
+            r.fatalError = message;
+        }
     }
 
 #if KES_PROFILE_GPU
@@ -1886,6 +1907,7 @@ namespace
         void RenderUi(const UiDrawList& drawList) override { kes::d3d11::RendererRenderUi(m_state, drawList); }
 
         void Present() override { kes::d3d11::RendererPresent(m_state); }
+        const std::string& GetFatalError() const override { return m_state.fatalError; }
 
     private:
         kes::d3d11::Renderer m_state = {};

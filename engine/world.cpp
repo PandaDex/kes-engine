@@ -1,4 +1,5 @@
 #include "world.h"
+#include "crash_reporter.h"
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -186,6 +187,7 @@ bool World::LoadMap(const char* mapName)
     assets.Clear();
     InstantiateMap(map);
     currentMapName = mapName;
+    CrashReporterSetTag("map", mapName);
 
     if (!CreatePlayerEntity())
         EngineLogf("No player entity was created for %s (player class \"%s\").", mapName, playerClassName.c_str());

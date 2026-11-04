@@ -14,6 +14,10 @@
 
 #include <limits.h>
 
+// Per-user writable folder (SDL_GetPrefPath), for settings, crash data and
+// anything else that can't live next to the executable.
+std::filesystem::path GetUserDataDirectory();
+
 void SetAssetRootOverride(const char* path);
 std::string GetAssetRootOverride();
 std::string ResolveAssetPath(const char* path);

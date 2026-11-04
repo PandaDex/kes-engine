@@ -1,12 +1,13 @@
 # Build-time packaging script, run by the kes_package target (see KesPackage.cmake).
 #
 # Produces ${OUTPUT_DIR}/${NAME}-${PLATFORM}/ :
-#   <exe> + runtime libraries
+#   <exe> + runtime libraries + crash handler
 #   config/             loose (players may edit input maps)
 #   content/game.pak    game content (without .slang sources) + compiled game shaders
 #   content/engine.pak  engine assets + compiled engine shaders
 #   platform files      e.g. MicrosoftGame.config + logos for GDK
-# then archives it according to FORMAT (zip, tar.gz, msixvc, folder).
+# then archives it according to FORMAT (zip, tar.gz, msixvc, folder) and writes
+# ${NAME}-${PLATFORM}-symbols-${VERSION}.zip next to it, which is not shipped.
 
 foreach(_var PLATFORM NAME VERSION EXE EXE_DIR PAK_TOOL GAME_CONTENT_DIR ENGINE_ASSETS_DIR OUTPUT_DIR FORMAT)
     if(NOT DEFINED ${_var} OR "${${_var}}" STREQUAL "")
@@ -16,6 +17,8 @@ endforeach()
 
 string(REPLACE "|" ";" RUNTIME_FILES "${RUNTIME_FILES}")
 string(REPLACE "|" ";" PLATFORM_FILES "${PLATFORM_FILES}")
+string(REPLACE "|" ";" CRASH_FILES "${CRASH_FILES}")
+string(REPLACE "|" ";" SYMBOL_FILES "${SYMBOL_FILES}")
 
 set(_package_name "${NAME}-${PLATFORM}")
 set(_stage "${OUTPUT_DIR}/${_package_name}")
@@ -38,6 +41,41 @@ if(NOT PLATFORM MATCHES "^(windows|gdk)$")
     foreach(_lib IN LISTS _shared_libs)
         file(COPY "${_lib}" DESTINATION "${_stage}" FOLLOW_SYMLINK_CHAIN)
     endforeach()
+endif()
+
+foreach(_file IN LISTS CRASH_FILES)
+    if(_file)
+        file(COPY "${_file}" DESTINATION "${_stage}")
+    endif()
+endforeach()
+
+# Symbols, split from the shipped binaries
+set(_symbols "${_work}/symbols")
+file(MAKE_DIRECTORY "${_symbols}")
+foreach(_file IN LISTS SYMBOL_FILES)
+    if(_file)
+        file(COPY "${_file}" DESTINATION "${_symbols}")
+    endif()
+endforeach()
+if(NOT PLATFORM MATCHES "^(windows|gdk)$" AND OBJCOPY)
+    get_filename_component(_exe_name "${EXE}" NAME)
+    set(_debug_file "${_symbols}/${_exe_name}.debug")
+    execute_process(COMMAND "${OBJCOPY}" --only-keep-debug "${_stage}/${_exe_name}" "${_debug_file}" COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(COMMAND "${OBJCOPY}" --strip-debug "--add-gnu-debuglink=${_debug_file}" "${_stage}/${_exe_name}" COMMAND_ERROR_IS_FATAL ANY)
+    foreach(_file IN LISTS CRASH_FILES)
+        get_filename_component(_handler_name "${_file}" NAME)
+        execute_process(COMMAND "${OBJCOPY}" --strip-debug "${_stage}/${_handler_name}" COMMAND_ERROR_IS_FATAL ANY)
+    endforeach()
+endif()
+file(GLOB _symbol_entries RELATIVE "${_symbols}" "${_symbols}/*")
+if(_symbol_entries)
+    set(_symbols_archive "${OUTPUT_DIR}/${_package_name}-symbols-${VERSION}.zip")
+    file(REMOVE "${_symbols_archive}")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E tar cf "${_symbols_archive}" --format=zip ${_symbol_entries}
+        WORKING_DIRECTORY "${_symbols}"
+        COMMAND_ERROR_IS_FATAL ANY)
+    message(STATUS "Symbols: ${_symbols_archive}")
 endif()
 
 # Paks

@@ -1,6 +1,8 @@
 #include "file_paths.h"
 #include <filesystem>
 #include <string_view>
+#include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_stdinc.h>
 #include "engine_configuration.h"
 
 namespace
@@ -145,6 +147,17 @@ std::string ResolveAssetPath(const char* path)
         return requested.lexically_normal().string();
 
     return BuildContentPath(requested).string();
+}
+
+std::filesystem::path GetUserDataDirectory()
+{
+    if (char* pref = SDL_GetPrefPath(ENGINE_COMPANY_NAME, ENGINE_PROJECT_NAME))
+    {
+        const std::string utf8 = pref;
+        SDL_free(pref);
+        return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
+    }
+    return GetExecutableDirectory() / "Saved";
 }
 
 std::string ResolveAssetWritePath(const char* path)

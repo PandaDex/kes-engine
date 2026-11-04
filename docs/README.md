@@ -12,6 +12,7 @@ The goal is to describe the current runtime, asset formats, and tool workflow in
 - [UI System (HTML/CSS, RmlUi)](ui-system.md)
 - [Tools and Asset Pipeline](tools-and-pipeline.md)
 - [Profiling (Tracy)](profiling.md)
+- [Crash Reporting](crash-reporting.md)
 
 ## Quick Facts
 

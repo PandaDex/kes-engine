@@ -289,6 +289,7 @@ struct Renderer
     std::vector<VkSemaphore> renderFinishedSemaphores;   // one per swapchain image
 
     bool frameActive = false;       // between "start of frame" and RendererPresent
+    std::string fatalError;         // IRenderer::GetFatalError
 
 #if KES_PROFILE_GPU
     tracy::VkCtx* gpuProfiler = nullptr;   // Tracy GPU timestamp context

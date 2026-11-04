@@ -2,6 +2,7 @@
 #define NOMINMAX
 #endif
 #include "game_settings.h"
+#include "crash_reporter.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -285,6 +286,7 @@ void GameSettings::SetToDefaults()
     m_mouseSensitivity = 1.0f;
     m_gamepadLookSensitivity = 1.0f;
     m_invertLookY = false;
+    m_crashReportUpload = false;
     m_shadowQuality = ShadowQuality::High;
     m_msaaSamples = 4;
     m_anisotropy = 8;
@@ -343,21 +345,17 @@ void GameSettings::ValidateSettings()
 
 // Persistence
 
+void GameSettings::SetCrashReportUploadEnabled(bool enabled)
+{
+    m_crashReportUpload = enabled;
+    CrashReporterSetUploadConsent(enabled);
+}
+
 std::string GameSettings::GetSettingsFilePath() const
 {
     // Per-user, writable location (e.g. %APPDATA%/<company>/<project>/ on Windows,
     // ~/.local/share/<company>/<project>/ on Linux).
-    std::filesystem::path base;
-    if (char *pref = SDL_GetPrefPath(ENGINE_COMPANY_NAME, ENGINE_PROJECT_NAME))
-    {
-        base = pref;
-        SDL_free(pref);
-    }
-    else
-    {
-        base = GetExecutableDirectory() / "Saved";
-    }
-    return (base / "Config" / "GameSettings.ini").string();
+    return (GetUserDataDirectory() / "Config" / "GameSettings.ini").string();
 }
 
 std::string GameSettings::GetDefaultSettingsFilePath() const
@@ -385,6 +383,7 @@ void GameSettings::ReadFromIni(const IniFile &ini)
     m_mouseSensitivity = ini.GetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     m_gamepadLookSensitivity = ini.GetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     m_invertLookY = ini.GetBool(kSection, "bInvertLookY", m_invertLookY);
+    m_crashReportUpload = ini.GetBool(kSection, "bCrashReportUpload", m_crashReportUpload);
 
     RendererBackend renderer = m_preferredRenderer;
     const std::string rendererName = ini.GetString(kSection, "PreferredRenderer", RendererBackendName(m_preferredRenderer));
@@ -413,6 +412,7 @@ void GameSettings::WriteToIni(IniFile &ini) const
     ini.SetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     ini.SetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     ini.SetBool(kSection, "bInvertLookY", m_invertLookY);
+    ini.SetBool(kSection, "bCrashReportUpload", m_crashReportUpload);
     ini.SetString(kSection, "PreferredRenderer", RendererBackendName(m_preferredRenderer));
 }
 

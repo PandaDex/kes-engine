@@ -41,6 +41,7 @@ struct EngineApp
     bool platformInitialized = false;
     World world = {};
     bool running = false;
+    int exitCode = 0;                 // non-zero after a fatal runtime error
     unsigned long long prevProcessCpu = 0;
     unsigned long long prevCounter = 0;
     double performanceFrequency = 0.0;
@@ -56,6 +57,7 @@ struct EngineApp
     bool showMouseCursor = true;      // for GameAndUI / UIOnly
     IntPoint rendererSize = {};       // last backbuffer size handed to the renderer
     unsigned long long frameDeadline = 0;   // frame limiter, performance counter ticks
+    int debugFrameCount = 0;          // -debug-gpu-fault
 };
 
 bool EngineStart(EngineApp& app);

@@ -31,6 +31,10 @@ add_library(engine STATIC
     "render_backend.h"
     "render_backend.cpp"
     "render_common.cpp"
+    "build_info.h"
+    "build_info.cpp"
+    "crash_reporter.h"
+    "crash_reporter.cpp"
     "command_line.h"
     "command_line.cpp"
     "ini_file.h"
@@ -136,6 +140,34 @@ target_sources(engine PRIVATE
 target_include_directories(engine PRIVATE "${KES_RMLUI_BACKENDS_DIR}")
 target_compile_definitions(engine PRIVATE RMLUI_SDL_VERSION_MAJOR=3)
 target_link_libraries(engine PUBLIC RmlUi::RmlUi)
+
+# Crash reporting (KES_CRASH_REPORTER, cmake/KesCrash.cmake)
+kes_target_crash_reporter(engine)
+if(TARGET sentry::sentry)
+    set(_kes_crash_reporter 1)
+else()
+    set(_kes_crash_reporter 0)
+endif()
+set_source_files_properties("crash_reporter.cpp" PROPERTIES COMPILE_DEFINITIONS
+    "KES_CRASH_REPORTER=${_kes_crash_reporter};KES_CRASH_DSN=\"${KES_CRASH_DSN}\"")
+
+# Build identity (version, commit), refreshed on every build.
+find_package(Git QUIET)
+set(_kes_build_info_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_custom_target(kes_build_info
+    COMMAND "${CMAKE_COMMAND}"
+        "-DOUT=${_kes_build_info_dir}/kes_build_info.h"
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DGIT=${GIT_EXECUTABLE}"
+        "-DNAME=${KES_PROJECT_NAME}"
+        "-DVERSION=${KES_PROJECT_VERSION}"
+        "-DCONFIG=$<CONFIG>"
+        "-DPLATFORM=${KES_PLATFORM}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/KesBuildInfo.cmake"
+    BYPRODUCTS "${_kes_build_info_dir}/kes_build_info.h"
+    VERBATIM)
+add_dependencies(engine kes_build_info)
+target_include_directories(engine PRIVATE "${_kes_build_info_dir}")
 
 # Profiler (KES_PROFILING, cmake/KesProfiler.cmake)
 kes_target_profiler(engine)

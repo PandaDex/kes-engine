@@ -136,6 +136,10 @@ public:
     virtual void RenderUi(const UiDrawList &drawList) = 0;
 
     virtual void Present() = 0;
+
+    // Non-empty once the GPU failed for good (device lost, submit failed).
+    // Further rendering calls are ignored; the engine reports it and exits.
+    virtual const std::string &GetFatalError() const = 0;
 };
 
 const char *RendererBackendName(RendererBackend backend);
