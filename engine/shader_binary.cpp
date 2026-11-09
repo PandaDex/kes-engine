@@ -5,7 +5,12 @@ namespace
 {
     const char* StageSuffix(ShaderStage stage)
     {
-        return stage == ShaderStage::Vertex ? "vs" : "ps";
+        switch (stage)
+        {
+        case ShaderStage::Vertex: return "vs";
+        case ShaderStage::Compute: return "cs";
+        default: return "ps";
+        }
     }
 
     const char* BackendExtension(RendererBackend backend)

@@ -7,8 +7,16 @@ Both renderer backends (Vulkan and D3D11) draw the same way. The backend-indepen
 1. **Shadow maps**: depth passes for the sun cascades and the local shadow slices (see below).
 2. **Scene**: HDR (RGBA16F) with MSAA, at the internal render resolution (window size × `ResolutionScale`). The sky draws first, then opaque objects grouped by material and front to back, then transparent objects back to front. Objects outside the view are culled by bounding sphere. Animated (skinned) models are not culled.
 3. **Resolve**: the multisampled scene into a single-sample HDR image.
-4. **Tonemap** (`engine/shaders/blit.slang`): exposure (`SceneState::exposure`), the ACES filmic curve, sRGB encoding and a slight dither, drawn into the backbuffer.
-5. **UI**: drawn in display space on top.
+4. **Tonemap** (`engine/shaders/blit.slang`): exposure (`SceneState::exposure`), the ACES filmic curve, sRGB encoding and a slight dither, drawn into the backbuffer. With post anti-aliasing it draws into an RGBA8 image at the render resolution instead.
+5. **Post anti-aliasing** (optional, see below): CMAA2 on that image, then `engine/shaders/present.slang` draws it into the backbuffer, either as a plain copy or with FXAA.
+6. **UI**: drawn in display space on top.
+
+## Anti-aliasing
+
+`AntiAliasing` sets the MSAA sample count. `PostAntiAliasing` (`Off`, `FXAA`, `CMAA2`) works on the final tonemapped image. It is independent of MSAA, and the two can be combined. Both post modes run at the render resolution before the upscale to the window, and the UI is not affected.
+
+- **FXAA**: FXAA 3.11 quality (preset 29), one fullscreen pass that also writes the backbuffer. It is cheap and smooths every high-contrast edge, but it softens texture detail and text in the scene a little.
+- **CMAA2**: Intel's Conservative Morphological AA 2.3 (`engine/shaders/cmaa2.slang`, Apache 2.0, ported with small changes listed in its header). It runs as four compute shaders with indirect dispatch: edges, shape candidates, blending and the deferred color apply. It changes far fewer pixels than FXAA and keeps the image sharper. It needs compute on the graphics queue; otherwise, and if its shaders fail to load, post AA stays off and a message is logged.
 
 ## Materials (metallic / roughness PBR)
 
@@ -67,7 +75,7 @@ The source is the `SkyboxEntity` gradient (without the sun disc, which a directi
 
 ## Settings
 
-`config/DefaultGameSettings.ini` / `GameSettings`: `ShadowQuality`, `AntiAliasing` (MSAA samples 1/2/4/8), `AnisotropicFiltering` (1-16), `ShadowDistance`, `ResolutionScale`. They are applied live with `ApplySettings` (`IRenderer::SetGraphicsOptions`). Unsupported values are clamped to what the GPU supports.
+`config/DefaultGameSettings.ini` / `GameSettings`: `ShadowQuality`, `AntiAliasing` (MSAA samples 1/2/4/8), `PostAntiAliasing` (`Off` / `FXAA` / `CMAA2`, `GameSettings::SetPostAntiAliasing`), `AnisotropicFiltering` (1-16), `ShadowDistance`, `ResolutionScale`. They are applied live with `ApplySettings` (`IRenderer::SetGraphicsOptions`). Unsupported values are clamped to what the GPU supports.
 
 ## Custom material shaders
 

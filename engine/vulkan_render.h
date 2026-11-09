@@ -25,6 +25,8 @@ namespace tracy { class VkCtx; }
 //
 // Frame: shadow depth passes (sun cascades + local lights) -> HDR scene pass
 // (RGBA16F, MSAA with resolve) -> tonemap into the swapchain image -> UI.
+// With post AA: tonemap into an RGBA8 target -> CMAA2 (compute) -> present
+// (copy or FXAA) into the swapchain image -> UI.
 //
 // Descriptor sets of mesh pipelines:
 //   set 0  SceneCB, ModelCB (dynamic), MaterialCB (dynamic)
@@ -258,6 +260,35 @@ struct Renderer
     VkShaderModule tonemapVS = VK_NULL_HANDLE;
     VkShaderModule tonemapPS = VK_NULL_HANDLE;
     VkPipeline tonemapPipeline = VK_NULL_HANDLE;
+
+    // Post anti-aliasing (FXAA / CMAA2): tonemap into ldrColor (RGBA8, render
+    // resolution, sRGB encoded), CMAA2 in place, present.slang to the backbuffer.
+    bool postAAAvailable = false;              // pipelines created; otherwise post AA stays off
+    PostAntiAliasing postAA = PostAntiAliasing::Off;   // what the scene targets were created for
+    VkRenderPass ldrRenderPass = VK_NULL_HANDLE;
+    VkPipeline tonemapLdrPipeline = VK_NULL_HANDLE;
+    VkShaderModule presentVS = VK_NULL_HANDLE;
+    VkShaderModule presentPS = VK_NULL_HANDLE;
+    VkPipeline presentPipeline = VK_NULL_HANDLE;   // tonemapPipelineLayout
+    GPUTexture ldrColor = {};
+    VkFramebuffer ldrFramebuffer = VK_NULL_HANDLE;
+    VkDescriptorSet presentDescriptorSet = VK_NULL_HANDLE;
+
+    // CMAA2 (cmaa2*.slang): edges, ProcessCandidates and DeferredApply with indirect dispatch.
+    static constexpr int kCmaa2PassCount = 4;   // edges, dispatch args, process candidates, deferred apply
+    static constexpr int kCmaa2BufferCount = 5;   // shape candidates, blend locations, blend items, control, indirect args
+    VkDescriptorSetLayout cmaa2SetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout cmaa2PipelineLayout = VK_NULL_HANDLE;
+    VkShaderModule cmaa2Shaders[kCmaa2PassCount] = {};
+    VkPipeline cmaa2Pipelines[kCmaa2PassCount] = {};
+    GPUTexture cmaa2Edges = {};   // R32_UINT, two pixels per texel
+    GPUTexture cmaa2Heads = {};   // R32_UINT, one per 2x2 quad
+    VkBuffer cmaa2Buffers[kCmaa2BufferCount] = {};
+    VkDeviceMemory cmaa2BufferMemory[kCmaa2BufferCount] = {};
+    VkDescriptorSet cmaa2DescriptorSet = VK_NULL_HANDLE;
+    uint32_t cmaa2GroupsX = 0;
+    uint32_t cmaa2GroupsY = 0;
+    bool cmaa2NeedsInit = false;   // clear the counters, move the images to GENERAL
 
     // UI pass (ui.slang): premultiplied alpha, scissor per draw, drawn inside
     // the backbuffer pass after the tonemap.

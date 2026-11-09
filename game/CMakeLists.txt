@@ -24,6 +24,3 @@ kes_add_game(game
     CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content"
     CONFIG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/config"
     GDK_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/platform/gdk")
-
-
-add_compile_definitions("K_STRUCT(...)=" "K_ENUM(...)=")

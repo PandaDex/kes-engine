@@ -48,6 +48,30 @@ namespace
         return fallback;
     }
 
+    const char *PostAntiAliasingToString(PostAntiAliasing mode)
+    {
+        switch (mode)
+        {
+        case PostAntiAliasing::FXAA:
+            return "FXAA";
+        case PostAntiAliasing::CMAA2:
+            return "CMAA2";
+        default:
+            return "Off";
+        }
+    }
+
+    PostAntiAliasing PostAntiAliasingFromString(const std::string &text, PostAntiAliasing fallback)
+    {
+        if (SDL_strcasecmp(text.c_str(), "Off") == 0 || SDL_strcasecmp(text.c_str(), "None") == 0 || text == "0")
+            return PostAntiAliasing::Off;
+        if (SDL_strcasecmp(text.c_str(), "FXAA") == 0 || text == "1")
+            return PostAntiAliasing::FXAA;
+        if (SDL_strcasecmp(text.c_str(), "CMAA2") == 0 || text == "2")
+            return PostAntiAliasing::CMAA2;
+        return fallback;
+    }
+
     // Values that are actually applied: saved settings plus command line overrides.
     struct EffectiveVideoMode
     {
@@ -151,6 +175,7 @@ GraphicsOptions GameSettings::GetGraphicsOptions() const
 {
     GraphicsOptions options;
     options.msaaSamples = m_msaaSamples;
+    options.postAntiAliasing = m_postAntiAliasing;
     options.shadowQuality = m_shadowQuality;
     options.anisotropy = m_anisotropy;
     options.shadowDistance = m_shadowDistance;
@@ -289,6 +314,7 @@ void GameSettings::SetToDefaults()
     m_crashReportUpload = false;
     m_shadowQuality = ShadowQuality::High;
     m_msaaSamples = 4;
+    m_postAntiAliasing = PostAntiAliasing::Off;
     m_anisotropy = 8;
     m_shadowDistance = 60.0f;
 }
@@ -335,6 +361,7 @@ void GameSettings::ValidateSettings()
     };
     m_shadowQuality = static_cast<ShadowQuality>(std::clamp(static_cast<int>(m_shadowQuality), 0, 3));
     m_msaaSamples = m_msaaSamples >= 8 ? 8 : m_msaaSamples >= 4 ? 4 : m_msaaSamples >= 2 ? 2 : 1;
+    m_postAntiAliasing = static_cast<PostAntiAliasing>(std::clamp(static_cast<int>(m_postAntiAliasing), 0, 2));
     m_anisotropy = std::clamp(m_anisotropy, 1, 16);
     if (!std::isfinite(m_shadowDistance))
         m_shadowDistance = 60.0f;
@@ -378,6 +405,7 @@ void GameSettings::ReadFromIni(const IniFile &ini)
     m_resolutionScale = ini.GetFloat(kSection, "ResolutionScale", m_resolutionScale);
     m_shadowQuality = static_cast<ShadowQuality>(ini.GetInt(kSection, "ShadowQuality", static_cast<int>(m_shadowQuality)));
     m_msaaSamples = ini.GetInt(kSection, "AntiAliasing", m_msaaSamples);
+    m_postAntiAliasing = PostAntiAliasingFromString(ini.GetString(kSection, "PostAntiAliasing"), m_postAntiAliasing);
     m_anisotropy = ini.GetInt(kSection, "AnisotropicFiltering", m_anisotropy);
     m_shadowDistance = ini.GetFloat(kSection, "ShadowDistance", m_shadowDistance);
     m_mouseSensitivity = ini.GetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
@@ -407,6 +435,7 @@ void GameSettings::WriteToIni(IniFile &ini) const
     ini.SetFloat(kSection, "ResolutionScale", m_resolutionScale);
     ini.SetInt(kSection, "ShadowQuality", static_cast<int>(m_shadowQuality));
     ini.SetInt(kSection, "AntiAliasing", m_msaaSamples);
+    ini.SetString(kSection, "PostAntiAliasing", PostAntiAliasingToString(m_postAntiAliasing));
     ini.SetInt(kSection, "AnisotropicFiltering", m_anisotropy);
     ini.SetFloat(kSection, "ShadowDistance", m_shadowDistance);
     ini.SetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);

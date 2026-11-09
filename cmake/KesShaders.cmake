@@ -6,7 +6,8 @@
 #   foo.slang -> foo.vs.spv, foo.ps.spv     (Vulkan / SPIR-V)
 #                foo.vs.dxbc, foo.ps.dxbc   (D3D11 / DXBC SM 5.0)
 #
-# Entry points: [shader("vertex")] vsMain and [shader("fragment")] psMain.
+# Entry points: [shader("vertex")] vsMain, [shader("fragment")] psMain and
+# [shader("compute")] csMain (-> foo.cs.spv / foo.cs.dxbc).
 # Files without entry points (e.g. kes_common.slang) are treated as include
 # files and only trigger recompiles of the shaders around them.
 #
@@ -103,7 +104,7 @@ function(kes_add_slang_shaders name)
     file(GLOB_RECURSE _existing_outputs "${ARG_OUTPUT_DIR}/*.spv" "${ARG_OUTPUT_DIR}/*.dxbc")
     foreach(_out IN LISTS _existing_outputs)
         file(RELATIVE_PATH _rel "${ARG_OUTPUT_DIR}" "${_out}")
-        string(REGEX REPLACE "\\.(vs|ps)\\.(spv|dxbc)$" "" _rel_base "${_rel}")
+        string(REGEX REPLACE "\\.(vs|ps|cs)\\.(spv|dxbc)$" "" _rel_base "${_rel}")
         if(NOT _rel_base IN_LIST _expected_bases)
             file(REMOVE "${_out}")
             message(STATUS "Slang: removed stale ${_rel}")

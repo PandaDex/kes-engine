@@ -7,6 +7,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include "file_paths.h"
 #include "animation_pose.h"
 #include "scene.h"
@@ -31,6 +32,8 @@ namespace kes::vk
 using render::Matrix4;
 
 static constexpr VkFormat kSceneColorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+// Post AA input/output: tonemapped, sRGB encoded by the shader (UNORM for storage image use).
+static constexpr VkFormat kLdrColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
 struct RenderVertex
 {
@@ -1216,17 +1219,19 @@ static bool CreateDescriptorPool(Renderer& r)
 {
     // Material sets (5 images each) are allocated per unique texture set, UI
     // sets per UI texture, the rest a few per frame in flight.
-    VkDescriptorPoolSize poolSizes[5] = {};
+    VkDescriptorPoolSize poolSizes[7] = {};
     poolSizes[0] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8 };
     poolSizes[1] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8 };
     poolSizes[2] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 };
     poolSizes[3] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16 };
     poolSizes[4] = { VK_DESCRIPTOR_TYPE_SAMPLER, 16 };
+    poolSizes[5] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 };    // CMAA2
+    poolSizes[6] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16 };  // CMAA2
 
     VkDescriptorPoolCreateInfo poolInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.maxSets = 4096 + 16;
-    poolInfo.poolSizeCount = 5;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes));
     poolInfo.pPoolSizes = poolSizes;
 
     VK_CHECK_RET(vkCreateDescriptorPool(r.device, &poolInfo, nullptr, &r.descriptorPool), "vkCreateDescriptorPool", false);
@@ -1409,8 +1414,153 @@ static VkDeviceSize AcquireDynamicSlot(GPUDynamicRingBuffer& ring, VkDeviceSize 
 
 // Render targets
 
+static void DestroyPostAATargets(Renderer& r)
+{
+    for (VkDescriptorSet* set : { &r.presentDescriptorSet, &r.cmaa2DescriptorSet })
+    {
+        if (*set) { vkFreeDescriptorSets(r.device, r.descriptorPool, 1, set); *set = VK_NULL_HANDLE; }
+    }
+    if (r.ldrFramebuffer) { vkDestroyFramebuffer(r.device, r.ldrFramebuffer, nullptr); r.ldrFramebuffer = VK_NULL_HANDLE; }
+    DestroyGPUTexture(r, r.ldrColor);
+    DestroyGPUTexture(r, r.cmaa2Edges);
+    DestroyGPUTexture(r, r.cmaa2Heads);
+    for (int i = 0; i < Renderer::kCmaa2BufferCount; ++i)
+        DestroyBuffer(r, r.cmaa2Buffers[i], r.cmaa2BufferMemory[i]);
+    r.postAA = PostAntiAliasing::Off;
+}
+
+static bool CreateColorImage(Renderer& r, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage, GPUTexture& out)
+{
+    ImageDesc desc;
+    desc.width = width;
+    desc.height = height;
+    desc.format = format;
+    desc.usage = usage;
+    if (!CreateImage(r, desc, out.image, out.memory))
+        return false;
+    out.view = CreateImageView(r, out.image, format, VK_IMAGE_ASPECT_COLOR_BIT);
+    return out.view != VK_NULL_HANDLE;
+}
+
+static bool CreateCmaa2Targets(Renderer& r, uint32_t width, uint32_t height)
+{
+    // An edges group covers 28x28 pixels (14x14 quads inside a one quad border).
+    // The edge and list head images cover every group, so the edges pass never
+    // writes out of bounds.
+    r.cmaa2GroupsX = (width + 27) / 28;
+    r.cmaa2GroupsY = (height + 27) / 28;
+    const uint32_t quadsX = r.cmaa2GroupsX * 14;
+    const uint32_t quadsY = r.cmaa2GroupsY * 14;
+    if (!CreateColorImage(r, quadsX, quadsY * 2, VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_STORAGE_BIT, r.cmaa2Edges) ||
+        !CreateColorImage(r, quadsX, quadsY, VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_STORAGE_BIT, r.cmaa2Heads))
+        return false;
+
+    // Sizes from Intel's reference integration; the shaders drop what does not fit.
+    const VkDeviceSize pixels = static_cast<VkDeviceSize>(width) * height;
+    const VkDeviceSize sizes[Renderer::kCmaa2BufferCount] = {
+        std::max<VkDeviceSize>(pixels / 4, 1) * sizeof(uint32_t),         // shape candidates
+        std::max<VkDeviceSize>((pixels + 3) / 6, 1) * sizeof(uint32_t),   // blend locations
+        std::max<VkDeviceSize>(pixels / 2, 1) * sizeof(uint32_t) * 2,     // blend items (uint2)
+        16 * sizeof(uint32_t),                                            // control counters
+        4 * sizeof(uint32_t) };                                           // indirect dispatch args
+    for (int i = 0; i < Renderer::kCmaa2BufferCount; ++i)
+    {
+        VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        if (i == 3)
+            usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (i == 4)
+            usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        if (!CreateBuffer(r, sizes[i], usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, r.cmaa2Buffers[i], r.cmaa2BufferMemory[i]))
+            return false;
+    }
+
+    r.cmaa2DescriptorSet = AllocateDescriptorSet(r, r.cmaa2SetLayout);
+    if (!r.cmaa2DescriptorSet)
+        return false;
+
+    // Bindings match the [[vk::binding]]s in cmaa2.slang.
+    const VkDescriptorImageInfo images[4] = {
+        { VK_NULL_HANDLE, r.ldrColor.view, VK_IMAGE_LAYOUT_GENERAL },
+        { VK_NULL_HANDLE, r.cmaa2Edges.view, VK_IMAGE_LAYOUT_GENERAL },
+        { VK_NULL_HANDLE, r.cmaa2Heads.view, VK_IMAGE_LAYOUT_GENERAL },
+        { VK_NULL_HANDLE, r.ldrColor.view, VK_IMAGE_LAYOUT_GENERAL } };
+    const uint32_t imageBindings[4] = { 0, 1, 5, 8 };
+    const VkDescriptorType imageTypes[4] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE };
+    VkDescriptorBufferInfo buffers[Renderer::kCmaa2BufferCount] = {};
+    const uint32_t bufferBindings[Renderer::kCmaa2BufferCount] = { 2, 3, 4, 6, 7 };
+
+    VkWriteDescriptorSet writes[4 + Renderer::kCmaa2BufferCount] = {};
+    for (int i = 0; i < 4; ++i)
+    {
+        writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        writes[i].dstSet = r.cmaa2DescriptorSet;
+        writes[i].dstBinding = imageBindings[i];
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = imageTypes[i];
+        writes[i].pImageInfo = &images[i];
+    }
+    for (int i = 0; i < Renderer::kCmaa2BufferCount; ++i)
+    {
+        buffers[i] = { r.cmaa2Buffers[i], 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet& write = writes[4 + i];
+        write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = r.cmaa2DescriptorSet;
+        write.dstBinding = bufferBindings[i];
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &buffers[i];
+    }
+    vkUpdateDescriptorSets(r.device, static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
+    r.cmaa2NeedsInit = true;
+    return true;
+}
+
+// Non-fatal: on failure post AA stays off.
+static void CreatePostAATargets(Renderer& r)
+{
+    const PostAntiAliasing mode = r.options.postAntiAliasing;
+    if (mode == PostAntiAliasing::Off || !r.postAAAvailable || r.ldrFramebuffer)
+        return;
+
+    const uint32_t width = static_cast<uint32_t>(std::max(r.renderWidth, 1));
+    const uint32_t height = static_cast<uint32_t>(std::max(r.renderHeight, 1));
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (mode == PostAntiAliasing::CMAA2)
+        usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+
+    bool ok = CreateColorImage(r, width, height, kLdrColorFormat, usage, r.ldrColor);
+    if (ok)
+    {
+        VkFramebufferCreateInfo fbInfo = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+        fbInfo.renderPass = r.ldrRenderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &r.ldrColor.view;
+        fbInfo.width = width;
+        fbInfo.height = height;
+        fbInfo.layers = 1;
+        ok = vkCreateFramebuffer(r.device, &fbInfo, nullptr, &r.ldrFramebuffer) == VK_SUCCESS;
+    }
+    if (ok)
+    {
+        r.presentDescriptorSet = AllocateTextureDescriptorSet(r, r.ldrColor.view, r.texSetLayout);
+        ok = r.presentDescriptorSet != VK_NULL_HANDLE;
+    }
+    if (ok && mode == PostAntiAliasing::CMAA2)
+        ok = CreateCmaa2Targets(r, width, height);
+
+    if (!ok)
+    {
+        EngineLog("Creating the post anti-aliasing targets failed; post AA is off.");
+        DestroyPostAATargets(r);
+        return;
+    }
+    r.postAA = mode;
+}
+
 static void DestroySceneTargets(Renderer& r)
 {
+    DestroyPostAATargets(r);
     if (r.tonemapDescriptorSet)
     {
         vkFreeDescriptorSets(r.device, r.descriptorPool, 1, &r.tonemapDescriptorSet);
@@ -1475,7 +1625,10 @@ static bool CreateSceneTargets(Renderer& r)
     VK_CHECK_RET(vkCreateFramebuffer(r.device, &fbInfo, nullptr, &r.sceneFramebuffer), "vkCreateFramebuffer (scene)", false);
 
     r.tonemapDescriptorSet = AllocateTextureDescriptorSet(r, r.sceneColorView, r.texSetLayout);
-    return r.tonemapDescriptorSet != VK_NULL_HANDLE;
+    if (!r.tonemapDescriptorSet)
+        return false;
+    CreatePostAATargets(r);
+    return true;
 }
 
 static void DestroyRenderTargets(Renderer& r)
@@ -1902,6 +2055,234 @@ static bool CreateTonemapPipeline(Renderer& r)
     r.tonemapPipeline = CreateFullscreenTrianglePipeline(r, r.tonemapVS, r.tonemapPS, r.tonemapPipelineLayout, r.backbufferRenderPass,
                                                          false, VK_SAMPLE_COUNT_1_BIT);
     return r.tonemapPipeline != VK_NULL_HANDLE;
+}
+
+// Tonemap target for post AA. Stored bottom-up like the scene (flipped
+// viewport), so the present pass ends upright like the plain tonemap.
+static bool CreateLdrRenderPass(Renderer& r)
+{
+    VkAttachmentDescription color = {};
+    color.format = kLdrColorFormat;
+    color.samples = VK_SAMPLE_COUNT_1_BIT;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkSubpassDescription subpass = {};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    VkSubpassDependency dependencies[2] = {};
+    // Previous frame's present read and CMAA2 access of the target (WAR / WAW).
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+    VkRenderPassCreateInfo passInfo = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    passInfo.attachmentCount = 1;
+    passInfo.pAttachments = &color;
+    passInfo.subpassCount = 1;
+    passInfo.pSubpasses = &subpass;
+    passInfo.dependencyCount = 2;
+    passInfo.pDependencies = dependencies;
+    VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &r.ldrRenderPass), "vkCreateRenderPass (ldr)", false);
+    return true;
+}
+
+static bool CreateCmaa2Pipelines(Renderer& r)
+{
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(r.physicalDevice, &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(r.physicalDevice, &familyCount, families.data());
+    if (r.graphicsQueueFamily >= familyCount || !(families[r.graphicsQueueFamily].queueFlags & VK_QUEUE_COMPUTE_BIT))
+    {
+        EngineLog("CMAA2 unavailable: the graphics queue does not support compute.");
+        return false;
+    }
+
+    VkDescriptorSetLayoutBinding bindings[9] = {};
+    for (uint32_t i = 0; i < 9; ++i)
+    {
+        bindings[i].binding = i;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    }
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;   // color output
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;   // edges
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;   // blend list heads
+    bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;   // color input
+    VkDescriptorSetLayoutCreateInfo layoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    layoutInfo.bindingCount = 9;
+    layoutInfo.pBindings = bindings;
+    VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &layoutInfo, nullptr, &r.cmaa2SetLayout), "vkCreateDescriptorSetLayout (cmaa2)", false);
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &r.cmaa2SetLayout;
+    VK_CHECK_RET(vkCreatePipelineLayout(r.device, &pipelineLayoutInfo, nullptr, &r.cmaa2PipelineLayout), "vkCreatePipelineLayout (cmaa2)", false);
+
+    const char* sources[Renderer::kCmaa2PassCount] = { kEngineShaderCmaa2Edges, kEngineShaderCmaa2DispatchArgs,
+                                                       kEngineShaderCmaa2ProcessCandidates, kEngineShaderCmaa2DeferredApply };
+    for (int i = 0; i < Renderer::kCmaa2PassCount; ++i)
+    {
+        r.cmaa2Shaders[i] = CreateShaderModuleFromBinary(r, sources[i], ShaderStage::Compute);
+        if (!r.cmaa2Shaders[i])
+            return false;
+        VkComputePipelineCreateInfo info = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+        info.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+        info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        info.stage.module = r.cmaa2Shaders[i];
+        info.stage.pName = "main";
+        info.layout = r.cmaa2PipelineLayout;
+        VK_CHECK_RET(vkCreateComputePipelines(r.device, VK_NULL_HANDLE, 1, &info, nullptr, &r.cmaa2Pipelines[i]),
+                     "vkCreateComputePipelines (cmaa2)", false);
+    }
+    return true;
+}
+
+static void DestroyPostAAPipelines(Renderer& r)
+{
+    for (int i = 0; i < Renderer::kCmaa2PassCount; ++i)
+    {
+        if (r.cmaa2Pipelines[i]) { vkDestroyPipeline(r.device, r.cmaa2Pipelines[i], nullptr); r.cmaa2Pipelines[i] = VK_NULL_HANDLE; }
+        if (r.cmaa2Shaders[i]) { vkDestroyShaderModule(r.device, r.cmaa2Shaders[i], nullptr); r.cmaa2Shaders[i] = VK_NULL_HANDLE; }
+    }
+    if (r.cmaa2PipelineLayout) { vkDestroyPipelineLayout(r.device, r.cmaa2PipelineLayout, nullptr); r.cmaa2PipelineLayout = VK_NULL_HANDLE; }
+    if (r.cmaa2SetLayout) { vkDestroyDescriptorSetLayout(r.device, r.cmaa2SetLayout, nullptr); r.cmaa2SetLayout = VK_NULL_HANDLE; }
+    for (VkPipeline* pipeline : { &r.tonemapLdrPipeline, &r.presentPipeline })
+    {
+        if (*pipeline) { vkDestroyPipeline(r.device, *pipeline, nullptr); *pipeline = VK_NULL_HANDLE; }
+    }
+    for (VkShaderModule* module : { &r.presentVS, &r.presentPS })
+    {
+        if (*module) { vkDestroyShaderModule(r.device, *module, nullptr); *module = VK_NULL_HANDLE; }
+    }
+    if (r.ldrRenderPass) { vkDestroyRenderPass(r.device, r.ldrRenderPass, nullptr); r.ldrRenderPass = VK_NULL_HANDLE; }
+    r.postAAAvailable = false;
+}
+
+// Non-fatal: without these pipelines post AA stays off.
+static void CreatePostAAPipelines(Renderer& r)
+{
+    bool ok = CreateLdrRenderPass(r);
+    if (ok)
+    {
+        r.tonemapLdrPipeline = CreateFullscreenTrianglePipeline(r, r.tonemapVS, r.tonemapPS, r.tonemapPipelineLayout, r.ldrRenderPass,
+                                                                false, VK_SAMPLE_COUNT_1_BIT);
+        r.presentVS = CreateShaderModuleFromBinary(r, kEngineShaderPresent, ShaderStage::Vertex);
+        r.presentPS = CreateShaderModuleFromBinary(r, kEngineShaderPresent, ShaderStage::Pixel);
+        if (r.presentVS && r.presentPS)
+            r.presentPipeline = CreateFullscreenTrianglePipeline(r, r.presentVS, r.presentPS, r.tonemapPipelineLayout,
+                                                                 r.backbufferRenderPass, false, VK_SAMPLE_COUNT_1_BIT);
+        ok = r.tonemapLdrPipeline && r.presentPipeline && CreateCmaa2Pipelines(r);
+    }
+    if (!ok)
+    {
+        EngineLog("Post anti-aliasing (FXAA / CMAA2) is unavailable on this device.");
+        DestroyPostAAPipelines(r);
+        return;
+    }
+    r.postAAAvailable = true;
+}
+
+static void GlobalBarrier(VkCommandBuffer cmd, VkPipelineStageFlags srcStages, VkAccessFlags srcAccess,
+                          VkPipelineStageFlags dstStages, VkAccessFlags dstAccess)
+{
+    VkMemoryBarrier barrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstAccessMask = dstAccess;
+    vkCmdPipelineBarrier(cmd, srcStages, dstStages, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+}
+
+static VkImageMemoryBarrier ColorImageBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                                              VkAccessFlags srcAccess, VkAccessFlags dstAccess)
+{
+    VkImageMemoryBarrier barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstAccessMask = dstAccess;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    return barrier;
+}
+
+// CMAA2 on ldrColor, in place. Leaves it in SHADER_READ_ONLY_OPTIMAL for the present pass.
+static void RecordCmaa2(Renderer& r)
+{
+    VkCommandBuffer cmd = r.commandBuffer;
+    const VkPipelineStageFlags computeStages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+    const VkAccessFlags computeAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+
+    if (r.cmaa2NeedsInit)
+    {
+        vkCmdFillBuffer(cmd, r.cmaa2Buffers[3], 0, VK_WHOLE_SIZE, 0);
+        const VkImageMemoryBarrier images[2] = {
+            ColorImageBarrier(r.cmaa2Edges.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT),
+            ColorImageBarrier(r.cmaa2Heads.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT) };
+        VkMemoryBarrier fill = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+        fill.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        fill.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &fill, 0, nullptr, 2, images);
+        r.cmaa2NeedsInit = false;
+    }
+
+    // Tonemap output -> storage image; the previous frame's CMAA2 work on the
+    // shared buffers (counters reset, indirect args read) is ordered too.
+    {
+        VkMemoryBarrier previous = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+        previous.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        previous.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        const VkImageMemoryBarrier color = ColorImageBarrier(r.ldrColor.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                                                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | computeStages, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &previous, 0, nullptr, 1, &color);
+    }
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.cmaa2PipelineLayout, 0, 1, &r.cmaa2DescriptorSet, 0, nullptr);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.cmaa2Pipelines[0]);
+    vkCmdDispatch(cmd, r.cmaa2GroupsX, r.cmaa2GroupsY, 1);
+    GlobalBarrier(cmd, computeStages, VK_ACCESS_SHADER_WRITE_BIT, computeStages, computeAccess);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.cmaa2Pipelines[1]);
+    vkCmdDispatch(cmd, 2, 1, 1);
+    GlobalBarrier(cmd, computeStages, VK_ACCESS_SHADER_WRITE_BIT, computeStages, computeAccess);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.cmaa2Pipelines[2]);
+    vkCmdDispatchIndirect(cmd, r.cmaa2Buffers[4], 0);
+    GlobalBarrier(cmd, computeStages, VK_ACCESS_SHADER_WRITE_BIT, computeStages, computeAccess);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.cmaa2Pipelines[1]);
+    vkCmdDispatch(cmd, 1, 2, 1);
+    GlobalBarrier(cmd, computeStages, VK_ACCESS_SHADER_WRITE_BIT, computeStages, computeAccess);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.cmaa2Pipelines[3]);
+    vkCmdDispatchIndirect(cmd, r.cmaa2Buffers[4], 0);
+
+    const VkImageMemoryBarrier toRead = ColorImageBarrier(r.ldrColor.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                          VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &toRead);
 }
 
 // UI pipeline (ui.slang): UiVertex input, premultiplied alpha, dynamic scissor.
@@ -2389,6 +2770,11 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
         CreateShadowTargets(r);   // non-fatal: shadows stay off on failure
     if (ok)
     {
+        CreatePostAAPipelines(r);   // non-fatal: post AA stays off on failure
+        CreatePostAATargets(r);
+    }
+    if (ok)
+    {
         r.uiWhiteDescriptorSet = AllocateTextureDescriptorSet(r, r.whiteTexture.view, r.uiTexSetLayout);
         ok = r.uiWhiteDescriptorSet != VK_NULL_HANDLE;
     }
@@ -2486,6 +2872,11 @@ void RendererSetGraphicsOptions(Renderer& r, const GraphicsOptions& options)
         if (!CreateSceneRenderPass(r) || !CreateSceneTargets(r) || !CreateSkyPipeline(r))
             EngineLog("Recreating the scene pass for the new MSAA setting failed.");
     }
+    else if (previous.postAntiAliasing != options.postAntiAliasing)
+    {
+        DestroyPostAATargets(r);
+        CreatePostAATargets(r);
+    }
     if (previous.shadowQuality != options.shadowQuality)
         CreateShadowTargets(r);
     if (previous.anisotropy != options.anisotropy)
@@ -2493,8 +2884,9 @@ void RendererSetGraphicsOptions(Renderer& r, const GraphicsOptions& options)
         DestroyMaterialSets(r);
         CreateMaterialSampler(r);
     }
-    EngineLogf("Graphics options: MSAA %dx, shadows %d, anisotropy %dx.", static_cast<int>(r.msaaSamples),
-               static_cast<int>(options.shadowQuality), std::clamp(options.anisotropy, 1, 16));
+    static const char* const kPostAANames[] = { "off", "FXAA", "CMAA2" };
+    EngineLogf("Graphics options: MSAA %dx, post AA %s, shadows %d, anisotropy %dx.", static_cast<int>(r.msaaSamples),
+               kPostAANames[static_cast<int>(r.postAA)], static_cast<int>(options.shadowQuality), std::clamp(options.anisotropy, 1, 16));
 }
 
 // Per-draw dynamic constant writes
@@ -3031,7 +3423,40 @@ void RendererBeginBackbufferOverlay(Renderer& r)
     }
 
     r.haveSwapchainImage = true;
-    KES_VK_GPU_ZONE(r, "Tonemap");
+
+    render::TonemapCBData tonemap = {};
+    tonemap.params[0] = r.exposure;
+    tonemap.params[1] = 1.0f / 255.0f;
+
+    // Post AA: tonemap into ldrColor at render resolution, CMAA2 in place,
+    // then present.slang (FXAA or copy) replaces the tonemap draw below.
+    const bool postAA = r.postAA != PostAntiAliasing::Off && r.ldrFramebuffer;
+    if (postAA)
+    {
+        {
+            KES_VK_GPU_ZONE(r, "Tonemap");
+            VkRenderPassBeginInfo ldrBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+            ldrBegin.renderPass = r.ldrRenderPass;
+            ldrBegin.framebuffer = r.ldrFramebuffer;
+            ldrBegin.renderArea.extent = { static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight) };
+            vkCmdBeginRenderPass(r.commandBuffer, &ldrBegin, VK_SUBPASS_CONTENTS_INLINE);
+            const VkViewport ldrViewport = BuildFlippedViewport(static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight));
+            vkCmdSetViewport(r.commandBuffer, 0, 1, &ldrViewport);
+            vkCmdSetScissor(r.commandBuffer, 0, 1, &ldrBegin.renderArea);
+            vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapLdrPipeline);
+            vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &r.tonemapDescriptorSet, 0, nullptr);
+            vkCmdPushConstants(r.commandBuffer, r.tonemapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemap), &tonemap);
+            vkCmdDraw(r.commandBuffer, 3, 1, 0, 0);
+            vkCmdEndRenderPass(r.commandBuffer);
+        }
+        if (r.postAA == PostAntiAliasing::CMAA2)
+        {
+            KES_VK_GPU_ZONE(r, "CMAA2");
+            RecordCmaa2(r);
+        }
+    }
+
+    KES_VK_GPU_ZONE(r, "Present");
 
     VkClearValue clearValue = {};
     clearValue.color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
@@ -3049,12 +3474,22 @@ void RendererBeginBackbufferOverlay(Renderer& r)
     const VkRect2D scissor = { { 0, 0 }, r.swapchainExtent };
     vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
 
-    render::TonemapCBData tonemap = {};
-    tonemap.params[0] = r.exposure;
-    tonemap.params[1] = 1.0f / 255.0f;
-    vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipeline);
-    vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &r.tonemapDescriptorSet, 0, nullptr);
-    vkCmdPushConstants(r.commandBuffer, r.tonemapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemap), &tonemap);
+    if (postAA)
+    {
+        render::TonemapCBData present = {};   // present.slang: same 16-byte push constant layout
+        present.params[0] = 1.0f / static_cast<float>(r.renderWidth);
+        present.params[1] = 1.0f / static_cast<float>(r.renderHeight);
+        present.params[2] = r.postAA == PostAntiAliasing::FXAA ? 1.0f : 0.0f;
+        vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.presentPipeline);
+        vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &r.presentDescriptorSet, 0, nullptr);
+        vkCmdPushConstants(r.commandBuffer, r.tonemapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(present), &present);
+    }
+    else
+    {
+        vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipeline);
+        vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &r.tonemapDescriptorSet, 0, nullptr);
+        vkCmdPushConstants(r.commandBuffer, r.tonemapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemap), &tonemap);
+    }
     vkCmdDraw(r.commandBuffer, 3, 1, 0, 0);
 
     // Left open for RendererRenderUi; RendererPresent ends it.
@@ -3350,6 +3785,7 @@ void RendererShutdown(Renderer& r)
     DestroyGPUShaderProgram(r, r.shadowProgram);
 
     DestroyRenderTargets(r);
+    DestroyPostAAPipelines(r);
     for (VkRenderPass* pass : { &r.sceneRenderPass, &r.shadowRenderPass, &r.backbufferRenderPass })
     {
         if (*pass) { vkDestroyRenderPass(r.device, *pass, nullptr); *pass = VK_NULL_HANDLE; }

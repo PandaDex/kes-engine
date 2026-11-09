@@ -93,6 +93,8 @@ public:
     // MSAA samples: 1 (off), 2, 4 or 8; clamped to what the GPU supports.
     void SetAntiAliasingSamples(int samples) { m_msaaSamples = samples; }
     int GetAntiAliasingSamples() const { return m_msaaSamples; }
+    void SetPostAntiAliasing(PostAntiAliasing mode) { m_postAntiAliasing = mode; }
+    PostAntiAliasing GetPostAntiAliasing() const { return m_postAntiAliasing; }
     void SetAnisotropicFiltering(int level) { m_anisotropy = level; }
     int GetAnisotropicFiltering() const { return m_anisotropy; }
     void SetShadowDistance(float meters) { m_shadowDistance = meters; }
@@ -197,6 +199,7 @@ private:
     RendererBackend m_preferredRenderer = RendererBackend::Auto;
     ShadowQuality m_shadowQuality = ShadowQuality::High; // ShadowQuality (0-3)
     int m_msaaSamples = 4;                 // AntiAliasing
+    PostAntiAliasing m_postAntiAliasing = PostAntiAliasing::Off; // PostAntiAliasing
     int m_anisotropy = 8;                  // AnisotropicFiltering
     float m_shadowDistance = 60.0f;        // ShadowDistance
     float m_mouseSensitivity = 1.0f;       // MouseSensitivity

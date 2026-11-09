@@ -31,18 +31,29 @@ enum class ShadowQuality
     High = 3,     // 4 cascades at 2048, 12 local slices at 1024
 };
 
+// Post-process anti-aliasing on the tonemapped image, independent of MSAA
+// (the two can be combined).
+enum class PostAntiAliasing
+{
+    Off = 0,
+    FXAA = 1,    // FXAA 3.11 quality, single fullscreen pass
+    CMAA2 = 2,   // Intel CMAA2 (compute), sharper and more conservative than FXAA
+};
+
 // Player-facing quality options (GameSettings), applied with
 // IRenderer::SetGraphicsOptions. Unsupported values are clamped by the backend.
 struct GraphicsOptions
 {
     int msaaSamples = 4;   // 1, 2, 4 or 8
+    PostAntiAliasing postAntiAliasing = PostAntiAliasing::Off;
     ShadowQuality shadowQuality = ShadowQuality::High;
     int anisotropy = 8;    // 1-16
     float shadowDistance = 60.0f;   // meters covered by the sun cascades
 
     bool operator==(const GraphicsOptions &other) const
     {
-        return msaaSamples == other.msaaSamples && shadowQuality == other.shadowQuality &&
+        return msaaSamples == other.msaaSamples && postAntiAliasing == other.postAntiAliasing &&
+               shadowQuality == other.shadowQuality &&
                anisotropy == other.anisotropy && shadowDistance == other.shadowDistance;
     }
     bool operator!=(const GraphicsOptions &other) const { return !(*this == other); }
@@ -118,7 +129,7 @@ public:
     virtual void SetVSync(bool enabled) = 0;
     virtual bool IsVSyncEnabled() const = 0;
 
-    // MSAA, shadow quality, texture filtering. May recreate render targets.
+    // MSAA, post AA, shadow quality, texture filtering. May recreate render targets.
     virtual void SetGraphicsOptions(const GraphicsOptions &options) = 0;
     virtual GraphicsOptions GetGraphicsOptions() const = 0;
 

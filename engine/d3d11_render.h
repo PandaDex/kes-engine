@@ -28,6 +28,8 @@ namespace tracy { class D3D11Ctx; }
 //
 // Frame: shadow depth passes (sun cascades + local lights) -> HDR scene pass
 // (RGBA16F, MSAA) -> resolve -> tonemap to the backbuffer -> UI.
+// With post AA: tonemap into an RGBA8 target -> CMAA2 (compute) -> present
+// (copy or FXAA) to the backbuffer -> UI.
 
 class Scene;
 class AssetSystem;
@@ -135,7 +137,31 @@ struct Renderer
 
     ID3D11VertexShader* tonemapVS = nullptr;
     ID3D11PixelShader* tonemapPS = nullptr;
-    ID3D11Buffer* tonemapCB = nullptr;
+    ID3D11Buffer* tonemapCB = nullptr;   // also present.slang's constants
+
+    // Post anti-aliasing (FXAA / CMAA2): tonemap into ldrColor (RGBA8, render
+    // resolution, sRGB encoded), CMAA2 in place, present.slang to the backbuffer.
+    bool postAAAvailable = false;                      // shaders loaded; otherwise post AA stays off
+    PostAntiAliasing postAA = PostAntiAliasing::Off;   // what the targets were created for
+    ID3D11VertexShader* presentVS = nullptr;
+    ID3D11PixelShader* presentPS = nullptr;
+    ID3D11Texture2D* ldrColor = nullptr;
+    ID3D11RenderTargetView* ldrColorRTV = nullptr;
+    ID3D11ShaderResourceView* ldrColorSRV = nullptr;
+    ID3D11UnorderedAccessView* ldrColorUAV = nullptr;   // CMAA2 only
+
+    // CMAA2 (cmaa2*.slang): edges, ProcessCandidates and DeferredApply with indirect dispatch.
+    static constexpr int kCmaa2PassCount = 4;     // edges, dispatch args, process candidates, deferred apply
+    static constexpr int kCmaa2BufferCount = 5;   // shape candidates, blend locations, blend items, control, indirect args
+    ID3D11ComputeShader* cmaa2Shaders[kCmaa2PassCount] = {};
+    ID3D11Texture2D* cmaa2Edges = nullptr;        // R32_UINT, two pixels per texel
+    ID3D11UnorderedAccessView* cmaa2EdgesUAV = nullptr;
+    ID3D11Texture2D* cmaa2Heads = nullptr;        // R32_UINT, one per 2x2 quad
+    ID3D11UnorderedAccessView* cmaa2HeadsUAV = nullptr;
+    ID3D11Buffer* cmaa2Buffers[kCmaa2BufferCount] = {};
+    ID3D11UnorderedAccessView* cmaa2BufferUAVs[kCmaa2BufferCount] = {};
+    UINT cmaa2GroupsX = 0;
+    UINT cmaa2GroupsY = 0;
 
     // UI pass (ui.slang): premultiplied alpha, scissor per draw.
     ID3D11VertexShader* uiVS = nullptr;

@@ -143,8 +143,124 @@ static bool CreateShaderPairFromBinaries(
 
 // Render targets
 
+static void DestroyPostAATargets(Renderer& r)
+{
+    SafeRelease(r.ldrColorUAV);
+    SafeRelease(r.ldrColorSRV);
+    SafeRelease(r.ldrColorRTV);
+    SafeRelease(r.ldrColor);
+    SafeRelease(r.cmaa2EdgesUAV);
+    SafeRelease(r.cmaa2Edges);
+    SafeRelease(r.cmaa2HeadsUAV);
+    SafeRelease(r.cmaa2Heads);
+    for (int i = 0; i < Renderer::kCmaa2BufferCount; ++i)
+    {
+        SafeRelease(r.cmaa2BufferUAVs[i]);
+        SafeRelease(r.cmaa2Buffers[i]);
+    }
+    r.postAA = PostAntiAliasing::Off;
+}
+
+static bool CreateUintTexture(Renderer& r, UINT width, UINT height, ID3D11Texture2D** outTexture, ID3D11UnorderedAccessView** outUAV)
+{
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R32_UINT;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    return SUCCEEDED(r.device->CreateTexture2D(&desc, nullptr, outTexture)) &&
+           SUCCEEDED(r.device->CreateUnorderedAccessView(*outTexture, nullptr, outUAV));
+}
+
+static bool CreateCmaa2Targets(Renderer& r, UINT width, UINT height)
+{
+    // An edges group covers 28x28 pixels (14x14 quads inside a one quad border).
+    r.cmaa2GroupsX = (width + 27) / 28;
+    r.cmaa2GroupsY = (height + 27) / 28;
+    const UINT quadsX = r.cmaa2GroupsX * 14;
+    const UINT quadsY = r.cmaa2GroupsY * 14;
+    if (!CreateUintTexture(r, quadsX, quadsY * 2, &r.cmaa2Edges, &r.cmaa2EdgesUAV) ||
+        !CreateUintTexture(r, quadsX, quadsY, &r.cmaa2Heads, &r.cmaa2HeadsUAV))
+        return false;
+
+    // Sizes from Intel's reference integration; the shaders drop what does not fit.
+    const UINT pixels = width * height;
+    struct BufferSpec { UINT elements; UINT stride; bool raw; };
+    const BufferSpec specs[Renderer::kCmaa2BufferCount] = {
+        { std::max(pixels / 4, 1u), 4, false },         // shape candidates
+        { std::max((pixels + 3) / 6, 1u), 4, false },   // blend locations
+        { std::max(pixels / 2, 1u), 8, false },         // blend items (uint2)
+        { 16, 4, true },                                // control counters
+        { 4, 4, true } };                               // indirect dispatch args
+    const uint32_t zeros[16] = {};
+    for (int i = 0; i < Renderer::kCmaa2BufferCount; ++i)
+    {
+        D3D11_BUFFER_DESC desc = {};
+        desc.ByteWidth = specs[i].elements * specs[i].stride;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+        desc.MiscFlags = specs[i].raw ? D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS : D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        if (i == 4)
+            desc.MiscFlags |= D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+        desc.StructureByteStride = specs[i].raw ? 0 : specs[i].stride;
+        D3D11_SUBRESOURCE_DATA init = { zeros, 0, 0 };
+        if (FAILED(r.device->CreateBuffer(&desc, specs[i].raw ? &init : nullptr, &r.cmaa2Buffers[i])))
+            return false;
+
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uav = {};
+        uav.Format = specs[i].raw ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_UNKNOWN;
+        uav.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        uav.Buffer.NumElements = specs[i].elements;
+        uav.Buffer.Flags = specs[i].raw ? D3D11_BUFFER_UAV_FLAG_RAW : 0;
+        if (FAILED(r.device->CreateUnorderedAccessView(r.cmaa2Buffers[i], &uav, &r.cmaa2BufferUAVs[i])))
+            return false;
+    }
+    return true;
+}
+
+// Non-fatal: on failure post AA stays off.
+static void CreatePostAATargets(Renderer& r)
+{
+    const PostAntiAliasing mode = r.options.postAntiAliasing;
+    if (mode == PostAntiAliasing::Off || !r.postAAAvailable || r.ldrColor)
+        return;
+
+    const UINT width = static_cast<UINT>(std::max(r.renderWidth, 1));
+    const UINT height = static_cast<UINT>(std::max(r.renderHeight, 1));
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;   // sRGB encoded by the tonemap shader
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    if (mode == PostAntiAliasing::CMAA2)
+        desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+
+    bool ok = SUCCEEDED(r.device->CreateTexture2D(&desc, nullptr, &r.ldrColor)) &&
+              SUCCEEDED(r.device->CreateRenderTargetView(r.ldrColor, nullptr, &r.ldrColorRTV)) &&
+              SUCCEEDED(r.device->CreateShaderResourceView(r.ldrColor, nullptr, &r.ldrColorSRV));
+    if (ok && mode == PostAntiAliasing::CMAA2)
+        ok = SUCCEEDED(r.device->CreateUnorderedAccessView(r.ldrColor, nullptr, &r.ldrColorUAV)) &&
+             CreateCmaa2Targets(r, width, height);
+    if (!ok)
+    {
+        EngineLog("Creating the post anti-aliasing targets failed; post AA is off.");
+        DestroyPostAATargets(r);
+        return;
+    }
+    r.postAA = mode;
+}
+
 static void DestroySceneTargets(Renderer& r)
 {
+    DestroyPostAATargets(r);
     SafeRelease(r.sceneColorSRV);
     SafeRelease(r.sceneColorRTV);
     SafeRelease(r.sceneColor);
@@ -227,6 +343,7 @@ static bool CreateSceneTargets(Renderer& r)
         EngineLogf("Create depth target failed: 0x%08X", static_cast<unsigned>(hr));
         return false;
     }
+    CreatePostAATargets(r);
     return true;
 }
 
@@ -598,6 +715,89 @@ static bool CreatePipelines(Renderer& r)
            CreateShaderPairFromBinaries(r, kEngineShaderShadow, kEngineShaderShadow, &r.shadowVS, &r.shadowPS, nullptr) &&
            CreateShaderPairFromBinaries(r, kEngineShaderSky, kEngineShaderSky, &r.skyVS, &r.skyPS, nullptr) &&
            CreateShaderPairFromBinaries(r, kEngineShaderBlit, kEngineShaderBlit, &r.tonemapVS, &r.tonemapPS, nullptr);
+}
+
+static void DestroyPostAAShaders(Renderer& r)
+{
+    for (ID3D11ComputeShader*& shader : r.cmaa2Shaders)
+        SafeRelease(shader);
+    SafeRelease(r.presentPS);
+    SafeRelease(r.presentVS);
+    r.postAAAvailable = false;
+}
+
+// Non-fatal: without these shaders post AA stays off.
+static void CreatePostAAShaders(Renderer& r)
+{
+    bool ok = CreateShaderPairFromBinaries(r, kEngineShaderPresent, kEngineShaderPresent, &r.presentVS, &r.presentPS, nullptr);
+    const char* sources[Renderer::kCmaa2PassCount] = { kEngineShaderCmaa2Edges, kEngineShaderCmaa2DispatchArgs,
+                                                       kEngineShaderCmaa2ProcessCandidates, kEngineShaderCmaa2DeferredApply };
+    for (int i = 0; ok && i < Renderer::kCmaa2PassCount; ++i)
+    {
+        std::vector<uint8_t> bytes;
+        std::string error;
+        if (!LoadCompiledShader(sources[i], ShaderStage::Compute, RendererBackend::D3D11, bytes, &error))
+        {
+            EngineLogf("%s", error.c_str());
+            ok = false;
+        }
+        else if (FAILED(r.device->CreateComputeShader(bytes.data(), bytes.size(), nullptr, &r.cmaa2Shaders[i])))
+        {
+            EngineLogf("CreateComputeShader failed for %s", sources[i]);
+            ok = false;
+        }
+    }
+    if (!ok)
+    {
+        EngineLog("Post anti-aliasing (FXAA / CMAA2) is unavailable.");
+        DestroyPostAAShaders(r);
+        return;
+    }
+    r.postAAAvailable = true;
+}
+
+// CMAA2 on ldrColor, in place. D3D11 unbinds an SRV whose resource is bound
+// as a UAV, so the color is read through t0 in the first passes and written
+// through u0 only in the last one.
+static void RunCmaa2(Renderer& r)
+{
+    ID3D11DeviceContext* ctx = r.context;
+    ID3D11UnorderedAccessView* uavs[8] = { nullptr, r.cmaa2EdgesUAV, r.cmaa2BufferUAVs[0], r.cmaa2BufferUAVs[1],
+                                           r.cmaa2BufferUAVs[2], r.cmaa2HeadsUAV, r.cmaa2BufferUAVs[3], r.cmaa2BufferUAVs[4] };
+    ID3D11Buffer* indirectArgs = r.cmaa2Buffers[4];
+    auto setUavs = [&](bool color, bool indirect)
+    {
+        uavs[0] = color ? r.ldrColorUAV : nullptr;
+        uavs[7] = indirect ? r.cmaa2BufferUAVs[4] : nullptr;   // not bound while it feeds DispatchIndirect
+        ctx->CSSetUnorderedAccessViews(0, 8, uavs, nullptr);
+    };
+
+    ctx->CSSetShaderResources(0, 1, &r.ldrColorSRV);
+    setUavs(false, false);
+    ctx->CSSetShader(r.cmaa2Shaders[0], nullptr, 0);
+    ctx->Dispatch(r.cmaa2GroupsX, r.cmaa2GroupsY, 1);
+
+    setUavs(false, true);
+    ctx->CSSetShader(r.cmaa2Shaders[1], nullptr, 0);
+    ctx->Dispatch(2, 1, 1);
+
+    setUavs(false, false);
+    ctx->CSSetShader(r.cmaa2Shaders[2], nullptr, 0);
+    ctx->DispatchIndirect(indirectArgs, 0);
+
+    setUavs(false, true);
+    ctx->CSSetShader(r.cmaa2Shaders[1], nullptr, 0);
+    ctx->Dispatch(1, 2, 1);
+
+    ID3D11ShaderResourceView* nullSRV = nullptr;
+    ctx->CSSetShaderResources(0, 1, &nullSRV);
+    setUavs(true, false);
+    ctx->CSSetShader(r.cmaa2Shaders[3], nullptr, 0);
+    ctx->DispatchIndirect(indirectArgs, 0);
+
+    ID3D11UnorderedAccessView* nullUavs[8] = {};
+    ctx->CSSetUnorderedAccessViews(0, 8, nullUavs, nullptr);
+    ctx->CSSetShader(nullptr, nullptr, 0);
 }
 
 static GPUShaderProgram* GetOrCompileShaderProgram(Renderer& r, ShaderHandle handle, const AssetSystem& assets)
@@ -1100,6 +1300,8 @@ bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
         RendererShutdown(r);
         return false;
     }
+    CreatePostAAShaders(r);   // non-fatal: post AA stays off on failure
+    CreatePostAATargets(r);
 
     EngineLogf("Renderer initialized successfully. window=%dx%d render=%dx%d, MSAA %dx.", r.windowWidth, r.windowHeight,
                r.renderWidth, r.renderHeight, r.msaaSamples);
@@ -1176,12 +1378,18 @@ void RendererSetGraphicsOptions(Renderer& r, const GraphicsOptions& options)
         if (!CreateSceneTargets(r))
             SetFatalError(r, "Creating the scene targets", r.device->GetDeviceRemovedReason());
     }
+    else if (previous.postAntiAliasing != options.postAntiAliasing)
+    {
+        DestroyPostAATargets(r);
+        CreatePostAATargets(r);
+    }
     if (previous.shadowQuality != options.shadowQuality)
         CreateShadowTargets(r);
     if (previous.anisotropy != options.anisotropy)
         CreateMaterialSampler(r);
-    EngineLogf("Graphics options: MSAA %dx, shadows %d, anisotropy %dx.", r.msaaSamples, static_cast<int>(options.shadowQuality),
-               std::clamp(options.anisotropy, 1, 16));
+    static const char* const kPostAANames[] = { "off", "FXAA", "CMAA2" };
+    EngineLogf("Graphics options: MSAA %dx, post AA %s, shadows %d, anisotropy %dx.", r.msaaSamples,
+               kPostAANames[static_cast<int>(r.postAA)], static_cast<int>(options.shadowQuality), std::clamp(options.anisotropy, 1, 16));
 }
 
 // Per-draw constants
@@ -1549,7 +1757,44 @@ void RendererBeginBackbufferOverlay(Renderer& r)
 {
     if (!r.rtv)
         return;
-    KES_D3D11_GPU_ZONE(r, "Tonemap");
+    ID3D11ShaderResourceView* nullSRV = nullptr;
+    const float blendFactor[4] = { 0, 0, 0, 0 };
+    render::TonemapCBData tonemap = {};
+    tonemap.params[0] = r.exposure;
+    tonemap.params[1] = 1.0f / 255.0f;
+
+    // Post AA: tonemap into ldrColor at render resolution, CMAA2 in place,
+    // then present.slang (FXAA or copy) replaces the tonemap draw below.
+    const bool postAA = r.postAA != PostAntiAliasing::Off && r.ldrColorRTV && r.sceneColorSRV;
+    if (postAA)
+    {
+        {
+            KES_D3D11_GPU_ZONE(r, "Tonemap");
+            r.context->OMSetRenderTargets(1, &r.ldrColorRTV, nullptr);
+            D3D11_VIEWPORT ldrViewport = { 0.0f, 0.0f, static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight), 0.0f, 1.0f };
+            r.context->RSSetViewports(1, &ldrViewport);
+            UploadDynamic(r, r.tonemapCB, &tonemap, sizeof(tonemap));
+            BindFullscreenTriangle(r);
+            r.context->VSSetShader(r.tonemapVS, nullptr, 0);
+            r.context->PSSetShader(r.tonemapPS, nullptr, 0);
+            r.context->PSSetConstantBuffers(0, 1, &r.tonemapCB);
+            r.context->PSSetShaderResources(0, 1, &r.sceneColorSRV);
+            r.context->PSSetSamplers(0, 1, &r.linearClampSampler);
+            r.context->RSSetState(r.solidNoCullRS);
+            r.context->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
+            r.context->OMSetDepthStencilState(nullptr, 0);
+            r.context->Draw(3, 0);
+            r.context->PSSetShaderResources(0, 1, &nullSRV);
+            r.context->OMSetRenderTargets(0, nullptr, nullptr);
+        }
+        if (r.postAA == PostAntiAliasing::CMAA2)
+        {
+            KES_D3D11_GPU_ZONE(r, "CMAA2");
+            RunCmaa2(r);
+        }
+    }
+
+    KES_D3D11_GPU_ZONE(r, "Present");
     const float black[4] = { 0, 0, 0, 1 };
     r.context->OMSetRenderTargets(1, &r.rtv, nullptr);
     r.context->ClearRenderTargetView(r.rtv, black);
@@ -1559,24 +1804,32 @@ void RendererBeginBackbufferOverlay(Renderer& r)
     D3D11_VIEWPORT vp = BuildPresentationViewport(r);
     r.context->RSSetViewports(1, &vp);
 
-    render::TonemapCBData tonemap = {};
-    tonemap.params[0] = r.exposure;
-    tonemap.params[1] = 1.0f / 255.0f;
-    UploadDynamic(r, r.tonemapCB, &tonemap, sizeof(tonemap));
-
     BindFullscreenTriangle(r);
-    r.context->VSSetShader(r.tonemapVS, nullptr, 0);
-    r.context->PSSetShader(r.tonemapPS, nullptr, 0);
+    if (postAA)
+    {
+        render::TonemapCBData present = {};   // present.slang: same 16-byte constant layout
+        present.params[0] = 1.0f / static_cast<float>(r.renderWidth);
+        present.params[1] = 1.0f / static_cast<float>(r.renderHeight);
+        present.params[2] = r.postAA == PostAntiAliasing::FXAA ? 1.0f : 0.0f;
+        UploadDynamic(r, r.tonemapCB, &present, sizeof(present));
+        r.context->VSSetShader(r.presentVS, nullptr, 0);
+        r.context->PSSetShader(r.presentPS, nullptr, 0);
+        r.context->PSSetShaderResources(0, 1, &r.ldrColorSRV);
+    }
+    else
+    {
+        UploadDynamic(r, r.tonemapCB, &tonemap, sizeof(tonemap));
+        r.context->VSSetShader(r.tonemapVS, nullptr, 0);
+        r.context->PSSetShader(r.tonemapPS, nullptr, 0);
+        r.context->PSSetShaderResources(0, 1, &r.sceneColorSRV);
+    }
     r.context->PSSetConstantBuffers(0, 1, &r.tonemapCB);
-    r.context->PSSetShaderResources(0, 1, &r.sceneColorSRV);
     r.context->PSSetSamplers(0, 1, &r.linearClampSampler);
     r.context->RSSetState(r.solidNoCullRS);
-    const float blendFactor[4] = { 0, 0, 0, 0 };
     r.context->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
     r.context->OMSetDepthStencilState(nullptr, 0);
     r.context->Draw(3, 0);
 
-    ID3D11ShaderResourceView* nullSRV = nullptr;
     r.context->PSSetShaderResources(0, 1, &nullSRV);
 }
 
@@ -1804,6 +2057,7 @@ void RendererShutdown(Renderer& r)
     SafeRelease(r.materialCB);
     SafeRelease(r.tonemapCB);
 
+    DestroyPostAAShaders(r);
     SafeRelease(r.tonemapPS);
     SafeRelease(r.tonemapVS);
     SafeRelease(r.skyPS);
