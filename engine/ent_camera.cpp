@@ -88,3 +88,18 @@ void CameraEntity::OnDestroy()
     if (game && game->IsCameraEntityActive(GetEntityId()))
         game->SetActiveCameraEntity(0);
 }
+
+const MapScriptPorts& CameraEntity::GetMapScriptPorts() const
+{
+    static const MapScriptPorts ports = { { { "Activate" }, { "Deactivate" } }, {} };
+    return ports;
+}
+
+bool CameraEntity::AcceptInput(const std::string& input, const MapScriptCall& call)
+{
+    (void)call;
+    if (input != "Activate" && input != "Deactivate")
+        return false;
+    SetActive(input == "Activate");
+    return true;
+}

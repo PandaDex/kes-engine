@@ -1,0 +1,6 @@
+{
+  "files.associations": {
+    "*.imap": "json",
+    "*.kproject": "ini"
+  }
+}

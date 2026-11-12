@@ -1,8 +1,9 @@
 #pragma once
 #include "camera.h"
 #include "entity.h"
+#include "map_script.h"
 
-class CameraEntity : public Entity
+class CameraEntity : public Entity, public IMapScriptable
 {
 public:
     CameraEntity() = default;
@@ -15,6 +16,8 @@ public:
     void SetActive(bool active);
     bool WantsToBeActiveOnStart() const { return activateOnStart; }
     bool IsActive() const;
+    const MapScriptPorts& GetMapScriptPorts() const override;
+    bool AcceptInput(const std::string& input, const MapScriptCall& call) override;
 
     void SetPlayerControlled(bool enabled);
     bool IsPlayerControlled() const { return playerControlled; }

@@ -146,3 +146,18 @@ void FogVolumeEntity::OnDestroy()
     if (sceneFog.ownerEntityId == GetEntityId())
         sceneFog = {};
 }
+
+const MapScriptPorts& FogVolumeEntity::GetMapScriptPorts() const
+{
+    static const MapScriptPorts ports = { { { "Enable" }, { "Disable" }, { "Toggle" } }, {} };
+    return ports;
+}
+
+bool FogVolumeEntity::AcceptInput(const std::string& input, const MapScriptCall& call)
+{
+    (void)call;
+    if (input != "Enable" && input != "Disable" && input != "Toggle")
+        return false;
+    fogData.active = input == "Enable" || (input == "Toggle" && !fogData.active);
+    return true;
+}

@@ -1,5 +1,4 @@
-Project
-{
+Project {
     Name="KES"
     AssetRoot="content"
     StartupMap="maps/startup.fmapc"

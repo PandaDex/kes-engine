@@ -12,6 +12,7 @@ struct InputState;
 struct Camera;
 class Entity;
 class CameraEntity;
+class MapScriptSystem;
 
 struct GameContext
 {
@@ -24,6 +25,7 @@ struct GameContext
     // drawing physics bodies smoothly at any frame rate.
     float fixedStepAlpha = 1.0f;
     EntityManager* entities = nullptr;
+    MapScriptSystem* mapScript = nullptr;
     InputState* input = nullptr;
     Camera* mainCamera = nullptr;
     bool animationDebugEnabled = false;

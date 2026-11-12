@@ -5,25 +5,25 @@
 <Game configVersion="1">
 
   <Identity Name="@KES_GDK_IDENTITY_NAME@"
-            Publisher="@KES_GDK_PUBLISHER@"
-            Version="@KES_PROJECT_VERSION@"/>
+    Publisher="@KES_GDK_PUBLISHER@"
+    Version="@KES_PROJECT_VERSION@" />
 
   <ExecutableList>
     <Executable Name="@KES_GDK_EXECUTABLE@"
-                Id="Game"
-                TargetDeviceFamily="PC"/>
+      Id="Game"
+      TargetDeviceFamily="PC" />
   </ExecutableList>
 
   <ShellVisuals DefaultDisplayName="@KES_PROJECT_NAME@"
-                PublisherDisplayName="@KES_PROJECT_PUBLISHER@"
-                Square480x480Logo="Square480x480Logo.png"
-                Square150x150Logo="Square150x150Logo.png"
-                Square44x44Logo="Square44x44Logo.png"
-                Description="@KES_PROJECT_NAME@"
-                ForegroundText="light"
-                BackgroundColor="#141428"
-                SplashScreenImage="SplashScreen.png"
-                StoreLogo="StoreLogo.png"/>
+    PublisherDisplayName="@KES_PROJECT_PUBLISHER@"
+    Square480x480Logo="Square480x480Logo.png"
+    Square150x150Logo="Square150x150Logo.png"
+    Square44x44Logo="Square44x44Logo.png"
+    Description="@KES_PROJECT_NAME@"
+    ForegroundText="light"
+    BackgroundColor="#141428"
+    SplashScreenImage="SplashScreen.png"
+    StoreLogo="StoreLogo.png" />
 
   <!-- Placeholders are accepted for local builds; set the real values from
        Partner Center (KES_GDK_MSA_APP_ID / KES_GDK_TITLE_ID) before submission. -->
@@ -34,7 +34,7 @@
     <ProcessorArchitecture>x64</ProcessorArchitecture>
     <!-- MSVC runtime (the engine links /MD); installed with the package. -->
     <DependencyList>
-      <KnownDependency Name="VC14"/>
+      <KnownDependency Name="VC14" />
     </DependencyList>
   </DesktopRegistration>
 

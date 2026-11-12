@@ -16,6 +16,7 @@
 #include "engine_configuration.h"
 #include "input.h"
 #include "ent_light.h"
+#include "ent_logic.h"
 #include "ent_player.h"
 #include "ent_player_start.h"
 #include "ent_fog_volume.h"
@@ -138,6 +139,7 @@ void World::Update(float dt)
     {
         scene.GetFog() = {};
         entities.Update(dt);
+        mapScript.Update(dt);
         entities.DestroyPending();
     }
     if (gameContext.mainCamera)
@@ -180,7 +182,7 @@ bool World::LoadMap(const char* mapName)
 {
     KES_ZONE_FN(WORLD);
     KES_ZONE_TEXTF(WORLD, "%s", mapName ? mapName : "<null>");
-    if (entities.IsUpdating() && mapName && mapName[0])
+    if ((entities.IsUpdating() || mapScript.IsDispatching()) && mapName && mapName[0])
     {
         QueueMapLoad(mapName);
         return true;
@@ -302,6 +304,7 @@ void World::ClearLevelState()
 {
     KES_ZONE_FN(WORLD);
     entities.DestroyAll();
+    mapScript.Clear();
     collision.Clear();
     scene.Clear();
     gameContext.activeCameraEntityId = 0;   // the camera entity is gone
@@ -356,6 +359,7 @@ void World::InstantiateMap(const CompiledMap& map)
     }
 
     // Entities, created by class name. Keyvalues go through Entity::ApplyProperty.
+    std::vector<Entity*> spawned(map.entities.size(), nullptr);
     for (size_t index = 0; index < map.entities.size(); ++index)
     {
         const MapEntity& source = map.entities[index];
@@ -365,6 +369,10 @@ void World::InstantiateMap(const CompiledMap& map)
             EngineLogf("Map entity class \"%s\" is not registered; skipped.", source.className.c_str());
             continue;
         }
+        spawned[index] = entity;
+        if (source.guid.IsValid() && !entities.SetEntityGuid(*entity, source.guid))
+            EngineLogf("Map entity \"%s\" (%s) reuses GUID %s; it keeps a runtime GUID and links to it are lost.",
+                       source.name.c_str(), source.className.c_str(), source.guid.ToString().c_str());
 
         entity->Rotation = ConvertMapAngles(source.angles);
         entity->Teleport(ConvertMapPosition(source.origin));
@@ -404,11 +412,61 @@ void World::InstantiateMap(const CompiledMap& map)
             }
             entity->ApplyMapGeometry(geometry);
         }
-
-        if (!source.outputs.empty())
-            EngineLogf("Map entity \"%s\" (%s) has %zu I/O connection(s); the engine has no I/O system yet, so they are ignored.",
-                       source.name.c_str(), source.className.c_str(), source.outputs.size());
     }
+
+    LinkMapScript(map, spawned);
+}
+
+// Links are registered after every entity exists, so each can be checked against the ports
+// of both ends. Mismatches are logged but kept: ports are only a declaration.
+void World::LinkMapScript(const CompiledMap& map, const std::vector<Entity*>& spawned)
+{
+    for (size_t index = 0; index < map.entities.size(); ++index)
+    {
+        const MapEntity& source = map.entities[index];
+        Entity* entity = spawned[index];
+        if (!entity || source.outputs.empty())
+            continue;
+
+        const IMapScriptable* scriptable = dynamic_cast<const IMapScriptable*>(entity);
+        if (!scriptable)
+        {
+            EngineLogf("MapScript: %s \"%s\" has %zu link(s) but does not implement IMapScriptable; they never fire.",
+                       source.className.c_str(), source.name.c_str(), source.outputs.size());
+            continue;
+        }
+
+        for (const MapConnection& connection : source.outputs)
+        {
+            if (!scriptable->GetMapScriptPorts().HasOutput(connection.output))
+                EngineLogf("MapScript: %s \"%s\" has no output \"%s\".",
+                           source.className.c_str(), source.name.c_str(), connection.output.c_str());
+
+            Entity* target = entities.GetEntityByGuid(connection.target);
+            const IMapScriptable* targetScript = dynamic_cast<const IMapScriptable*>(target);
+            if (!target)
+                EngineLogf("MapScript: %s \"%s\" output \"%s\" targets %s, which is not in the map.",
+                           source.className.c_str(), source.name.c_str(), connection.output.c_str(),
+                           connection.target.ToString().c_str());
+            else if (!targetScript)
+                EngineLogf("MapScript: the target of %s \"%s\" output \"%s\" takes no inputs.",
+                           source.className.c_str(), source.name.c_str(), connection.output.c_str());
+            else if (!targetScript->GetMapScriptPorts().HasInput(connection.input))
+                EngineLogf("MapScript: the target of %s \"%s\" output \"%s\" has no input \"%s\".",
+                           source.className.c_str(), source.name.c_str(), connection.output.c_str(), connection.input.c_str());
+
+            MapScriptLink link;
+            link.output = connection.output;
+            link.target = connection.target;
+            link.input = connection.input;
+            link.parameter = connection.param;
+            link.delay = connection.delay;
+            link.once = connection.once;
+            mapScript.AddLink(entity->GetGuid(), std::move(link));
+        }
+    }
+    if (const size_t count = mapScript.GetLinkCount())
+        EngineLogf("MapScript: %zu link(s) loaded.", count);
 }
 
 void World::RegisterBuiltInEntityClasses()
@@ -425,6 +483,8 @@ void World::RegisterBuiltInEntityClasses()
     // A static mesh is a model without animation; same entity, clearer name in the editor.
     RegisterBuiltInEntityClass<SkinnedModelEntity>(entityFactories, "StaticMeshEntity");
     RegisterBuiltInEntityClass<BrushEntity>(entityFactories, "BrushEntity");
+    RegisterBuiltInEntityClass<LogicRelayEntity>(entityFactories, "LogicRelayEntity");
+    RegisterBuiltInEntityClass<LogicAutoEntity>(entityFactories, "LogicAutoEntity");
 
     entityFactories.Register(kBuiltInPlayerClassName,
                              [](EntityManager& manager, GameContext& context) -> Entity*
@@ -510,5 +570,7 @@ void World::SyncContext()
     gameContext.audio = &audio;
     gameContext.collision = &collision;
     gameContext.entities = &entities;
+    gameContext.mapScript = &mapScript;
+    mapScript.SetGameContext(&gameContext);
     scene.SetEntityManager(&entities);
 }

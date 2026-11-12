@@ -107,3 +107,21 @@ bool AudioSourceEntity::ApplyProperty(const std::string& name, const std::string
 
     return Entity::ApplyProperty(name, value);
 }
+
+const MapScriptPorts& AudioSourceEntity::GetMapScriptPorts() const
+{
+    static const MapScriptPorts ports = { { { "Play" }, { "Stop" }, { "Toggle" } }, {} };
+    return ports;
+}
+
+bool AudioSourceEntity::AcceptInput(const std::string& input, const MapScriptCall& call)
+{
+    (void)call;
+    if (input == "Play" || (input == "Toggle" && !IsPlaying()))
+        Play();
+    else if (input == "Stop" || input == "Toggle")
+        Stop();
+    else
+        return false;
+    return true;
+}

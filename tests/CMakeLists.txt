@@ -9,6 +9,7 @@ add_executable(kes_tests
     "test_input.cpp"
     "test_logger.cpp"
     "test_map_file.cpp"
+    "test_map_script.cpp"
     "test_pak.cpp"
     "test_physics_world.cpp"
     "test_scene.cpp"

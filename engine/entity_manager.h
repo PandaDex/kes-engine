@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include "entity.h"
@@ -24,6 +25,10 @@ public:
         std::unique_ptr<T> entity = std::make_unique<T>(std::forward<Args>(args)...);
         entity->SetGameContext(game);
         entity->entityId = nextEntityId++;
+        do
+            entity->guid = Guid::Generate();
+        while (byGuid.count(entity->guid) != 0);
+        byGuid[entity->guid] = entity.get();
         T* ptr = entity.get();
         pendingStart.push_back(ptr);
         entities.push_back(std::move(entity));
@@ -131,6 +136,16 @@ public:
         return nullptr;
     }
 
+    Entity* GetEntityByGuid(const Guid& guid) const
+    {
+        const auto it = byGuid.find(guid);
+        return it == byGuid.end() || it->second->IsPendingDestroy() ? nullptr : it->second;
+    }
+
+    // Gives an entity the GUID it was saved with (map loading). False, and the GUID is left
+    // unchanged, when `guid` is invalid or belongs to another live entity.
+    bool SetEntityGuid(Entity& entity, const Guid& guid);
+
     template<typename Func>
     void ForEachActive(Func&& func)
     {
@@ -156,6 +171,7 @@ public:
 private:
     std::vector<std::unique_ptr<Entity>> entities;
     std::vector<Entity*> pendingStart;
+    std::unordered_map<Guid, Entity*, GuidHash> byGuid;
     GameContext* game = nullptr;
     uint64_t nextEntityId = 1;
     bool updating = false;

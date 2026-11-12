@@ -8,7 +8,7 @@
 
 namespace
 {
-    constexpr uint32_t kMapVersion = 2;
+    constexpr uint32_t kMapVersion = 3;
     constexpr float kDegToRad = 3.14159265358979f / 180.0f;
 
     Vector3 ReadVec3(BinaryReader& r)
@@ -17,6 +17,13 @@ namespace
         const float y = r.f32();
         const float z = r.f32();
         return { x, y, z };
+    }
+
+    Guid ReadGuid(BinaryReader& r)
+    {
+        uint8_t bytes[16] = {};
+        r.bytes(bytes, sizeof(bytes));
+        return Guid::FromBytes(bytes);
     }
 
     bool ReadMaterials(BinaryReader& r, CompiledMap& map)
@@ -76,6 +83,7 @@ namespace
         {
             e.className = r.string();
             e.name = r.string();
+            e.guid = ReadGuid(r);
             e.solid = r.u8() != 0;
             e.origin = ReadVec3(r);
             e.angles = ReadVec3(r);
@@ -93,13 +101,13 @@ namespace
             }
 
             const uint32_t outputCount = r.u32();
-            if (!r.count(outputCount, 21))
+            if (!r.count(outputCount, 33))
                 return false;
             e.outputs.resize(outputCount);
             for (MapConnection& c : e.outputs)
             {
                 c.output = r.string();
-                c.target = r.string();
+                c.target = ReadGuid(r);
                 c.input = r.string();
                 c.param = r.string();
                 c.delay = r.f32();

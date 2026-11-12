@@ -20,3 +20,14 @@ target_link_libraries(model-import-core PRIVATE engine windowscodecs ole32 mfpla
 target_include_directories(model-import-core PRIVATE
     "../../../external/cgltf"
 )
+
+# Command-line front end; the Forge editor runs it to import assets.
+add_executable(model-importer
+    "main.cpp"
+)
+
+if (CMAKE_VERSION VERSION_GREATER 3.12)
+  set_property(TARGET model-importer PROPERTY CXX_STANDARD 20)
+endif()
+
+target_link_libraries(model-importer PRIVATE model-import-core engine)

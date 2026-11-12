@@ -89,13 +89,13 @@ Maps are built in the Forge editor (`tools/forgeMapEditor`), a Hammer-style brus
 - `.fmap`: the editable source map (JSON). Keep it next to the compiled map; it isn't packaged.
 - `.fmapc`: the compiled map the engine loads (`World::LoadMap`, `map_file.h`). Build it with **F9** in the editor or `forge --compile in.fmap out.fmapc`.
 
-`.fmapc` version 2 layout (little-endian): `FORGECMP`, u32 version, u32 flags, then chunks of `{char[4] id, u32 size, data}`. Readers skip unknown chunks, so new data can be added without breaking older engines.
+`.fmapc` version 3 layout (little-endian): `FORGECMP`, u32 version, u32 flags, then chunks of `{char[4] id, u32 size, data}`. Readers skip unknown chunks, so new data can be added without breaking older engines.
 
 | Chunk | Contents |
 | --- | --- |
 | `MATL` | material paths (content-relative `.mat`, `""` = engine default material) |
 | `GEOM` | render meshes, one per material per owner: vertices (position, normal, uv) and triangle indices |
-| `ENTS` | entities: class, name, solid flag, origin, angles, bounds, keyvalues, I/O connections |
+| `ENTS` | entities: class, name, GUID, solid flag, origin, angles, bounds, keyvalues, MapScript links (output, target GUID, input, parameter, delay, once) |
 | `BRSH` | convex collision hulls: owner, bounds, planes |
 
 Data is stored in editor space (Z-up, right-handed, editor units). World geometry is in world space; geometry and brushes owned by an entity are relative to the entity origin. The engine converts on load:
@@ -110,7 +110,7 @@ How the engine instantiates a map:
 - entities are created by class name through the entity factory (unknown classes are skipped with a warning)
 - keyvalues go to `Entity::ApplyProperty`; the entity name is added to `Tags`
 - solid entities also receive `Size` (their bounds) and `ApplyMapGeometry` (meshes and hulls); `BrushEntity` renders and collides with them
-- I/O connections are read but not used yet (the engine has no I/O system)
+- each entity keeps its editor GUID (`Entity::GetGuid`); MapScript links are registered after every entity exists (see [engine-api.md](engine-api.md#mapscript))
 
 The engine's entity classes are declared for the editor in `tools/forgeMapEditor/entities/kes.dec`.
 

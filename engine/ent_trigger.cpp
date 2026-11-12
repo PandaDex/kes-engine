@@ -6,7 +6,7 @@
 void TriggerEntity::Update(float dt)
 {
     (void)dt;
-    if (!game || !game->entities)
+    if (!game || !game->entities || !enabled)
         return;
 
     currentOverlaps.clear();
@@ -22,12 +22,19 @@ void TriggerEntity::Update(float dt)
     });
 
     for (Entity* entity : enteredEntities)
+    {
         game->ExecuteCommand(onEntityEnter, this, entity);
+        FireOutput("OnStartTouch", entity);
+    }
 
     for (uint64_t id : overlappingEntities)
     {
         if (currentOverlaps.find(id) == currentOverlaps.end())
-            game->ExecuteCommand(onEntityExit, this, game->entities->GetEntityById(id));
+        {
+            Entity* left = game->entities->GetEntityById(id);
+            game->ExecuteCommand(onEntityExit, this, left);
+            FireOutput("OnEndTouch", left);
+        }
     }
 
     overlappingEntities.swap(currentOverlaps);
@@ -44,6 +51,12 @@ bool TriggerEntity::ApplyProperty(const std::string& name, const std::string& va
     if (name == "OnEntityExit")
     {
         onEntityExit = entityprops::ParseString(value);
+        return true;
+    }
+
+    if (name == "StartDisabled")
+    {
+        enabled = !entityprops::ParseBool(value, !enabled);
         return true;
     }
 
@@ -69,4 +82,24 @@ bool TriggerEntity::IsInside(const Vector3& point) const
     return std::fabs(delta.x) <= half.x &&
         std::fabs(delta.y) <= half.y &&
         std::fabs(delta.z) <= half.z;
+}
+
+const MapScriptPorts& TriggerEntity::GetMapScriptPorts() const
+{
+    static const MapScriptPorts ports = {
+        { { "Enable" }, { "Disable" }, { "Toggle" } },
+        { { "OnStartTouch" }, { "OnEndTouch" } },
+    };
+    return ports;
+}
+
+bool TriggerEntity::AcceptInput(const std::string& input, const MapScriptCall& call)
+{
+    (void)call;
+    if (input != "Enable" && input != "Disable" && input != "Toggle")
+        return false;
+    enabled = input == "Enable" || (input == "Toggle" && !enabled);
+    if (!enabled)
+        overlappingEntities.clear();   // re-enabling fires OnStartTouch for whoever is inside
+    return true;
 }

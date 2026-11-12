@@ -128,8 +128,10 @@ bool LightEntity::ApplyProperty(const std::string& name, const std::string& valu
 
     if (name == "CastShadows")
     {
-        lightData.castShadows = entityprops::ParseBool(value, lightData.castShadows);
-        castShadowsSet = true;
+        // Empty = decide by light type in Start().
+        castShadowsSet = !entityprops::Trim(value).empty();
+        if (castShadowsSet)
+            lightData.castShadows = entityprops::ParseBool(value, lightData.castShadows);
         return true;
     }
 
@@ -148,4 +150,28 @@ void LightEntity::OnDestroy()
     {
         game->scene->RemoveLight(lightId);
     }
+}
+
+const MapScriptPorts& LightEntity::GetMapScriptPorts() const
+{
+    static const MapScriptPorts ports = {
+        { { "TurnOn" }, { "TurnOff" }, { "Toggle" }, { "SetIntensity", "float" } },
+        {},
+    };
+    return ports;
+}
+
+bool LightEntity::AcceptInput(const std::string& input, const MapScriptCall& call)
+{
+    if (input == "TurnOn" || input == "TurnOff" || input == "Toggle")
+    {
+        SetActive(input == "TurnOn" || (input == "Toggle" && !lightData.active));
+        return true;
+    }
+    if (input == "SetIntensity")
+    {
+        SetIntensity(entityprops::ParseFloat(call.value, lightData.intensity));
+        return true;
+    }
+    return false;
 }

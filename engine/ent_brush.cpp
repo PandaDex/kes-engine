@@ -154,3 +154,36 @@ void BrushEntity::OnDestroy()
     objectIds.clear();
     colliders.clear();
 }
+
+const MapScriptPorts& BrushEntity::GetMapScriptPorts() const
+{
+    static const MapScriptPorts ports = {
+        { { "Enable" }, { "Disable" }, { "Toggle" }, { "Show" }, { "Hide" },
+          { "EnableCollision" }, { "DisableCollision" } },
+        {},
+    };
+    return ports;
+}
+
+bool BrushEntity::AcceptInput(const std::string& input, const MapScriptCall& call)
+{
+    (void)call;
+    if (input == "Enable" || input == "Disable" || input == "Toggle")
+    {
+        const bool on = input == "Enable" || (input == "Toggle" && !(visible || solid));
+        SetVisible(on);
+        SetSolid(on);
+        return true;
+    }
+    if (input == "Show" || input == "Hide")
+    {
+        SetVisible(input == "Show");
+        return true;
+    }
+    if (input == "EnableCollision" || input == "DisableCollision")
+    {
+        SetSolid(input == "EnableCollision");
+        return true;
+    }
+    return false;
+}

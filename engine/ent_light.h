@@ -1,8 +1,9 @@
 #pragma once
 #include "entity.h"
+#include "map_script.h"
 #include "scene.h"
 
-class LightEntity : public Entity
+class LightEntity : public Entity, public IMapScriptable
 {
 public:
     LightEntity(LightType type = LightType::Point);
@@ -20,6 +21,8 @@ public:
     void SetRange(float range);
     void SetSpotAngle(float angle);
     void SetActive(bool active);
+    const MapScriptPorts& GetMapScriptPorts() const override;
+    bool AcceptInput(const std::string& input, const MapScriptCall& call) override;
 
     Light& GetData() { return lightData; }
     const Light& GetData() const { return lightData; }

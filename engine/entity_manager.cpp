@@ -107,6 +107,11 @@ void EntityManager::DestroyPending()
             }),
         pendingStart.end());
 
+    for (const std::unique_ptr<Entity>& entity : entities)
+    {
+        if (entity->IsPendingDestroy())
+            byGuid.erase(entity->guid);
+    }
     entities.erase(
         std::remove_if(
             entities.begin(),
@@ -116,6 +121,19 @@ void EntityManager::DestroyPending()
                 return entity->IsPendingDestroy();
             }),
         entities.end());
+}
+
+bool EntityManager::SetEntityGuid(Entity& entity, const Guid& guid)
+{
+    if (!guid.IsValid())
+        return false;
+    const auto it = byGuid.find(guid);
+    if (it != byGuid.end())
+        return it->second == &entity;
+    byGuid.erase(entity.guid);
+    entity.guid = guid;
+    byGuid[guid] = &entity;
+    return true;
 }
 
 void EntityManager::DestroyAll()
@@ -134,6 +152,7 @@ void EntityManager::DestroyAll()
     }
 
     entities.clear();
+    byGuid.clear();
     pendingStart.clear();   // entities created by OnDestroy are dropped too
     // Ids are not reset: they stay unique for the whole session, so an id kept
     // across a map change can never name a different entity.

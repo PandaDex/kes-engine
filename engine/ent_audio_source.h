@@ -1,9 +1,10 @@
 #pragma once
 #include <string>
 #include "entity.h"
+#include "map_script.h"
 #include "audio_system.h"
 
-class AudioSourceEntity : public Entity
+class AudioSourceEntity : public Entity, public IMapScriptable
 {
 public:
     AudioSourceEntity(const char* soundFile = nullptr, bool spatial = true);
@@ -26,6 +27,8 @@ public:
     void Play();
     void Stop();
     bool IsPlaying() const;
+    const MapScriptPorts& GetMapScriptPorts() const override;
+    bool AcceptInput(const std::string& input, const MapScriptCall& call) override;
 
 private:
     void OnDestroy() override;

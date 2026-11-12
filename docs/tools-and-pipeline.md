@@ -179,6 +179,8 @@ Note: with Visual Studio generators, the first build after adding or removing a 
 
 **File > Export Material** writes `materials/<name>.mat` and, when the graph drives the surface, `shaders/<name>.shader` and `shaders/<name>.slang` under the project's content folder. The shader is compiled by the next game build like any other. Graph sources (`.slangnodes`) are left out of paks.
 
+Shader Graph also opens a `.mat` directly (File > Open, or from Forge): it loads `<name>.slangnodes` from the same folder when there is one, otherwise it starts a new graph with the material's values, and Export Material then writes back to that `.mat`. Save the graph next to the material to keep its nodes.
+
 ## Map Editor: Forge
 
 `tools/forgeMapEditor` is a Qt 6 brush editor in the style of Hammer. It produces the maps the engine loads.
@@ -194,12 +196,24 @@ Workflow:
 
 1. **File > Open Project** (Ctrl+Shift+O) opens the game's `.kproject` (here `game/kes.kproject`). Forge asks for one on first start and reopens it automatically afterwards. Maps go in `<AssetRoot>/maps`, materials are listed from `<AssetRoot>/materials`, and textures resolve from `<AssetRoot>` (or `<AssetRoot>/textures`). *Tools > Set Content Directory* still works without a project.
 2. Build geometry with the Block tool and place engine entities (classes from `entities/kes.dec`).
-3. Apply materials:
-   - **Materials panel** (bottom dock): click a material to make it current; double-click applies it to the selected solids
+3. Apply materials from the **Asset Browser** (bottom dock; it shows material thumbnails and hides compiled `*_c.*` / `.fmapc` files):
+   - drag a `.mat` onto a face in the 3D view (hold Shift for the whole object) or onto an object in a 2D view; drag it onto a material field in Properties to set that field
+   - click a material to make it current; right-click > Apply to Selection applies it to the selected solids (double-click opens it in Shader Graph, see below)
    - **Material tool** (Shift+A): click a face to apply, Shift+click for the whole object, Alt+click to pick a face's material, Ctrl+click to select faces
    - **Tool Options** of the Material tool: texture scale (world units per texel), offset and rotation for the selected faces
    - new blocks use the current material
-4. Save the `.fmap` into `content/maps/`, then **F9** to build the `.fmapc` next to it.
+4. Link entities on the **Outputs** tab of Properties: pick an output, a target entity and one of its inputs (MapScript, see [engine-api.md](engine-api.md#mapscript)). Links target the entity's GUID, which it gets when placed, so renaming entities keeps them.
+5. Save the `.fmap` into `content/maps/`, then **F9** to build the `.fmapc` next to it.
+
+### Forge as the asset hub
+
+Forge also imports, creates and opens every other asset type:
+
+- **Import** (Assets > Import, Ctrl+Shift+I, the Asset Browser's *Import...* button, or drop source files on the window or the browser) runs `model-importer` in the background. Models go to `meshes/` (with a `<model>_<clip>.kanim` per glTF/FBX animation), textures to `textures/`, sounds to `sounds/`. When the Asset Browser shows a subfolder, imports go there instead. Progress and errors appear in the Console.
+- **New** (Assets > New, or the Asset Browser's *New* menu) creates assets from templates: material, material opened in Shader Graph, UI panel / menu / HUD with sample content, UI stylesheet, and an empty map.
+- **Open**: double-click an asset (or right-click > Open in ...) to open it in the program set for its type: maps in Forge, `.mat` and `.slangnodes` in Shader Graph, `.rml`/`.rcss`/shaders in VS Code with the game folder (the one holding `content/`) as the workspace (or Notepad), images and sounds in the system default app. Assets > Launch starts any of those programs on its own.
+
+The type-to-program table is `kAssetEditors` in `tools/forgeMapEditor/src/assets/AssetTypeMap.cpp` (`{"extension", "program"}`), next to the folders searched for the programs and the import rules. Templates are in `src/assets/AssetTemplates.cpp`. A program Forge can't find is asked for once and remembered.
 
 Materials are the engine's own `.mat` files under the content folder. The editor shows their `BaseColor` and `BaseTexture` (`.ktex`, `.bmp`, `.png`, `.jpg`) in the 3D view, so what you see matches the game.
 
@@ -211,7 +225,7 @@ forge --compile game/content/maps/startup.fmap game/content/maps/startup.fmapc
 
 ## Import Tool: `model-importer`
 
-`model-importer` is the current asset import CLI.
+`model-importer` is the current asset import CLI, built by the engine build as the `model-importer` target (Windows only). Forge runs it for its Import command.
 
 Usage:
 

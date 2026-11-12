@@ -300,6 +300,7 @@ Lifecycle hooks:
 Lifetime helpers:
 
 - `uint64_t GetEntityId() const`
+- `const Guid& GetGuid() const`: the editor's GUID for map entities, random for ones created at runtime
 - `bool HasTag(const std::string& tag) const`
 - `bool IsPendingDestroy() const`
 - `void Destroy()`
@@ -309,6 +310,50 @@ How entities are used today:
 - map files instantiate them by class name
 - string properties from maps are applied through `ApplyProperty`
 - they update through the world/entity manager each frame
+
+## MapScript
+
+The editor's output -> input links (Outputs tab in Forge). `map_script.h`, `World::GetMapScript()`, `game->mapScript`.
+
+An entity takes part by also implementing `IMapScriptable`:
+
+```cpp
+class DoorEntity : public Entity, public IMapScriptable
+{
+public:
+    const MapScriptPorts& GetMapScriptPorts() const override
+    {
+        static const MapScriptPorts ports = { { { "Open" }, { "Close" } }, { { "OnOpened" } } };
+        return ports;
+    }
+
+    bool AcceptInput(const std::string& input, const MapScriptCall& call) override
+    {
+        if (input == "Open") { Open(); FireOutput("OnOpened", call.activator); return true; }
+        if (input == "Close") { Close(); return true; }
+        return false;   // logged as unhandled
+    }
+};
+```
+
+- Declare the same ports as `input` / `output` lines on the class in the editor's `.dec` (`kes.dec` for built-ins) so they show up on the Outputs tab.
+- `Entity::FireOutput(name, activator, value)` queues every link of that output. Inputs are delivered in `World::Update` after entity updates, after the link's delay; an input fired while delivering waits for the next update, so link loops can't hang a frame.
+- `MapScriptCall` has the caller, the activator (e.g. the player that entered a trigger; either may be null if destroyed meanwhile) and the value: the link's parameter, or the output's value when the parameter is empty.
+- Links target GUIDs. Map entities keep the GUID they got when placed in the editor; entities created by code get a random one (`EntityManager::GetEntityByGuid`, `SetEntityGuid`). Game code can add links with `MapScriptSystem::AddLink` or send an input directly with `SendInput`.
+- Every scriptable entity also takes `Kill`. Links on entities that don't implement the interface, and unknown ports, are logged when the map loads.
+
+Built-in ports:
+
+| Class | Inputs | Outputs |
+| --- | --- | --- |
+| `TriggerEntity` | Enable, Disable, Toggle | OnStartTouch, OnEndTouch (activator = the entity) |
+| `BrushEntity` | Enable, Disable, Toggle, Show, Hide, EnableCollision, DisableCollision | |
+| `LightEntity` | TurnOn, TurnOff, Toggle, SetIntensity(float) | |
+| `AudioSourceEntity` | Play, Stop, Toggle | |
+| `CameraEntity` | Activate, Deactivate | |
+| `FogVolumeEntity` | Enable, Disable, Toggle | |
+| `LogicRelayEntity` | Trigger, Enable, Disable, Toggle | OnTrigger |
+| `LogicAutoEntity` | | OnMapSpawn |
 
 ## `CollisionWorld`
 
@@ -340,7 +385,7 @@ Important functions:
 - `FixedUpdate(float fixedDt)`
 - `DestroyPending()`
 - `DestroyAll()`
-- `GetEntityById(...)`
+- `GetEntityById(...)`, `GetEntityByGuid(...)`, `SetEntityGuid(...)`
 - `GetEntityOfClass<T>()`
 - `GetEntityOfClassWithTag<T>(...)`
 - `ForEachActive(...)`

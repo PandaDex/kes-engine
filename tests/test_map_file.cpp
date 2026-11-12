@@ -22,6 +22,11 @@ namespace
             F32(y);
             F32(z);
         }
+        void Guid16(uint8_t seed)
+        {
+            for (uint8_t i = 0; i < 16; ++i)
+                U8(static_cast<uint8_t>(seed + i));
+        }
         void Str(const std::string& value)
         {
             U32(static_cast<uint32_t>(value.size()));
@@ -39,7 +44,7 @@ namespace
     {
         Writer map;
         map.Raw("FORGECMP", 8);
-        map.U32(2);
+        map.U32(3);
         map.U32(0);
         return map;
     }
@@ -78,6 +83,7 @@ namespace
         chunk.U32(1);
         chunk.Str("trigger");
         chunk.Str("door_trigger");
+        chunk.Guid16(0x10);
         chunk.U8(1);
         chunk.Vec3(1.0f, 2.0f, 3.0f);
         chunk.Vec3(0.0f, 90.0f, 0.0f);
@@ -88,7 +94,7 @@ namespace
         chunk.Str("door");
         chunk.U32(1);
         chunk.Str("OnEnter");
-        chunk.Str("door");
+        chunk.Guid16(0xA0);
         chunk.Str("Open");
         chunk.Str("");
         chunk.F32(0.5f);
@@ -148,7 +154,9 @@ TEST_CASE("map: loads every chunk")
     CHECK_NEAR(entity.origin.z, 3.0, 1e-6);
     REQUIRE(entity.keyValues.size() == 1);
     CHECK(entity.keyValues[0].second == "door");
+    CHECK(entity.guid.ToString() == "10111213-1415-1617-1819-1a1b1c1d1e1f");
     REQUIRE(entity.outputs.size() == 1);
+    CHECK(entity.outputs[0].target.ToString() == "a0a1a2a3-a4a5-a6a7-a8a9-aaabacadaeaf");
     CHECK(entity.outputs[0].input == "Open");
     CHECK(entity.outputs[0].once);
 

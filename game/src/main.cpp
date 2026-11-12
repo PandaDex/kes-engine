@@ -52,9 +52,12 @@ namespace
         example.hud = ui.LoadDocument("ui/hud.rml");
         example.pauseMenu = ui.LoadDocument("ui/pause_menu.rml", false);
 
-        ui.RegisterAction("resume", [&app, &example](Rml::Event&, const std::string&) { SetPaused(app, example, false); });
-        ui.RegisterAction("toggle_fullscreen", [&app](Rml::Event&, const std::string&) { EngineToggleFullscreen(app); });
-        ui.RegisterAction("quit", [&app](Rml::Event&, const std::string&) { app.running = false; });
+        ui.RegisterAction("resume", [&app, &example](Rml::Event&, const std::string&)
+            { SetPaused(app, example, false); });
+        ui.RegisterAction("toggle_fullscreen", [&app](Rml::Event&, const std::string&)
+            { EngineToggleFullscreen(app); });
+        ui.RegisterAction("quit", [&app](Rml::Event&, const std::string&)
+            { app.running = false; });
         example.fpsWindowStart = SDL_GetPerformanceCounter();
     }
 

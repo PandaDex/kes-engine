@@ -1,8 +1,10 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <vector>
 #include "engine_types.h"
 #include "collision_world.h"
+#include "guid.h"
 #include "material.h"
 #include "mesh.h"
 
@@ -39,6 +41,9 @@ public:
 
     void SetGameContext(GameContext* ctx) { game = ctx; }
     uint64_t GetEntityId() const { return entityId; }
+    // Stable identity: the editor's GUID for map entities, random for ones spawned at runtime.
+    // Change it with EntityManager::SetEntityGuid.
+    const Guid& GetGuid() const { return guid; }
 
     virtual void Start() {}
     virtual void Update(float dt) { (void)dt; }
@@ -67,6 +72,8 @@ public:
 
 protected:
     virtual void OnDestroy() {}
+    // MapScript: queues the inputs linked to `output` of this entity (see map_script.h).
+    void FireOutput(std::string_view output, Entity* activator = nullptr, std::string_view value = {});
     // Dynamic, Density, Friction, Restitution, RollingResistance map properties of physics entities.
     static bool ApplyRigidBodyProperty(RigidBodyDesc& desc, const std::string& name, const std::string& value);
 
@@ -84,6 +91,7 @@ private:
     bool pendingDestroy = false;
     bool destroyRan = false;   // OnDestroy runs once
     uint64_t entityId = 0;
+    Guid guid;
     bool gravityEnabled = false;
     float verticalVelocity = 0.0f;
     float gravityAcceleration = 18.0f;

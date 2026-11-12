@@ -2,7 +2,14 @@
 #include "collision_world.h"
 #include "entity_property_utils.h"
 #include "game_context.h"
+#include "map_script.h"
 #include "profiler.h"
+
+void Entity::FireOutput(std::string_view output, Entity* activator, std::string_view value)
+{
+    if (game && game->mapScript)
+        game->mapScript->FireOutput(*this, output, activator, value);
+}
 
 void Entity::Teleport(const Vector3& newPosition)
 {
