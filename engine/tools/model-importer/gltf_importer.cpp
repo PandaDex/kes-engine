@@ -606,6 +606,7 @@ bool ImportGltfToKModel(const std::string& inputPath, const std::string& outputP
         return false;
     }
 
+    CarryOverKModelAttachments(outputPath.c_str(), model);
     const bool saved = SaveKModelFile(outputPath.c_str(), model, &error);
     if (saved && !SaveAnimations(*data, inputPath, outputPath, error))
     {

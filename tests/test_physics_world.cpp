@@ -5,6 +5,8 @@
 #include "ent_skinned_model.h"
 #include "file_paths.h"
 #include "input.h"
+#include "animation_clip.h"
+#include "kmodel.h"
 #include "world.h"
 
 // Runs the real startup map without a window or renderer. The map is edited
@@ -122,6 +124,107 @@ TEST_CASE("world: a dynamic model falls onto the map and stays there")
     loaded.Run(300);
     CHECK(ball->Position.y < start.y - 0.5f);
     CHECK(ball->Position.y > surface);
+}
+
+TEST_CASE("world: a model's own colliders make it a dynamic body")
+{
+    LoadedWorld loaded;
+    Vector3 start;
+    const float surface = loaded.FindDropPoint(start);
+    REQUIRE(surface > -1e8f);
+
+    kestest::TempDir dir;
+    KModelData model;
+    REQUIRE(LoadKModelFile((GameContentDirectory() + "/meshes/ball.kmodel").c_str(), model));
+    KModelCollider collider;
+    collider.shape = KModelColliderShape::Sphere;
+    collider.radius = 0.3f;
+    model.colliders.push_back(collider);
+    const std::string path = dir.File("ball_with_collider.kmodel");
+    REQUIRE(SaveKModelFile(path.c_str(), model));
+
+    auto* ball = loaded.world.GetEntities().CreateEntity<SkinnedModelEntity>();
+    ball->ApplyProperty("Model", path);
+    ball->ApplyProperty("Dynamic", "true");
+    ball->Teleport(start);
+
+    loaded.Run(300);
+    CHECK(ball->Position.y < start.y - 0.5f);
+    CHECK_NEAR(ball->Position.y, surface + 0.3, 0.05);
+}
+
+TEST_CASE("world: colliders on bones follow the animation")
+{
+    LoadedWorld loaded;
+    kestest::TempDir dir;
+
+    // "upper" sits 1 unit above "lower" and the clip bends it 90 degrees about Z,
+    // so a sphere at its tip moves from (0, 2, 0) to (-1, 1, 0).
+    KModelData model;
+    KModelMesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[1].px = 0.1f;
+    mesh.vertices[2].py = 2.0f;
+    mesh.indices = { 0, 1, 2 };
+    mesh.primitives.push_back({ 0, 3, -1 });
+    model.meshes.push_back(mesh);
+    KModelNode meshNode;
+    meshNode.meshIndex = 0;
+    KModelNode lower;
+    lower.name = "lower";
+    lower.boneIndex = 0;
+    KModelNode upper;
+    upper.name = "upper";
+    upper.parentIndex = 1;
+    upper.boneIndex = 1;
+    upper.translation[1] = 1.0f;
+    model.nodes = { meshNode, lower, upper };
+    KModelBone lowerBone;
+    lowerBone.name = "lower";
+    lowerBone.nodeIndex = 1;
+    KModelBone upperBone;
+    upperBone.name = "upper";
+    upperBone.nodeIndex = 2;
+    upperBone.parentBoneIndex = 0;
+    upperBone.inverseBindMatrix[13] = -1.0f;
+    model.bones = { lowerBone, upperBone };
+    KModelCollider tip;
+    tip.shape = KModelColliderShape::Sphere;
+    tip.boneIndex = 1;
+    tip.center[1] = 1.0f;
+    tip.radius = 0.2f;
+    model.colliders.push_back(tip);
+    const std::string modelPath = dir.File("bender.kmodel");
+    REQUIRE(SaveKModelFile(modelPath.c_str(), model));
+
+    AnimationClipData clip;
+    clip.duration = 1.0f;
+    clip.looping = false;
+    AnimationNodeTrack track;
+    track.nodeIndex = 2;
+    track.rotationKeys = { { 0.0f, { 0.0f, 0.0f, 0.0f, 1.0f } }, { 1.0f, { 0.0f, 0.0f, 0.70710678f, 0.70710678f } } };
+    clip.tracks.push_back(track);
+    const std::string clipPath = dir.File("bend.kanim");
+    REQUIRE(SaveAnimationClipFile(clipPath.c_str(), clip));
+
+    const Vector3 origin = { 500.0f, 500.0f, 500.0f };
+    auto* bender = loaded.world.GetEntities().CreateEntity<SkinnedModelEntity>();
+    bender->ApplyProperty("Model", modelPath);
+    bender->ApplyProperty("AnimClip", clipPath);
+    bender->Teleport(origin);
+    loaded.Run(1);
+
+    const auto hitAt = [&](float x, float y)
+    {
+        RaycastHit hit;
+        const bool found = loaded.Collision().Raycast({ { origin.x + x, origin.y + y + 3.0f, origin.z }, { 0.0f, -1.0f, 0.0f } }, hit);
+        return found && bender->OwnsCollider(hit.other) ? origin.y + y + 3.0f - hit.distance : -1e9f;
+    };
+    CHECK_NEAR(hitAt(0.0f, 2.0f), origin.y + 2.2f, 0.05);
+
+    loaded.Run(75);
+    CHECK_NEAR(hitAt(-1.0f, 1.0f), origin.y + 1.2f, 0.05);
+    CHECK(hitAt(0.0f, 2.0f) < -1e8f);
 }
 
 TEST_CASE("world: a dynamic brush falls and its scene object follows")

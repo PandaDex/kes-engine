@@ -283,6 +283,36 @@ const AnimationGraphData* AssetSystem::GetAnimationGraph(AnimationGraphHandle ha
     return &animationGraphs[(size_t)handle];
 }
 
+AnimBlendTreeHandle AssetSystem::LoadAnimBlendTree(const char* path)
+{
+    KES_ZONE_FN(ASSETS);
+    const std::string resolvedPath = ResolveAssetPath(path);
+    auto cached = blendTreeFiles.find(resolvedPath);
+    if (cached != blendTreeFiles.end())
+        return cached->second;
+
+    AnimBlendTreeData tree = {};
+    std::string error;
+    if (!LoadAnimBlendTreeFile(resolvedPath.c_str(), tree, &error))
+    {
+        EngineLogf("Failed to load animation graph %s: %s", resolvedPath.c_str(), error.c_str());
+        blendTreeFiles[resolvedPath] = 0;
+        return 0;
+    }
+
+    blendTrees.push_back(std::move(tree));
+    const AnimBlendTreeHandle handle = (AnimBlendTreeHandle)(blendTrees.size() - 1);
+    blendTreeFiles[resolvedPath] = handle;
+    return handle;
+}
+
+const AnimBlendTreeData* AssetSystem::GetAnimBlendTree(AnimBlendTreeHandle handle) const
+{
+    if (handle == 0 || handle >= blendTrees.size())
+        return nullptr;
+    return &blendTrees[(size_t)handle];
+}
+
 void AssetSystem::Clear()
 {
     KES_ZONE_FN(ASSETS);
@@ -293,16 +323,19 @@ void AssetSystem::Clear()
     materials.clear();
     animationClips.clear();
     animationGraphs.clear();
+    blendTrees.clear();
     meshFiles.clear();
     modelFiles.clear();
     shaderFiles.clear();
     materialFiles.clear();
     animationClipFiles.clear();
     animationGraphFiles.clear();
+    blendTreeFiles.clear();
     meshes.resize(1);
     models.resize(1);
     shaders.resize(1);
     materials.resize(1);
     animationClips.resize(1);
     animationGraphs.resize(1);
+    blendTrees.resize(1);
 }

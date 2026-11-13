@@ -74,6 +74,37 @@ struct KModelBone
     };
 };
 
+// Transform relative to a bone (boneIndex -1: the model root).
+struct KModelSocket
+{
+    std::string name;
+    int32_t boneIndex = -1;
+    float translation[3] = { 0.0f, 0.0f, 0.0f };
+    float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    float scale[3] = { 1.0f, 1.0f, 1.0f };
+};
+
+enum class KModelColliderShape : uint32_t
+{
+    Box = 0,
+    Sphere = 1,
+    Capsule = 2
+};
+
+// Placed relative to a bone (boneIndex -1: the model root) in the bind pose.
+// Box uses halfExtents, Sphere radius, Capsule radius and halfHeight along its local Y.
+struct KModelCollider
+{
+    std::string name;
+    KModelColliderShape shape = KModelColliderShape::Box;
+    int32_t boneIndex = -1;
+    float center[3] = { 0.0f, 0.0f, 0.0f };
+    float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    float halfExtents[3] = { 0.5f, 0.5f, 0.5f };
+    float radius = 0.5f;
+    float halfHeight = 0.5f;
+};
+
 struct KModelData
 {
     std::string sourcePath;
@@ -81,9 +112,15 @@ struct KModelData
     std::vector<KModelMesh> meshes;
     std::vector<KModelNode> nodes;
     std::vector<KModelBone> bones;
+    std::vector<KModelSocket> sockets;
+    std::vector<KModelCollider> colliders;
 };
 
 bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outError = nullptr);
 bool SaveKModelFile(const char* path, const KModelData& model, std::string* outError = nullptr);
 bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::string* outError = nullptr, uint32_t meshIndex = KModelAllMeshes);
+// Re-import keeps hand-made sockets and colliders: copies them from the .kmodel
+// at existingPath (if any), remapping bones by name. Returns how many were kept.
+size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model);
+const KModelSocket* FindKModelSocket(const KModelData& model, const char* name);
 void ConvertMeshDataToKModelMesh(const MeshData& mesh, KModelMesh& outMesh, const char* name = nullptr);

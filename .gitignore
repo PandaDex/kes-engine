@@ -71,3 +71,7 @@ external/external.zip
 external/tracy-bin
 external/.external_installed
 TODO.txt
+
+tools/bin/*
+tools/build/*
+!tools/bin/.gitkeep

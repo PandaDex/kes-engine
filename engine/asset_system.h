@@ -10,6 +10,7 @@
 #include "shader.h"
 #include "animation_clip.h"
 #include "animation_graph.h"
+#include "anim_blend_tree.h"
 
 class AssetSystem
 {
@@ -28,6 +29,7 @@ public:
     MaterialHandle LoadMaterial(const char* path);
     AnimationClipHandle LoadAnimationClip(const char* path);
     AnimationGraphHandle LoadAnimationGraph(const char* path);
+    AnimBlendTreeHandle LoadAnimBlendTree(const char* path);
 
     const MeshData* GetMesh(MeshHandle handle) const;
     const KModelData* GetModel(ModelHandle handle) const;
@@ -35,6 +37,7 @@ public:
     const MaterialData* GetMaterial(MaterialHandle handle) const;
     const AnimationClipData* GetAnimationClip(AnimationClipHandle handle) const;
     const AnimationGraphData* GetAnimationGraph(AnimationGraphHandle handle) const;
+    const AnimBlendTreeData* GetAnimBlendTree(AnimBlendTreeHandle handle) const;
     uint64_t GetGeneration() const { return generation; }
 
     // A file that fails to load is logged once and then returns 0 from the
@@ -49,11 +52,13 @@ private:
     std::vector<MaterialData> materials;
     std::vector<AnimationClipData> animationClips;
     std::vector<AnimationGraphData> animationGraphs;
+    std::vector<AnimBlendTreeData> blendTrees;
     std::unordered_map<std::string, MeshHandle> meshFiles;
     std::unordered_map<std::string, ModelHandle> modelFiles;
     std::unordered_map<std::string, ShaderHandle> shaderFiles;
     std::unordered_map<std::string, MaterialHandle> materialFiles;
     std::unordered_map<std::string, AnimationClipHandle> animationClipFiles;
     std::unordered_map<std::string, AnimationGraphHandle> animationGraphFiles;
+    std::unordered_map<std::string, AnimBlendTreeHandle> blendTreeFiles;
     uint64_t generation = 0;
 };

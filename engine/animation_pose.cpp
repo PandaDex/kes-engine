@@ -1,4 +1,5 @@
 #include "animation_pose.h"
+#include <cmath>
 #include <cstring>
 #include "kmodel.h"
 
@@ -169,4 +170,98 @@ bool BuildAnimationSkinMatrices(const KModelData& model, const std::vector<Anima
     }
 
     return true;
+}
+
+void BuildTransformMatrix(const float translation[3], const float rotation[4], const float scale[3], float outMatrix[16])
+{
+    AnimationTransform transform;
+    std::memcpy(transform.translation, translation, sizeof(transform.translation));
+    std::memcpy(transform.rotation, rotation, sizeof(transform.rotation));
+    std::memcpy(transform.scale, scale, sizeof(transform.scale));
+    const Matrix4 matrix = BuildLocalMatrix(transform);
+    std::memcpy(outMatrix, matrix.m, sizeof(matrix.m));
+}
+
+void MultiplyMatrices(const float first[16], const float then[16], float outMatrix[16])
+{
+    Matrix4 a, b;
+    std::memcpy(a.m, first, sizeof(a.m));
+    std::memcpy(b.m, then, sizeof(b.m));
+    const Matrix4 result = Multiply(a, b);
+    std::memcpy(outMatrix, result.m, sizeof(result.m));
+}
+
+void DecomposeMatrix(const float m[16], float outTranslation[3], float outRotation[4], float outScale[3])
+{
+    for (int i = 0; i < 3; ++i)
+        outTranslation[i] = m[12 + i];
+
+    float axes[3][3];
+    for (int row = 0; row < 3; ++row)
+    {
+        const float length = std::sqrt(m[row * 4] * m[row * 4] + m[row * 4 + 1] * m[row * 4 + 1] + m[row * 4 + 2] * m[row * 4 + 2]);
+        outScale[row] = length;
+        for (int col = 0; col < 3; ++col)
+            axes[row][col] = length > 1e-8f ? m[row * 4 + col] / length : (row == col ? 1.0f : 0.0f);
+    }
+
+    // Rows hold the rotated axes, so R[i][j] = axes[j][i].
+    const float r00 = axes[0][0], r11 = axes[1][1], r22 = axes[2][2];
+    const float r21 = axes[1][2], r12 = axes[2][1];
+    const float r02 = axes[2][0], r20 = axes[0][2];
+    const float r10 = axes[0][1], r01 = axes[1][0];
+    float x, y, z, w;
+    const float trace = r00 + r11 + r22;
+    if (trace > 0.0f)
+    {
+        const float s = std::sqrt(trace + 1.0f) * 2.0f;
+        w = 0.25f * s;
+        x = (r21 - r12) / s;
+        y = (r02 - r20) / s;
+        z = (r10 - r01) / s;
+    }
+    else if (r00 > r11 && r00 > r22)
+    {
+        const float s = std::sqrt(1.0f + r00 - r11 - r22) * 2.0f;
+        w = (r21 - r12) / s;
+        x = 0.25f * s;
+        y = (r01 + r10) / s;
+        z = (r02 + r20) / s;
+    }
+    else if (r11 > r22)
+    {
+        const float s = std::sqrt(1.0f + r11 - r00 - r22) * 2.0f;
+        w = (r02 - r20) / s;
+        x = (r01 + r10) / s;
+        y = 0.25f * s;
+        z = (r12 + r21) / s;
+    }
+    else
+    {
+        const float s = std::sqrt(1.0f + r22 - r00 - r11) * 2.0f;
+        w = (r10 - r01) / s;
+        x = (r02 + r20) / s;
+        y = (r12 + r21) / s;
+        z = 0.25f * s;
+    }
+    const float length = std::sqrt(x * x + y * y + z * z + w * w);
+    const float inv = length > 1e-8f ? 1.0f / length : 0.0f;
+    outRotation[0] = x * inv;
+    outRotation[1] = y * inv;
+    outRotation[2] = z * inv;
+    outRotation[3] = length > 1e-8f ? w * inv : 1.0f;
+}
+
+void BuildBoneAttachmentMatrix(const KModelData& model, const std::vector<float>& nodeWorldMatrices, int32_t boneIndex,
+                               const float translation[3], const float rotation[4], const float scale[3], float outMatrix[16])
+{
+    float local[16];
+    BuildTransformMatrix(translation, rotation, scale, local);
+    const int32_t node = boneIndex >= 0 && boneIndex < (int32_t)model.bones.size() ? model.bones[(size_t)boneIndex].nodeIndex : -1;
+    if (node < 0 || (size_t)(node + 1) * 16 > nodeWorldMatrices.size())
+    {
+        std::memcpy(outMatrix, local, sizeof(local));
+        return;
+    }
+    MultiplyMatrices(local, nodeWorldMatrices.data() + (size_t)node * 16, outMatrix);
 }

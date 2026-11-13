@@ -56,6 +56,20 @@ namespace
         bone.name = "spine";
         bone.nodeIndex = 0;
         model.bones.push_back(bone);
+
+        KModelSocket socket;
+        socket.name = "hand_r";
+        socket.boneIndex = 0;
+        socket.translation[2] = 0.25f;
+        model.sockets.push_back(socket);
+
+        KModelCollider collider;
+        collider.name = "body";
+        collider.shape = KModelColliderShape::Capsule;
+        collider.boneIndex = 0;
+        collider.radius = 0.3f;
+        collider.halfHeight = 0.6f;
+        model.colliders.push_back(collider);
         return model;
     }
 
@@ -271,6 +285,52 @@ TEST_CASE("kmodel: round trip keeps the model")
     CHECK_NEAR(loaded.nodes[0].translation[1], 3.0, 1e-6);
     REQUIRE(loaded.bones.size() == 1);
     CHECK(loaded.bones[0].name == "spine");
+
+    REQUIRE(loaded.sockets.size() == 1);
+    CHECK(loaded.sockets[0].name == "hand_r");
+    CHECK(loaded.sockets[0].boneIndex == 0);
+    CHECK_NEAR(loaded.sockets[0].translation[2], 0.25, 1e-6);
+    REQUIRE(loaded.colliders.size() == 1);
+    CHECK(loaded.colliders[0].shape == KModelColliderShape::Capsule);
+    CHECK_NEAR(loaded.colliders[0].halfHeight, 0.6, 1e-6);
+}
+
+TEST_CASE("kmodel: sockets and colliders on missing bones are rejected")
+{
+    kestest::TempDir dir;
+    const std::string path = dir.File("bad.kmodel");
+    KModelData model = MakeModel();
+    model.sockets[0].boneIndex = 4;
+    REQUIRE(SaveKModelFile(path.c_str(), model));
+    KModelData loaded;
+    CHECK(!LoadKModelFile(path.c_str(), loaded));
+
+    model = MakeModel();
+    model.colliders[0].shape = (KModelColliderShape)7;
+    REQUIRE(SaveKModelFile(path.c_str(), model));
+    CHECK(!LoadKModelFile(path.c_str(), loaded));
+}
+
+TEST_CASE("kmodel: re-import keeps sockets and colliders by bone name")
+{
+    kestest::TempDir dir;
+    const std::string path = dir.File("model.kmodel");
+    REQUIRE(SaveKModelFile(path.c_str(), MakeModel()));
+
+    KModelData reimported = MakeModel();
+    reimported.sockets.clear();
+    reimported.colliders.clear();
+    KModelBone extra;
+    extra.name = "pelvis";
+    extra.nodeIndex = 0;
+    reimported.bones.insert(reimported.bones.begin(), extra);
+
+    CHECK(CarryOverKModelAttachments(path.c_str(), reimported) == 2);
+    REQUIRE(reimported.sockets.size() == 1);
+    CHECK(reimported.sockets[0].boneIndex == 1);
+    REQUIRE(reimported.colliders.size() == 1);
+    CHECK(reimported.colliders[0].boneIndex == 1);
+    CHECK(CarryOverKModelAttachments(dir.File("missing.kmodel").c_str(), reimported) == 0);
 }
 
 TEST_CASE("kmodel: rejects truncated and foreign files")

@@ -5,13 +5,13 @@
 #include <type_traits>
 
 #include "binary_reader.h"
-#include "pak_file_system.h"
+#include "asset_file_io.h"
 #include "profiler.h"
 
 namespace
 {
     static constexpr uint32_t kKModelMagic = 0x4C444D4Bu; // KMDL
-    static constexpr uint32_t kKModelVersion = 1u;
+    static constexpr uint32_t kKModelVersion = 2u; // 2 added sockets and colliders
 
     // Vertices are read and written field by field in this order, without padding.
     static_assert(sizeof(KModelVertex) == 88 && std::is_trivially_copyable_v<KModelVertex>, "KModelVertex file layout");
@@ -327,6 +327,49 @@ bool SaveKModelFile(const char* path, const KModelData& model, std::string* outE
         }
     }
 
+    if (!WriteValue(file, (uint32_t)model.sockets.size()))
+    {
+        if (outError)
+            *outError = "Failed to write kmodel socket count";
+        return false;
+    }
+    for (const KModelSocket& socket : model.sockets)
+    {
+        if (!WriteString(file, socket.name) ||
+            !WriteValue(file, socket.boneIndex) ||
+            !WriteFloatArray(file, socket.translation, 3) ||
+            !WriteFloatArray(file, socket.rotation, 4) ||
+            !WriteFloatArray(file, socket.scale, 3))
+        {
+            if (outError)
+                *outError = "Failed to write kmodel socket";
+            return false;
+        }
+    }
+
+    if (!WriteValue(file, (uint32_t)model.colliders.size()))
+    {
+        if (outError)
+            *outError = "Failed to write kmodel collider count";
+        return false;
+    }
+    for (const KModelCollider& collider : model.colliders)
+    {
+        if (!WriteString(file, collider.name) ||
+            !WriteValue(file, (uint32_t)collider.shape) ||
+            !WriteValue(file, collider.boneIndex) ||
+            !WriteFloatArray(file, collider.center, 3) ||
+            !WriteFloatArray(file, collider.rotation, 4) ||
+            !WriteFloatArray(file, collider.halfExtents, 3) ||
+            !WriteValue(file, collider.radius) ||
+            !WriteValue(file, collider.halfHeight))
+        {
+            if (outError)
+                *outError = "Failed to write kmodel collider";
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -381,6 +424,18 @@ namespace
             if (bone.parentBoneIndex < -1 || bone.parentBoneIndex >= boneCount)
                 return "KModel bone references a missing parent";
         }
+        for (const KModelSocket& socket : model.sockets)
+        {
+            if (socket.boneIndex < -1 || socket.boneIndex >= boneCount)
+                return "KModel socket references a missing bone";
+        }
+        for (const KModelCollider& collider : model.colliders)
+        {
+            if (collider.boneIndex < -1 || collider.boneIndex >= boneCount)
+                return "KModel collider references a missing bone";
+            if ((uint32_t)collider.shape > (uint32_t)KModelColliderShape::Capsule)
+                return "KModel collider has an unknown shape";
+        }
         return nullptr;
     }
 }
@@ -410,7 +465,7 @@ bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outErro
         return fail("Failed to read kmodel header");
     if (magic != kKModelMagic)
         return fail("Invalid kmodel magic");
-    if (version != kKModelVersion)
+    if (version < 1u || version > kKModelVersion)
         return fail("Unsupported kmodel version");
 
     outModel.sourcePath = file.string();
@@ -485,6 +540,40 @@ bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outErro
     }
     if (!file.ok())
         return fail("Failed to read kmodel bone");
+
+    if (version >= 2u)
+    {
+        const uint32_t socketCount = file.u32();
+        if (!file.count(socketCount, 48))
+            return fail("Failed to read kmodel sockets");
+        outModel.sockets.resize(socketCount);
+        for (KModelSocket& socket : outModel.sockets)
+        {
+            socket.name = file.string();
+            socket.boneIndex = file.i32();
+            file.bytes(socket.translation, sizeof(socket.translation));
+            file.bytes(socket.rotation, sizeof(socket.rotation));
+            file.bytes(socket.scale, sizeof(socket.scale));
+        }
+
+        const uint32_t colliderCount = file.u32();
+        if (!file.count(colliderCount, 60))
+            return fail("Failed to read kmodel colliders");
+        outModel.colliders.resize(colliderCount);
+        for (KModelCollider& collider : outModel.colliders)
+        {
+            collider.name = file.string();
+            collider.shape = (KModelColliderShape)file.u32();
+            collider.boneIndex = file.i32();
+            file.bytes(collider.center, sizeof(collider.center));
+            file.bytes(collider.rotation, sizeof(collider.rotation));
+            file.bytes(collider.halfExtents, sizeof(collider.halfExtents));
+            collider.radius = file.f32();
+            collider.halfHeight = file.f32();
+        }
+        if (!file.ok())
+            return fail("Failed to read kmodel collider");
+    }
 
     if (const char* error = FindKModelError(outModel))
         return fail(error);
@@ -565,4 +654,63 @@ bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::st
     }
 
     return true;
+}
+
+const KModelSocket* FindKModelSocket(const KModelData& model, const char* name)
+{
+    if (!name)
+        return nullptr;
+    for (const KModelSocket& socket : model.sockets)
+    {
+        if (socket.name == name)
+            return &socket;
+    }
+    return nullptr;
+}
+
+size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model)
+{
+    std::error_code ec;
+    if (!existingPath || !std::filesystem::exists(existingPath, ec))
+        return 0;
+
+    KModelData existing;
+    if (!LoadKModelFile(existingPath, existing))
+        return 0;
+
+    const auto remapBone = [&](int32_t oldBone, bool& ok)
+    {
+        ok = true;
+        if (oldBone < 0)
+            return -1;
+        const std::string& name = existing.bones[(size_t)oldBone].name;
+        for (size_t index = 0; index < model.bones.size(); ++index)
+        {
+            if (model.bones[index].name == name)
+                return (int32_t)index;
+        }
+        ok = false;
+        return -1;
+    };
+
+    size_t kept = 0;
+    for (KModelSocket socket : existing.sockets)
+    {
+        bool ok = false;
+        socket.boneIndex = remapBone(socket.boneIndex, ok);
+        if (!ok || FindKModelSocket(model, socket.name.c_str()))
+            continue;
+        model.sockets.push_back(socket);
+        ++kept;
+    }
+    for (KModelCollider collider : existing.colliders)
+    {
+        bool ok = false;
+        collider.boneIndex = remapBone(collider.boneIndex, ok);
+        if (!ok)
+            continue;
+        model.colliders.push_back(collider);
+        ++kept;
+    }
+    return kept;
 }

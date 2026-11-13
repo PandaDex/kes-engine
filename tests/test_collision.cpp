@@ -310,3 +310,37 @@ TEST_CASE("mover: a capsule started inside a wall is pushed out")
         position = world.MoveCapsule(position, {}, 0.5f, 0.5f);
     CHECK(!world.CheckCapsule(position, 0.49f, 0.5f));
 }
+
+TEST_CASE("collision: a compound body keeps each shape's offset and rotation")
+{
+    CollisionWorld world;
+    RigidBodyDesc desc;
+    desc.motion = ColliderMotion::Static;
+    desc.position = { 0.0f, 0.0f, 10.0f };
+
+    RigidShape box;
+    box.type = ColliderType::Box;
+    box.center = { 3.0f, 0.0f, 0.0f };
+    box.halfExtents = { 0.5f, 0.5f, 0.5f };
+    // A capsule lying along X: its local Y turned 90 degrees about Z.
+    RigidShape capsule;
+    capsule.type = ColliderType::Capsule;
+    capsule.center = { -3.0f, 0.0f, 0.0f };
+    capsule.rotation[2] = 0.70710678f;
+    capsule.rotation[3] = 0.70710678f;
+    capsule.radius = 0.25f;
+    capsule.halfHeight = 1.0f;
+    const ColliderHandle body = world.AddRigidShapes({ box, capsule }, desc);
+    REQUIRE(body != 0);
+
+    RaycastHit hit;
+    REQUIRE(world.Raycast({ { 3.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }, hit));
+    CHECK(hit.other == body);
+    CHECK_NEAR(hit.distance, 9.5, 1e-3);
+
+    // 1.1 units along X from the capsule centre is inside the rotated capsule, past a Y-aligned one.
+    REQUIRE(world.Raycast({ { -4.1f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } }, hit));
+    CHECK(hit.other == body);
+    CHECK(!world.Raycast({ { -3.0f, 1.1f, 0.0f }, { 0.0f, 0.0f, 1.0f } }, hit));
+    CHECK(world.AddRigidShapes({}, desc) == 0);
+}

@@ -417,6 +417,42 @@ ColliderHandle CollisionWorld::AddRigidSphere(float radius, const Vector3& offse
     return handle;
 }
 
+ColliderHandle CollisionWorld::AddRigidShapes(const std::vector<RigidShape>& shapes, const RigidBodyDesc& desc)
+{
+    if (shapes.empty())
+        return 0;
+    const ColliderType type = shapes.size() == 1 ? shapes.front().type : ColliderType::Convex;
+    const ColliderHandle handle = impl->CreateBody(type, desc, {});
+    const b3ShapeDef def = Impl::MakeShapeDef(handle, desc, false);
+    const b3BodyId body = impl->entries[handle].body;
+    for (const RigidShape& shape : shapes)
+    {
+        b3Quat q = { { shape.rotation[0], shape.rotation[1], shape.rotation[2] }, shape.rotation[3] };
+        q = b3NormalizeQuat(q);
+        if (shape.type == ColliderType::Sphere)
+        {
+            const b3Sphere sphere = { ToB3(shape.center), std::max(shape.radius, kMinHalfExtent) };
+            b3CreateSphereShape(body, &def, &sphere);
+        }
+        else if (shape.type == ColliderType::Capsule)
+        {
+            const b3Vec3 axis = b3RotateVector(q, { 0.0f, std::max(shape.halfHeight, 0.0f), 0.0f });
+            const b3Vec3 center = ToB3(shape.center);
+            const b3Capsule capsule = { b3Sub(center, axis), b3Add(center, axis), std::max(shape.radius, kMinHalfExtent) };
+            b3CreateCapsuleShape(body, &def, &capsule);
+        }
+        else
+        {
+            const b3Transform transform = { ToB3(shape.center), q };
+            const b3BoxHull box = b3MakeTransformedBoxHull(std::max(shape.halfExtents.x, kMinHalfExtent),
+                                                           std::max(shape.halfExtents.y, kMinHalfExtent),
+                                                           std::max(shape.halfExtents.z, kMinHalfExtent), transform);
+            b3CreateHullShape(body, &def, &box.base);
+        }
+    }
+    return handle;
+}
+
 bool CollisionWorld::Remove(ColliderHandle handle)
 {
     Impl::Entry* entry = impl->Find(handle);
@@ -475,6 +511,28 @@ void CollisionWorld::SetTargetPosition(ColliderHandle handle, const Vector3& pos
     b3WorldTransform target = b3Body_GetTransform(entry->body);
     target.p = b3ToPos(ToB3(position));
     b3Body_SetTargetTransform(entry->body, target, timeStep, true);
+}
+
+void CollisionWorld::SetTargetPose(ColliderHandle handle, const Vector3& parentPosition, const Vector3& parentRotation,
+                                   const Vector3& localPosition, const float localRotation[4], float timeStep)
+{
+    Impl::Entry* entry = impl->Find(handle);
+    if (!entry)
+        return;
+
+    const b3Quat parent = QuatFromEuler(parentRotation);
+    const b3Quat local = b3NormalizeQuat({ { localRotation[0], localRotation[1], localRotation[2] }, localRotation[3] });
+    const b3Vec3 position = b3Add(ToB3(parentPosition), b3RotateVector(parent, ToB3(localPosition)));
+    const b3Quat rotation = b3NormalizeQuat(b3MulQuat(parent, local));
+    if (entry->motion == ColliderMotion::Kinematic && timeStep > 0.0f)
+    {
+        const b3WorldTransform target = { b3ToPos(position), rotation };
+        b3Body_SetTargetTransform(entry->body, target, timeStep, true);
+    }
+    else
+    {
+        b3Body_SetTransform(entry->body, b3ToPos(position), rotation);
+    }
 }
 
 Vector3 CollisionWorld::GetWorldPosition(ColliderHandle handle) const

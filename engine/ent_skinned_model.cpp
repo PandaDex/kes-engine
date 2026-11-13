@@ -1,6 +1,7 @@
 #include "ent_skinned_model.h"
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include "animation_clip.h"
 #include "animation_pose.h"
 #include "asset_system.h"
@@ -27,8 +28,11 @@ void SkinnedModelEntity::Start()
         object.model = modelHandle;
         object.material = materialHandle;
 
-        if (const AnimationGraphData* graph = ResolveAnimationGraph())
-            InitializeAnimatorGraphInstance(*graph, animator);
+        if (!IsAnimBlendTreePath(animationGraphPath))
+        {
+            if (const AnimationGraphData* graph = ResolveAnimationGraph())
+                InitializeAnimatorGraphInstance(*graph, animator);
+        }
     }
 
     objectId = game->scene->CreateObject(object);
@@ -36,10 +40,119 @@ void SkinnedModelEntity::Start()
     SyncSceneObject(0.0f);
 }
 
+namespace
+{
+    // Collider placed by `matrix` (model space, from BuildBoneAttachmentMatrix with unit scale),
+    // then scaled by the entity. The shape's centre and rotation are its pose in entity space.
+    RigidShape MakeModelShape(const KModelCollider& source, const float matrix[16], const Vector3& scale)
+    {
+        float position[3], rotation[4], boneScale[3];
+        DecomposeMatrix(matrix, position, rotation, boneScale);
+        const float boneSize = (boneScale[0] + boneScale[1] + boneScale[2]) / 3.0f;
+        const float sizeScale = std::max({ std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z) });
+
+        RigidShape shape;
+        shape.type = source.shape == KModelColliderShape::Sphere    ? ColliderType::Sphere
+                     : source.shape == KModelColliderShape::Capsule ? ColliderType::Capsule
+                                                                    : ColliderType::Box;
+        shape.center = { position[0] * scale.x, position[1] * scale.y, position[2] * scale.z };
+        std::copy(rotation, rotation + 4, shape.rotation);
+        shape.halfExtents = { source.halfExtents[0] * boneScale[0] * std::fabs(scale.x),
+                              source.halfExtents[1] * boneScale[1] * std::fabs(scale.y),
+                              source.halfExtents[2] * boneScale[2] * std::fabs(scale.z) };
+        shape.radius = source.radius * boneSize * sizeScale;
+        shape.halfHeight = source.halfHeight * boneSize * sizeScale;
+        return shape;
+    }
+}
+
+bool SkinnedModelEntity::OwnsCollider(ColliderHandle handle) const
+{
+    if (handle == 0)
+        return false;
+    if (handle == collider)
+        return true;
+    return std::any_of(boneColliders.begin(), boneColliders.end(), [handle](const BoneCollider& b) { return b.handle == handle; });
+}
+
+void SkinnedModelEntity::CreateModelColliders(const KModelData& model)
+{
+    std::vector<AnimationTransform> bindPose;
+    std::vector<float> worldMatrices;
+    BuildAnimationBindPose(model, bindPose);
+    BuildAnimationWorldMatrices(model, bindPose, worldMatrices);
+
+    const bool followBones = body.motion != ColliderMotion::Dynamic && !model.bones.empty();
+    const float unitScale[3] = { 1.0f, 1.0f, 1.0f };
+    std::vector<RigidShape> rootShapes;
+    for (size_t index = 0; index < model.colliders.size(); ++index)
+    {
+        const KModelCollider& source = model.colliders[index];
+        float matrix[16];
+        BuildBoneAttachmentMatrix(model, worldMatrices, source.boneIndex, source.center, source.rotation, unitScale, matrix);
+        RigidShape shape = MakeModelShape(source, matrix, scale);
+        if (!followBones || source.boneIndex < 0)
+        {
+            rootShapes.push_back(shape);
+            continue;
+        }
+
+        // Its own kinematic body, with the shape at the body origin; the body carries the pose.
+        const Vector3 localPosition = shape.center;
+        float localRotation[4];
+        std::copy(shape.rotation, shape.rotation + 4, localRotation);
+        shape.center = {};
+        shape.rotation[0] = shape.rotation[1] = shape.rotation[2] = 0.0f;
+        shape.rotation[3] = 1.0f;
+
+        RigidBodyDesc desc = body;
+        desc.motion = ColliderMotion::Kinematic;
+        desc.position = Position;
+        desc.rotation = Rotation;
+        const ColliderHandle handle = game->collision->AddRigidShapes({ shape }, desc);
+        if (handle == 0)
+            continue;
+        game->collision->SetTargetPose(handle, Position, Rotation, localPosition, localRotation, 0.0f);
+        boneColliders.push_back({ handle, index });
+    }
+
+    if (!rootShapes.empty())
+    {
+        body.position = Position;
+        body.rotation = Rotation;
+        collider = game->collision->AddRigidShapes(rootShapes, body);
+    }
+}
+
+void SkinnedModelEntity::UpdateBoneColliders(const KModelData& model, const std::vector<AnimationTransform>& pose, float dt)
+{
+    if (boneColliders.empty() || !game || !game->collision)
+        return;
+    BuildAnimationWorldMatrices(model, pose, boneWorldScratch);
+    const float unitScale[3] = { 1.0f, 1.0f, 1.0f };
+    for (const BoneCollider& bone : boneColliders)
+    {
+        if (bone.colliderIndex >= model.colliders.size())
+            continue;
+        const KModelCollider& source = model.colliders[bone.colliderIndex];
+        float matrix[16];
+        BuildBoneAttachmentMatrix(model, boneWorldScratch, source.boneIndex, source.center, source.rotation, unitScale, matrix);
+        const RigidShape placed = MakeModelShape(source, matrix, scale);
+        game->collision->SetTargetPose(bone.handle, Position, Rotation, placed.center, placed.rotation, dt);
+    }
+}
+
 void SkinnedModelEntity::CreateCollider()
 {
-    if (colliderShape.empty() || !game->collision)
+    if (!game->collision)
         return;
+    if (colliderShape.empty())
+    {
+        const KModelData* model = game->assets ? game->assets->GetModel(modelHandle) : nullptr;
+        if (model && !model->colliders.empty())
+            CreateModelColliders(*model);
+        return;
+    }
     const MeshData* mesh = game->assets ? game->assets->GetMesh(meshHandle) : nullptr;
     if (!mesh || mesh->vertices.empty())
     {
@@ -81,7 +194,7 @@ void SkinnedModelEntity::Teleport(const Vector3& newPosition)
     Entity::Teleport(newPosition);
     if (collider != 0 && game && game->collision)
         game->collision->SetPosition(collider, newPosition);
-    SyncSceneObject(0.0f);
+    SyncSceneObject(0.0f);   // a zero step teleports the bone colliders
 }
 
 bool SkinnedModelEntity::ApplyProperty(const std::string& name, const std::string& value)
@@ -146,6 +259,8 @@ void SkinnedModelEntity::SetMaterialPath(const std::string& path)
 void SkinnedModelEntity::SetAnimationGraphPath(const std::string& path)
 {
     animationGraphPath = path;
+    blendTree = {};
+    blendTreeAttempted = false;
     animator = {};
     animationGraphHandle = 0;
     graphLoadAttempted = false;
@@ -212,6 +327,65 @@ const AnimationGraphData* SkinnedModelEntity::ResolveAnimationGraph()
     return game->assets->GetAnimationGraph(animationGraphHandle);
 }
 
+bool SkinnedModelEntity::ResolveBlendTree()
+{
+    if (!game || !game->assets || !IsAnimBlendTreePath(animationGraphPath))
+        return false;
+    if (!blendTreeAttempted)
+    {
+        blendTreeAttempted = true;
+        const AnimBlendTreeData* data = game->assets->GetAnimBlendTree(game->assets->LoadAnimBlendTree(animationGraphPath.c_str()));
+        std::string error;
+        if (data && !blendTree.Build(*data, &error))
+            EngineLogf("Animation graph %s: %s", animationGraphPath.c_str(), error.c_str());
+    }
+    return blendTree.IsBuilt();
+}
+
+void SkinnedModelEntity::SetAnimFloat(const std::string& name, float value)
+{
+    if (ResolveBlendTree())
+        blendTree.SetFloat(name, value);
+    else if (const AnimationGraphData* graph = ResolveAnimationGraph())
+        SetAnimatorFloat(*graph, animator, name.c_str(), value);
+}
+
+void SkinnedModelEntity::SetAnimBool(const std::string& name, bool value)
+{
+    if (ResolveBlendTree())
+        blendTree.SetBool(name, value);
+    else if (const AnimationGraphData* graph = ResolveAnimationGraph())
+    {
+        SetAnimatorBool(*graph, animator, name.c_str(), value);
+        if (value)
+            FireAnimatorTrigger(*graph, animator, name.c_str());
+    }
+}
+
+void SkinnedModelEntity::SetAnimInt(const std::string& name, int value)
+{
+    if (ResolveBlendTree())
+        blendTree.SetInt(name, value);
+    else
+        SetAnimFloat(name, (float)value);
+}
+
+bool SkinnedModelEntity::GetSocketModelMatrix(const std::string& name, float outMatrix[16]) const
+{
+    const KModelData* model = game && game->assets ? game->assets->GetModel(modelHandle) : nullptr;
+    const KModelSocket* socket = model ? FindKModelSocket(*model, name.c_str()) : nullptr;
+    if (!socket)
+        return false;
+
+    std::vector<AnimationTransform> pose = lastPose;
+    if (pose.size() != model->nodes.size())
+        BuildAnimationBindPose(*model, pose);
+    std::vector<float> worldMatrices;
+    BuildAnimationWorldMatrices(*model, pose, worldMatrices);
+    BuildBoneAttachmentMatrix(*model, worldMatrices, socket->boneIndex, socket->translation, socket->rotation, socket->scale, outMatrix);
+    return true;
+}
+
 const AnimationClipData* SkinnedModelEntity::ResolveAnimationClipHandle(const std::string& path, AnimationClipHandle& handle, std::string& cachedPath)
 {
     if (!game || !game->assets || path.empty())
@@ -265,7 +439,17 @@ void SkinnedModelEntity::SyncSceneObject(float dt)
     localPose.clear();
     bool sampledClip = false;
 
-    if (!animationGraphPath.empty())
+    if (ResolveBlendTree())
+    {
+        const AnimBlendTreeInstance::ClipResolver clips = [this](const std::string& path)
+        { return game->assets->GetAnimationClip(game->assets->LoadAnimationClip(path.c_str())); };
+        if (blendTree.Evaluate(*model, dt, clips, localPose))
+        {
+            sampledClip = true;
+            currentAnimationClipPath = animationGraphPath;
+        }
+    }
+    else if (!animationGraphPath.empty())
     {
         const AnimationGraphData* graph = ResolveAnimationGraph();
         AnimatorPlaybackState playback = {};
@@ -297,6 +481,8 @@ void SkinnedModelEntity::SyncSceneObject(float dt)
 
     if (localPose.empty())
         BuildAnimationBindPose(*model, localPose);
+    lastPose = localPose;
+    UpdateBoneColliders(*model, localPose, dt);
 
     if (game->animationDebugEnabled)
         BuildAnimationWorldMatrices(*model, localPose, debugBoneWorldMatrices);
@@ -316,4 +502,10 @@ void SkinnedModelEntity::OnDestroy()
     if (game && game->collision && collider != 0)
         game->collision->Remove(collider);
     collider = 0;
+    for (const BoneCollider& bone : boneColliders)
+    {
+        if (game && game->collision)
+            game->collision->Remove(bone.handle);
+    }
+    boneColliders.clear();
 }

@@ -5,12 +5,17 @@
 #include "animator.h"
 #include "animation_clip.h"
 #include "animation_graph.h"
+#include "anim_blend_tree.h"
 #include "kmodel.h"
 #include "material.h"
 #include "mesh.h"
 
 // Properties beyond the model and animation paths:
-//   Collider  "Box" or "Sphere": a collider fitted to the mesh bounds (default none)
+//   AnimGraph a .kanimgraph blend tree, or the older state-machine graph
+//   Collider  "Box" or "Sphere": a collider fitted to the mesh bounds. Without it the
+//             colliders saved in the .kmodel are used, if it has any: those on the model
+//             root form the entity's body, those on bones follow the animation as kinematic
+//             bodies. A Dynamic model puts all of them in one rigid body in the bind pose.
 //   Dynamic   true/false  simulate it as a rigid body (default false)
 //   Density, Friction, Restitution  for dynamic models
 class SkinnedModelEntity : public Entity
@@ -20,7 +25,7 @@ public:
     void Update(float dt) override;
     void Teleport(const Vector3& newPosition) override;
     bool ApplyProperty(const std::string& name, const std::string& value) override;
-    bool OwnsCollider(ColliderHandle handle) const override { return handle != 0 && handle == collider; }
+    bool OwnsCollider(ColliderHandle handle) const override;
 
     void SetModelPath(const std::string& path);
     void SetMaterialPath(const std::string& path);
@@ -39,9 +44,19 @@ public:
     uint32_t GetCurrentBoneCount() const { return currentBoneCount; }
     const std::vector<float>& GetDebugBoneWorldMatrices() const { return debugBoneWorldMatrices; }
 
+    // Graph parameters; also forwarded to a state-machine graph (a true bool fires a Trigger of that name).
+    void SetAnimFloat(const std::string& name, float value);
+    void SetAnimBool(const std::string& name, bool value);
+    void SetAnimInt(const std::string& name, int value);
+    // Socket transform in model space (before the entity transform) for the current pose.
+    bool GetSocketModelMatrix(const std::string& name, float outMatrix[16]) const;
+
 private:
     void RefreshAssetHandles();
     const AnimationGraphData* ResolveAnimationGraph();
+    bool ResolveBlendTree();
+    void CreateModelColliders(const KModelData& model);
+    void UpdateBoneColliders(const KModelData& model, const std::vector<AnimationTransform>& pose, float dt);
     const AnimationClipData* ResolveAnimationClipHandle(const std::string& path, AnimationClipHandle& handle, std::string& cachedPath);
     void SyncSceneObject(float dt);
     void CreateCollider();
@@ -82,4 +97,15 @@ private:
     std::vector<float> skinMatricesScratch;
     std::vector<float> debugBoneWorldMatrices;
     AnimatorGraphInstance animator = {};
+    AnimBlendTreeInstance blendTree;
+    bool blendTreeAttempted = false;
+    std::vector<AnimationTransform> lastPose;
+
+    struct BoneCollider
+    {
+        ColliderHandle handle = 0;
+        size_t colliderIndex = 0;
+    };
+    std::vector<BoneCollider> boneColliders;
+    std::vector<float> boneWorldScratch;
 };

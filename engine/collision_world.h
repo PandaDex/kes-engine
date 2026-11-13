@@ -41,6 +41,18 @@ struct ConvexCollider
     Vector3 boundsMax = {};
 };
 
+// One shape of a compound body, in the body's local space. Box uses halfExtents,
+// Sphere radius, Capsule radius and halfHeight along its local Y.
+struct RigidShape
+{
+    ColliderType type = ColliderType::Box;
+    Vector3 center = {};
+    float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f };   // quaternion x, y, z, w
+    Vector3 halfExtents = { 0.5f, 0.5f, 0.5f };
+    float radius = 0.5f;
+    float halfHeight = 0.5f;
+};
+
 struct RigidBodyDesc
 {
     ColliderMotion motion = ColliderMotion::Dynamic;
@@ -104,6 +116,7 @@ public:
     ColliderHandle AddRigidHulls(const std::vector<ConvexCollider>& hulls, const RigidBodyDesc& desc);
     ColliderHandle AddRigidBox(const Vector3& halfExtents, const Vector3& offset, const RigidBodyDesc& desc);
     ColliderHandle AddRigidSphere(float radius, const Vector3& offset, const RigidBodyDesc& desc);
+    ColliderHandle AddRigidShapes(const std::vector<RigidShape>& shapes, const RigidBodyDesc& desc);
 
     bool Remove(ColliderHandle handle);
     bool Exists(ColliderHandle handle) const;
@@ -113,6 +126,11 @@ public:
     void SetPosition(ColliderHandle handle, const Vector3& position);
     // Kinematic bodies: reaches `position` over `timeStep` at a velocity, so it pushes what it meets.
     void SetTargetPosition(ColliderHandle handle, const Vector3& position, float timeStep);
+    // Places the body at parent * local, where parent is a position and Euler rotation (as on
+    // entities) and local a position and quaternion (x, y, z, w) in the parent's space.
+    // Kinematic bodies move there over timeStep (> 0) so they push what they meet; otherwise it teleports.
+    void SetTargetPose(ColliderHandle handle, const Vector3& parentPosition, const Vector3& parentRotation,
+                       const Vector3& localPosition, const float localRotation[4], float timeStep);
     Vector3 GetWorldPosition(ColliderHandle handle) const;
 
     void Step(float timeStep);

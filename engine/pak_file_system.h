@@ -4,10 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "asset_file_io.h"
 #include "engine.h"
-
-bool LoadAssetFileBytes(const char* path, std::vector<uint8_t>& outData, std::string* outError = nullptr);
-bool LoadAssetFileText(const char* path, std::string& outText, std::string* outError = nullptr);
 
 void ClearMountedPakFiles();
 void SetPakEncryptionKeyOverride(const char* hexKey);

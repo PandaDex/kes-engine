@@ -38,6 +38,7 @@ namespace
         root.meshIndex = 0;
         model.nodes.push_back(root);
 
+        CarryOverKModelAttachments(outputPath.c_str(), model);
         return SaveKModelFile(outputPath.c_str(), model, &error);
     }
 }

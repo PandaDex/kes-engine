@@ -25,3 +25,7 @@
 	path = tools/inputMappingEditor
 	url = https://github.com/PandaDex/kes-inputMappingEditor
 	branch = master
+[submodule "tools/modelEditor"]
+	path = tools/modelEditor
+	url = https://github.com/PandaDex/kes-modelEditor
+	branch = master

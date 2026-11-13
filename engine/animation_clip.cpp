@@ -6,7 +6,7 @@
 
 #include "binary_reader.h"
 #include "kmodel.h"
-#include "pak_file_system.h"
+#include "asset_file_io.h"
 #include "profiler.h"
 
 namespace

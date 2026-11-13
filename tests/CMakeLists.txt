@@ -10,6 +10,7 @@ add_executable(kes_tests
     "test_logger.cpp"
     "test_map_file.cpp"
     "test_map_script.cpp"
+    "test_anim_blend_tree.cpp"
     "test_pak.cpp"
     "test_physics_world.cpp"
     "test_scene.cpp"

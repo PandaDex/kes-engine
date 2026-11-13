@@ -1,5 +1,5 @@
 #include "text_block_file.h"
-#include "pak_file_system.h"
+#include "asset_file_io.h"
 #include "text_parse_utils.h"
 #include <sstream>
 
