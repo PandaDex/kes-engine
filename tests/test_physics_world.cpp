@@ -139,7 +139,7 @@ TEST_CASE("world: a model's own colliders make it a dynamic body")
     KModelCollider collider;
     collider.shape = KModelColliderShape::Sphere;
     collider.radius = 0.3f;
-    model.colliders.push_back(collider);
+    model.colliders = { collider };   // ball.kmodel may carry its own colliders
     const std::string path = dir.File("ball_with_collider.kmodel");
     REQUIRE(SaveKModelFile(path.c_str(), model));
 
