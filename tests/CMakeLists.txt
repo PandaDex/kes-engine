@@ -7,6 +7,7 @@ add_executable(kes_tests
     "test_file_formats.cpp"
     "test_ini_file.cpp"
     "test_input.cpp"
+    "test_localization.cpp"
     "test_logger.cpp"
     "test_map_file.cpp"
     "test_map_script.cpp"

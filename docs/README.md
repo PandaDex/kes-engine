@@ -10,6 +10,7 @@ The goal is to describe the current runtime, asset formats, and tool workflow in
 - [Engine API](engine-api.md)
 - [Rendering (PBR, shadows, settings)](rendering.md)
 - [UI System (HTML/CSS, RmlUi)](ui-system.md)
+- [Localization (.po files)](localization.md)
 - [Tools and Asset Pipeline](tools-and-pipeline.md)
 - [Profiling (Tracy)](profiling.md)
 - [Crash Reporting](crash-reporting.md)

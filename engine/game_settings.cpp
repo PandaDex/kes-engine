@@ -11,6 +11,7 @@
 #include "command_line.h"
 #include "engine_configuration.h"
 #include "file_paths.h"
+#include "localization.h"
 #include "logger.h"
 #include "render_backend.h"
 #include "window.h"
@@ -311,7 +312,28 @@ void GameSettings::ApplyNonResolutionSettings()
     }
     m_applied.vsync = m_vsync;
     ApplyAudioSettings();
+    ApplyLanguageSettings();
     // The frame rate limit is read by the engine loop every frame.
+}
+
+void GameSettings::SetLanguage(std::string_view language)
+{
+    const std::string normalized = LocalizationNormalizeLanguageCode(language);
+    m_language = normalized.empty() ? "auto" : normalized;
+}
+
+void GameSettings::ApplyLanguageSettings()
+{
+    std::string language = m_language;
+    std::string commandLine;
+    if (CommandLineGetValue("language", commandLine) && !commandLine.empty())
+        language = commandLine;
+
+    if (m_languageApplied && language == m_appliedLanguage)
+        return;
+    LocalizationSetLanguage(language);
+    m_appliedLanguage = language;
+    m_languageApplied = true;
 }
 
 void GameSettings::ConfirmVideoMode()
@@ -356,6 +378,7 @@ void GameSettings::SetToDefaults()
     m_invertLookY = false;
     m_gamepadVibration = true;
     m_crashReportUpload = false;
+    m_language = "auto";
     m_masterVolume = 1.0f;
     std::fill(std::begin(m_busVolumes), std::end(m_busVolumes), 1.0f);
     m_shadowQuality = ShadowQuality::High;
@@ -459,6 +482,7 @@ void GameSettings::ReadFromIni(const IniFile &ini)
     m_invertLookY = ini.GetBool(kSection, "bInvertLookY", m_invertLookY);
     m_gamepadVibration = ini.GetBool(kSection, "bGamepadVibration", m_gamepadVibration);
     m_crashReportUpload = ini.GetBool(kSection, "bCrashReportUpload", m_crashReportUpload);
+    m_language = ini.GetString(kSection, "Language", m_language);
     m_masterVolume = ini.GetFloat(kSection, "MasterVolume", m_masterVolume);
     for (size_t bus = 0; bus < static_cast<size_t>(AudioBus::Count); ++bus)
         m_busVolumes[bus] = ini.GetFloat(kSection, std::string(AudioBusName(static_cast<AudioBus>(bus))) + "Volume", m_busVolumes[bus]);
@@ -493,6 +517,7 @@ void GameSettings::WriteToIni(IniFile &ini) const
     ini.SetBool(kSection, "bInvertLookY", m_invertLookY);
     ini.SetBool(kSection, "bGamepadVibration", m_gamepadVibration);
     ini.SetBool(kSection, "bCrashReportUpload", m_crashReportUpload);
+    ini.SetString(kSection, "Language", m_language);
     ini.SetFloat(kSection, "MasterVolume", m_masterVolume);
     for (size_t bus = 0; bus < static_cast<size_t>(AudioBus::Count); ++bus)
         ini.SetFloat(kSection, std::string(AudioBusName(static_cast<AudioBus>(bus))) + "Volume", m_busVolumes[bus]);

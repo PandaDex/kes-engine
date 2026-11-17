@@ -573,6 +573,55 @@ bool LoadAssetFileBytes(const char* path, std::vector<uint8_t>& outData, std::st
     return false;
 }
 
+std::vector<std::string> ListAssetFiles(const char* directory, const char* extension)
+{
+    std::vector<std::string> names;
+    if (!directory)
+        return names;
+
+    const std::string wantedExtension = NormalizePakEntryPath(fs::path(extension ? extension : ""));
+    auto addName = [&](const std::string& name)
+    {
+        const std::string lower = NormalizePakEntryPath(fs::path(name));
+        if (!wantedExtension.empty() &&
+            (lower.size() <= wantedExtension.size() || lower.compare(lower.size() - wantedExtension.size(), wantedExtension.size(), wantedExtension) != 0))
+            return;
+        const bool seen = std::any_of(names.begin(), names.end(), [&](const std::string& existing)
+                                      { return NormalizePakEntryPath(fs::path(existing)) == lower; });
+        if (!seen)
+            names.push_back(name);
+    };
+
+    std::error_code error;
+    const fs::path looseDirectory(ResolveAssetPath(directory));
+    if (!looseDirectory.empty() && fs::is_directory(looseDirectory, error))
+    {
+        for (const fs::directory_entry& entry : fs::directory_iterator(looseDirectory, error))
+        {
+            if (!entry.is_regular_file(error))
+                continue;
+            const std::u8string name = entry.path().filename().u8string();
+            addName(std::string(name.begin(), name.end()));
+        }
+    }
+
+    std::string prefix = BuildPakLookupPath(directory);
+    if (!prefix.empty() && prefix.back() != '/')
+        prefix.push_back('/');
+    for (const MountedPakFile& pak : gMountedPaks)
+    {
+        for (const MountedPakEntry& entry : pak.entries)
+        {
+            if (entry.path.size() <= prefix.size() || entry.path.compare(0, prefix.size(), prefix) != 0)
+                continue;
+            if (entry.path.find('/', prefix.size()) != std::string::npos)
+                continue;
+            addName(entry.path.substr(prefix.size()));
+        }
+    }
+    return names;
+}
+
 bool LoadAssetFileText(const char* path, std::string& outText, std::string* outError)
 {
     KES_ZONE_FN(IO);

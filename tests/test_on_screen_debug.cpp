@@ -1,7 +1,9 @@
 #include "test_framework.h"
 #include <RmlUi/Core.h>
 #include "engine_configuration.h"
+#include <filesystem>
 #include "file_paths.h"
+#include "localization.h"
 #include "on_screen_debug.h"
 #include "render_backend.h"
 #include "ui_system.h"
@@ -135,3 +137,38 @@ TEST_CASE("on-screen debug: keyed lines update in place and messages expire")
     CHECK(ui.Messages().empty());
 }
 #endif
+
+TEST_CASE("ui: documents are translated through the active .po file")
+{
+    kestest::TempDir dir;
+    const std::filesystem::path po = dir.Path("localization") / "pl.po";
+    std::filesystem::create_directories(po.parent_path());
+    const std::string text =
+        "msgid \"MainMenu.NewGame\"\nmsgstr \"Nowa gra\"\n"
+        "msgid \"HUD.Score\"\nmsgstr \"Wynik: {{score}}\"\n";
+    kestest::WriteBytes(po.string(), reinterpret_cast<const uint8_t*>(text.data()), text.size());
+    SetAssetRootOverride(dir.Root().string().c_str());
+    REQUIRE(LocalizationSetLanguage("pl"));
+
+    {
+        OffscreenUi ui;
+        Rml::DataModelConstructor model = ui.ui.GetContext()->CreateDataModel("hud");
+        int score = 42;
+        REQUIRE(model.Bind("score", &score));
+        Rml::ElementDocument* document = ui.ui.LoadDocumentFromMemory(
+            "<rml><head><title>#MainMenu.NewGame</title></head><body data-model=\"hud\">"
+            "<p id=\"a\">#MainMenu.NewGame</p>"
+            "<p id=\"b\">\n    #HUD.Score\n</p>"
+            "<p id=\"c\">New Game</p>"
+            "<p id=\"d\">#Missing.Key</p>"
+            "</body></rml>");
+        REQUIRE(document != nullptr);
+        ui.Frame();
+        CHECK(document->GetTitle() == "Nowa gra");
+        CHECK(document->GetElementById("a")->GetInnerRML() == "Nowa gra");
+        CHECK(document->GetElementById("b")->GetInnerRML().find("Wynik: 42") != Rml::String::npos);
+        CHECK(document->GetElementById("c")->GetInnerRML() == "New Game");
+        CHECK(document->GetElementById("d")->GetInnerRML() == "#Missing.Key");
+    }
+    LocalizationShutdown();
+}

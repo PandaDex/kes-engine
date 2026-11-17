@@ -128,6 +128,11 @@ public:
     void SetCrashReportUploadEnabled(bool enabled);
     bool IsCrashReportUploadEnabled() const { return m_crashReportUpload; }
 
+    // "auto" follows the OS language. -language=xx overrides it without saving.
+    void SetLanguage(std::string_view language);
+    const std::string &GetLanguage() const { return m_language; }
+    void ApplyLanguageSettings();
+
     // Takes effect on the next launch (the renderer can't be swapped live).
     void SetPreferredRenderer(RendererBackend backend) { m_preferredRenderer = backend; }
     RendererBackend GetPreferredRenderer() const { return m_preferredRenderer; }
@@ -221,8 +226,12 @@ private:
     bool m_invertLookY = false;            // bInvertLookY
     bool m_gamepadVibration = true;        // bGamepadVibration
     bool m_crashReportUpload = false;      // bCrashReportUpload
+    std::string m_language = "auto";       // Language
     float m_masterVolume = 1.0f;           // MasterVolume
     float m_busVolumes[static_cast<size_t>(AudioBus::Count)] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}; // <Bus>Volume
+
+    std::string m_appliedLanguage;
+    bool m_languageApplied = false;
 
     IniFile m_ini; // whole document, so unknown sections survive a save
     bool m_loaded = false;

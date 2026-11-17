@@ -181,6 +181,10 @@ Note: with Visual Studio generators, the first build after adding or removing a 
 
 Shader Graph also opens a `.mat` directly (File > Open, or from Forge): it loads `<name>.slangnodes` from the same folder when there is one, otherwise it starts a new graph with the material's values, and Export Material then writes back to that `.mat`. Save the graph next to the material to keep its nodes.
 
+## Localization Editor
+
+`tools/localizationEditor` (`kesLocalizationEditor`) is a Qt 6 editor for the `.po` files in `content/localization`. See [Localization](localization.md#localization-editor).
+
 ## Map Editor: Forge
 
 `tools/forgeMapEditor` is a Qt 6 brush editor in the style of Hammer. It produces the maps the engine loads.

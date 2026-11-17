@@ -353,6 +353,14 @@ Each track targets a node and stores:
 
 This format is separate from `.kmodel`; models and clips are linked by path and node names/indexes.
 
+## Translation Files: `.po`
+
+GNU gettext PO files, one per language, in `content/localization/<code>.po`
+(`en.po`, `pl.po`, `pt_BR.po`). UTF-8 only. Each entry's `msgid` is its key
+(`MainMenu.NewGame`, referenced as `#MainMenu.NewGame`) and `msgstr` the text
+in that file's language. Plural forms come from the header's
+`Plural-Forms`. See [Localization](localization.md).
+
 ## Pak Files: `.pak`
 
 `.pak` is the packaged content archive used by the runtime.

@@ -9,6 +9,7 @@
 #include "render_backend.h"
 #include "entity.h"
 #include "input.h"
+#include "localization.h"
 #include "shared.h"
 #include "ui_system.h"
 #include "window.h"
@@ -65,6 +66,10 @@ struct EngineApp
     // calls both from EngineStart, without the extra frame. Set before EngineStart.
     std::function<void(EngineApp &app, const std::string &mapName)> onMapLoadBegin;
     std::function<void(EngineApp &app, const std::string &mapName, bool loaded)> onMapLoaded;
+    // Runs after the UI documents were reloaded for a new language, so any
+    // Rml::ElementDocument pointers held from before are dangling.
+    std::function<void(EngineApp &app)> onLanguageChanged;
+    uint64_t localizationGeneration = 0;
     std::string loadingMap;           // announced, loads after this frame is drawn
     bool loadingFrameDrawn = false;
     uint64_t preloadedLevel = 0;      // World::GetLevelGeneration the GPU has

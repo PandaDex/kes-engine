@@ -140,6 +140,18 @@ namespace
         app.preloadedLevel = app.world.GetLevelGeneration();
     }
 
+    // RmlUi translates text only while parsing, so documents have to be reloaded.
+    void ApplyLanguageChange(EngineApp &app)
+    {
+        const uint64_t generation = LocalizationGetGeneration();
+        if (generation == app.localizationGeneration)
+            return;
+        app.localizationGeneration = generation;
+        app.ui.ReloadDocuments();
+        if (app.onLanguageChanged)
+            app.onLanguageChanged(app);
+    }
+
     // Runs a load announced last frame, once that frame (the loading screen) was drawn.
     void RunQueuedMapLoad(EngineApp &app)
     {
@@ -387,6 +399,7 @@ bool EngineStart(EngineApp &app)
     if (!app.ui.Init(app.window.handle, app.renderer.get(), app.window.pixelWidth, app.window.pixelHeight,
                      &app.input, LoadProjectUiConfig()))
         EngineLog("UI system failed to initialize; continuing without UI.");
+    app.localizationGeneration = LocalizationGetGeneration();
     app.ui.SetSoundCallback([&app](const std::string &path) {
         if (app.worldInitialized)
             app.world.GetAudio().PlayUi(path.c_str());
@@ -476,12 +489,14 @@ bool EngineTick(EngineApp &app)
 #if ENGINE_ALLOW_DEBUG_MODE
             if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F4))
                 EngineSetInputMode(app, app.inputMode == InputMode::GameOnly ? InputMode::GameAndUI : InputMode::GameOnly);
-            // F7: reload UI documents, style sheets and DefaultUi.ini, F8: RmlUi debugger
+            // F7: reload UI documents, style sheets, DefaultUi.ini and .po files, F8: RmlUi debugger
             if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F7))
             {
                 app.ui.SetConfig(LoadProjectUiConfig());
                 ApplyInputMode(app);
-                app.ui.ReloadDocuments();
+                LocalizationReload();
+                if (app.localizationGeneration == LocalizationGetGeneration())
+                    app.ui.ReloadDocuments();   // otherwise ApplyLanguageChange does it
             }
             if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F8))
             {
@@ -498,6 +513,7 @@ bool EngineTick(EngineApp &app)
     }
 
     RunQueuedMapLoad(app);
+    ApplyLanguageChange(app);
 
     const Uint64 now = SDL_GetPerformanceCounter();
     float dt = static_cast<float>((now - app.prevCounter) / app.performanceFrequency);
@@ -658,6 +674,7 @@ void EngineShutdown(EngineApp &app)
     // renderer (RmlUi releases its textures through it).
     OnScreenDebugShutdown(app.ui);
     app.ui.Shutdown();
+    LocalizationShutdown();
 
     if (app.settings)
     {

@@ -29,3 +29,7 @@
 	path = tools/modelEditor
 	url = https://github.com/PandaDex/kes-modelEditor
 	branch = master
+[submodule "tools/localizationEditor"]
+	path = tools/localizationEditor
+	url = https://github.com/PandaDex/kes-localizationEditor
+	branch = master

@@ -13,6 +13,7 @@ git submodule update --init external/RmlUi external/freetype
 - **Behaviour**: `onclick="action"` attributes call C++ actions, data models bind C++ variables into markup (`{{ health }}`, `data-if`, `data-for`, `data-value`...), and you can use the full Rml API on documents and elements.
 - **Rendering**: UI geometry is batched into a `UiDrawList` and drawn by the active renderer (Vulkan or D3D11) at full window resolution, over the low-res scene (`engine/shaders/ui.slang`).
 - **Files** come through the engine file system, as loose content or from mounted paks, so packaged builds need no extra steps.
+- **Text**: a text node that is a key such as `#MainMenu.NewGame` is replaced with its translation from `content/localization/<code>.po` as the document loads. See [Localization](localization.md).
 
 ## Files and Paths
 

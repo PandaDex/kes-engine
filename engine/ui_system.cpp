@@ -22,6 +22,7 @@
 #include "file_paths.h"
 #include "ini_file.h"
 #include "input.h"
+#include "localization.h"
 #include "logger.h"
 #include "pak_file_system.h"
 #include "profiler.h"
@@ -89,6 +90,28 @@ namespace
             }
             EngineLogf("[UI] %s: %s", level, message.c_str());
             return true;   // never break into the debugger from UI logs
+        }
+
+        // Only a text node that is exactly a #Key is translated. The whitespace
+        // around it is kept so layout doesn't change.
+        int TranslateString(Rml::String &translated, const Rml::String &input) override
+        {
+            size_t begin = 0;
+            size_t end = input.size();
+            while (begin < end && std::isspace(static_cast<unsigned char>(input[begin])))
+                ++begin;
+            while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])))
+                --end;
+            const std::string_view text(input.data() + begin, end - begin);
+            if (!LocalizationIsKeyReference(text))
+            {
+                translated = input;
+                return 0;
+            }
+            translated.assign(input, 0, begin);
+            translated += Tr(text);
+            translated.append(input, end, Rml::String::npos);
+            return 1;
         }
     };
 
