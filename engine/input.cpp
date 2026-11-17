@@ -12,6 +12,8 @@
 #define NOMINMAX
 #endif
 #include "file_paths.h"
+#include "game_settings.h"
+#include "ini_file.h"
 #include "profiler.h"
 
 namespace
@@ -244,6 +246,25 @@ namespace
         { "Gamepad_DPad_Right",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_RIGHT, kNoAxis },
     };
 
+    struct MouseKeyDef
+    {
+        const char* name;
+        InputNativeKeyKind kind;
+        uint8_t button;
+        const char* displayName;
+    };
+
+    constexpr MouseKeyDef kMouseKeys[] =
+    {
+        { "Mouse_Left",      InputNativeKeyKind::MouseButton,    SDL_BUTTON_LEFT,   "Left Mouse" },
+        { "Mouse_Right",     InputNativeKeyKind::MouseButton,    SDL_BUTTON_RIGHT,  "Right Mouse" },
+        { "Mouse_Middle",    InputNativeKeyKind::MouseButton,    SDL_BUTTON_MIDDLE, "Middle Mouse" },
+        { "Mouse_Button4",   InputNativeKeyKind::MouseButton,    SDL_BUTTON_X1,     "Mouse 4" },
+        { "Mouse_Button5",   InputNativeKeyKind::MouseButton,    SDL_BUTTON_X2,     "Mouse 5" },
+        { "Mouse_WheelUp",   InputNativeKeyKind::MouseWheelUp,   0,                 "Wheel Up" },
+        { "Mouse_WheelDown", InputNativeKeyKind::MouseWheelDown, 0,                 "Wheel Down" },
+    };
+
     bool NativeKeyFromName(const std::string& key, InputBinding& binding)
     {
         if (key.rfind("Keyboard_", 0) == 0)
@@ -273,6 +294,15 @@ namespace
         if (key == "Mouse_2D_Axis")
         {
             binding.keyKind = InputNativeKeyKind::Mouse2DAxis;
+            return true;
+        }
+
+        for (const MouseKeyDef& def : kMouseKeys)
+        {
+            if (key != def.name)
+                continue;
+            binding.keyKind = def.kind;
+            binding.mouseButton = def.button;
             return true;
         }
 
@@ -480,7 +510,11 @@ namespace
                 std::string key;
                 if (!ReadQuotedString(cursor, key))
                     return false;
-                NativeKeyFromName(key, binding);
+                if (NativeKeyFromName(key, binding))
+                {
+                    binding.key = key;
+                    binding.defaultKey = key;
+                }
             }
             else if (field == "modifiers")
             {
@@ -508,6 +542,59 @@ namespace
         return false;
     }
 
+    // Shape of a binding's value: rebinding keeps it.
+    enum class KeyShape
+    {
+        Button,
+        Axis,
+        Stick
+    };
+
+    KeyShape ShapeOf(InputNativeKeyKind kind)
+    {
+        switch (kind)
+        {
+        case InputNativeKeyKind::Mouse2DAxis:
+        case InputNativeKeyKind::GamepadLeftAxis2D:
+        case InputNativeKeyKind::GamepadRightAxis2D:
+            return KeyShape::Stick;
+        case InputNativeKeyKind::Mouse_X_Axis:
+        case InputNativeKeyKind::Mouse_Y_Axis:
+            return KeyShape::Axis;
+        default:
+            return KeyShape::Button;   // gamepad axes too: triggers and half sticks read like buttons
+        }
+    }
+
+    InputDevice DeviceOf(InputNativeKeyKind kind)
+    {
+        switch (kind)
+        {
+        case InputNativeKeyKind::GamepadButton:
+        case InputNativeKeyKind::GamepadAxis:
+        case InputNativeKeyKind::GamepadLeftAxis2D:
+        case InputNativeKeyKind::GamepadRightAxis2D:
+            return InputDevice::Gamepad;
+        default:
+            return InputDevice::KeyboardMouse;
+        }
+    }
+
+    // Points the binding at another key; false (and unchanged) for an unknown name.
+    bool ApplyKeyName(InputBinding& binding, const std::string& keyName)
+    {
+        InputBinding parsed = {};
+        if (!NativeKeyFromName(keyName, parsed))
+            return false;
+        binding.keyKind = parsed.keyKind;
+        binding.keyboardKey = parsed.keyboardKey;
+        binding.gamepadButton = parsed.gamepadButton;
+        binding.gamepadAxis = parsed.gamepadAxis;
+        binding.mouseButton = parsed.mouseButton;
+        binding.key = keyName;
+        return true;
+    }
+
     bool ParseNativeKeys(TextCursor& cursor, std::vector<InputBinding>& bindings)
     {
         if (!Match(cursor, '['))
@@ -528,7 +615,12 @@ namespace
 
             // An unknown key loses this binding, not the whole map.
             if (binding.keyKind != InputNativeKeyKind::Unknown)
+            {
+                // A key chosen in the map's AssignableKey replaces the default one.
+                if (binding.playerAssignable && !binding.assignableKey.empty() && binding.assignableKey != "none")
+                    ApplyKeyName(binding, binding.assignableKey);
                 bindings.push_back(binding);
+            }
         }
 
         return false;
@@ -664,6 +756,17 @@ namespace
                 return {};
             return { input.mouseDeltaX, input.mouseDeltaY, 0.0f };
 
+        case InputNativeKeyKind::MouseButton:
+            if (binding.mouseButton < 8 && (input.mouseButtons[binding.mouseButton] || input.mouseButtonsTapped[binding.mouseButton]))
+                return { 0.0f, 1.0f, 0.0f };
+            return {};
+
+        case InputNativeKeyKind::MouseWheelUp:
+            return input.mouseWheel > 0.0f ? Vector3{ 0.0f, 1.0f, 0.0f } : Vector3{};
+
+        case InputNativeKeyKind::MouseWheelDown:
+            return input.mouseWheel < 0.0f ? Vector3{ 0.0f, 1.0f, 0.0f } : Vector3{};
+
         case InputNativeKeyKind::GamepadButton:
             if (input.gamepad && SDL_GetGamepadButton(input.gamepad, binding.gamepadButton))
                 return { 0.0f, 1.0f, 0.0f };
@@ -761,6 +864,77 @@ namespace
             }
         }
     }
+
+    const char* GamepadButtonKeyName(SDL_GamepadButton button)
+    {
+        for (const GamepadKeyDef& def : kGamepadKeys)
+        {
+            if (def.kind == InputNativeKeyKind::GamepadButton && def.button == button)
+                return def.name;
+        }
+        return nullptr;
+    }
+
+    const char* GamepadAxisKeyName(SDL_GamepadAxis axis)
+    {
+        for (const GamepadKeyDef& def : kGamepadKeys)
+        {
+            if (def.kind == InputNativeKeyKind::GamepadAxis && def.axis == axis)
+                return def.name;
+        }
+        return nullptr;
+    }
+
+    // Takes the event when it is the press InputBeginKeyCapture waits for.
+    bool CaptureKey(InputState& input, const SDL_Event& e)
+    {
+        std::string key;
+        const bool keyboardMouse = input.captureDevice == InputDevice::KeyboardMouse;
+        switch (e.type)
+        {
+        case SDL_EVENT_KEY_DOWN:
+            if (keyboardMouse && !e.key.repeat)
+            {
+                const char* name = SDL_GetScancodeName(e.key.scancode);
+                if (name && name[0])
+                    key = std::string("Keyboard_") + name;
+            }
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            for (const MouseKeyDef& def : kMouseKeys)
+            {
+                if (keyboardMouse && def.kind == InputNativeKeyKind::MouseButton && def.button == e.button.button)
+                    key = def.name;
+            }
+            break;
+        case SDL_EVENT_MOUSE_WHEEL:
+            if (keyboardMouse && e.wheel.y != 0.0f)
+                key = (e.wheel.y > 0.0f) == (e.wheel.direction != SDL_MOUSEWHEEL_FLIPPED) ? "Mouse_WheelUp" : "Mouse_WheelDown";
+            break;
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            if (!keyboardMouse)
+            {
+                const char* name = GamepadButtonKeyName(static_cast<SDL_GamepadButton>(e.gbutton.button));
+                key = name ? name : "";
+            }
+            break;
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+            if (!keyboardMouse && e.gaxis.value > kGamepadActivateAxis &&
+                (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || e.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER))
+            {
+                const char* name = GamepadAxisKeyName(static_cast<SDL_GamepadAxis>(e.gaxis.axis));
+                key = name ? name : "";
+            }
+            break;
+        default:
+            break;
+        }
+        if (key.empty())
+            return false;
+        input.capturedKey = key;
+        input.captureActive = false;
+        return true;
+    }
 }
 
 void InputInit(InputState& input)
@@ -802,9 +976,11 @@ void InputBeginFrame(InputState& input)
         input.previousKeys[key] = input.keys[key] || input.keysTapped[key];
     std::fill(std::begin(input.keysTapped), std::end(input.keysTapped), false);
     std::copy(std::begin(input.mouseButtons), std::end(input.mouseButtons), std::begin(input.previousMouseButtons));
+    std::fill(std::begin(input.mouseButtonsTapped), std::end(input.mouseButtonsTapped), false);
 
     input.mouseDeltaX = 0.0f;
     input.mouseDeltaY = 0.0f;
+    input.mouseWheel = 0.0f;
 
     for (auto& pair : input.actionStates)
     {
@@ -817,6 +993,9 @@ void InputBeginFrame(InputState& input)
 
 void InputProcessEvent(InputState& input, const SDL_Event& e)
 {
+    if (input.captureActive && CaptureKey(input, e))
+        return;
+
     switch (e.type)
     {
     case SDL_EVENT_KEY_DOWN:
@@ -825,6 +1004,7 @@ void InputProcessEvent(InputState& input, const SDL_Event& e)
             input.keys[e.key.scancode] = true;
             input.keysTapped[e.key.scancode] = true;
         }
+        input.activeDevice = InputDevice::KeyboardMouse;
         break;
 
     case SDL_EVENT_KEY_UP:
@@ -835,11 +1015,22 @@ void InputProcessEvent(InputState& input, const SDL_Event& e)
     case SDL_EVENT_MOUSE_MOTION:
         input.mouseDeltaX += static_cast<float>(e.motion.xrel);
         input.mouseDeltaY += static_cast<float>(e.motion.yrel);
+        if (std::fabs(e.motion.xrel) + std::fabs(e.motion.yrel) > 2.0f)   // not sensor jitter
+            input.activeDevice = InputDevice::KeyboardMouse;
         break;
 
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e.button.button < 8)
+        {
             input.mouseButtons[e.button.button] = true;
+            input.mouseButtonsTapped[e.button.button] = true;
+        }
+        input.activeDevice = InputDevice::KeyboardMouse;
+        break;
+
+    case SDL_EVENT_MOUSE_WHEEL:
+        input.mouseWheel += e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.y : e.wheel.y;
+        input.activeDevice = InputDevice::KeyboardMouse;
         break;
 
     case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -869,11 +1060,15 @@ void InputProcessEvent(InputState& input, const SDL_Event& e)
     // The controller used last becomes the active one.
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         MakeGamepadActive(input, e.gbutton.which);
+        input.activeDevice = InputDevice::Gamepad;
         break;
 
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         if (e.gaxis.value > kGamepadActivateAxis || e.gaxis.value < -kGamepadActivateAxis)
+        {
             MakeGamepadActive(input, e.gaxis.which);
+            input.activeDevice = InputDevice::Gamepad;
+        }
         break;
     }
 }
@@ -890,8 +1085,10 @@ void InputResetState(InputState& input)
     std::fill(std::begin(input.keys), std::end(input.keys), false);
     std::fill(std::begin(input.keysTapped), std::end(input.keysTapped), false);
     std::fill(std::begin(input.mouseButtons), std::end(input.mouseButtons), false);
+    std::fill(std::begin(input.mouseButtonsTapped), std::end(input.mouseButtonsTapped), false);
     input.mouseDeltaX = 0.0f;
     input.mouseDeltaY = 0.0f;
+    input.mouseWheel = 0.0f;
 }
 
 namespace
@@ -1063,4 +1260,327 @@ bool InputKeyPressed(const InputState& input, SDL_Scancode key)
 bool InputKeyReleased(const InputState& input, SDL_Scancode key)
 {
     return key >= 0 && key < SDL_SCANCODE_COUNT && !input.keys[key] && !input.keysTapped[key] && input.previousKeys[key];
+}
+InputDevice InputGetActiveDevice(const InputState& input)
+{
+    return input.activeDevice;
+}
+
+SDL_GamepadType InputGetGamepadType(const InputState& input)
+{
+    return input.gamepad ? SDL_GetGamepadType(input.gamepad) : SDL_GAMEPAD_TYPE_UNKNOWN;
+}
+
+namespace
+{
+    InputAction* FindAction(InputState& input, const char* actionName)
+    {
+        for (InputAction& action : input.actions)
+        {
+            if (actionName && action.name == actionName)
+                return &action;
+        }
+        return nullptr;
+    }
+
+    const InputAction* FindAction(const InputState& input, const char* actionName)
+    {
+        return FindAction(const_cast<InputState&>(input), actionName);
+    }
+
+    constexpr const char* kOverrideSection = "InputBindings";
+
+    std::string OverridePath(const char* path)
+    {
+        return path && path[0] ? std::string(path) : (GetUserDataDirectory() / "Config" / "InputBindings.ini").string();
+    }
+}
+
+std::vector<InputBindingInfo> InputGetBindings(const InputState& input, const char* actionName)
+{
+    std::vector<InputBindingInfo> result;
+    if (const InputAction* action = FindAction(input, actionName))
+    {
+        for (size_t index = 0; index < action->bindings.size(); ++index)
+        {
+            const InputBinding& binding = action->bindings[index];
+            result.push_back({ index, binding.key, binding.defaultKey, DeviceOf(binding.keyKind), binding.playerAssignable });
+        }
+    }
+    return result;
+}
+
+bool InputRebind(InputState& input, const char* actionName, size_t bindingIndex, const char* keyName, std::string* outError)
+{
+    const auto fail = [&](std::string message)
+    {
+        if (outError)
+            *outError = std::move(message);
+        return false;
+    };
+    InputAction* action = FindAction(input, actionName);
+    if (!action)
+        return fail(std::string("No input action ") + (actionName ? actionName : "<null>"));
+    if (bindingIndex >= action->bindings.size())
+        return fail("No such binding");
+    InputBinding& binding = action->bindings[bindingIndex];
+    if (!binding.playerAssignable)
+        return fail("The binding is not player assignable");
+
+    InputBinding parsed = {};
+    const std::string key = keyName ? keyName : "";
+    if (!NativeKeyFromName(key, parsed))
+        return fail("Unknown key " + key);
+    if (DeviceOf(parsed.keyKind) != DeviceOf(binding.keyKind) || ShapeOf(parsed.keyKind) != ShapeOf(binding.keyKind))
+        return fail("A " + binding.defaultKey + " binding can't use " + key);
+
+    ApplyKeyName(binding, key);
+    return true;
+}
+
+void InputResetBinding(InputState& input, const char* actionName, size_t bindingIndex)
+{
+    InputAction* action = FindAction(input, actionName);
+    if (action && bindingIndex < action->bindings.size())
+        ApplyKeyName(action->bindings[bindingIndex], action->bindings[bindingIndex].defaultKey);
+}
+
+void InputResetAllBindings(InputState& input)
+{
+    for (InputAction& action : input.actions)
+    {
+        for (InputBinding& binding : action.bindings)
+        {
+            if (binding.key != binding.defaultKey)
+                ApplyKeyName(binding, binding.defaultKey);
+        }
+    }
+}
+
+std::vector<std::string> InputFindActionsUsingKey(const InputState& input, const char* keyName, InputActionContext context)
+{
+    std::vector<std::string> result;
+    for (const InputAction& action : input.actions)
+    {
+        if (action.context != context)
+            continue;
+        const bool uses = std::any_of(action.bindings.begin(), action.bindings.end(),
+                                      [&](const InputBinding& binding) { return keyName && binding.key == keyName; });
+        if (uses)
+            result.push_back(action.name);
+    }
+    return result;
+}
+
+bool InputSaveBindingOverrides(const InputState& input, const char* path, std::string* outError)
+{
+    IniFile ini;
+    for (const InputAction& action : input.actions)
+    {
+        for (const InputBinding& binding : action.bindings)
+        {
+            if (binding.playerAssignable && binding.key != binding.defaultKey)
+                ini.SetString(kOverrideSection, action.name + "|" + binding.defaultKey, binding.key);
+        }
+    }
+    const std::string file = OverridePath(path);
+    std::error_code error;
+    std::filesystem::create_directories(std::filesystem::path(file).parent_path(), error);
+    if (!ini.SaveToFile(file))
+    {
+        if (outError)
+            *outError = "Could not write " + file;
+        return false;
+    }
+    return true;
+}
+
+bool InputLoadBindingOverrides(InputState& input, const char* path, std::string* outError)
+{
+    const std::string file = OverridePath(path);
+    std::error_code existsError;
+    if (!std::filesystem::exists(file, existsError))
+        return true;   // nothing rebound yet
+    IniFile ini;
+    if (!ini.LoadFromFile(file))
+    {
+        if (outError)
+            *outError = "Could not read " + file;
+        return false;
+    }
+    for (InputAction& action : input.actions)
+    {
+        for (size_t index = 0; index < action.bindings.size(); ++index)
+        {
+            const InputBinding& binding = action.bindings[index];
+            const std::string* key = ini.Find(kOverrideSection, action.name + "|" + binding.defaultKey);
+            if (!key)
+                continue;
+            std::string error;
+            if (!InputRebind(input, action.name.c_str(), index, key->c_str(), &error))
+                EngineLogf("Input binding override %s -> %s ignored: %s", action.name.c_str(), key->c_str(), error.c_str());
+        }
+    }
+    return true;
+}
+
+void InputBeginKeyCapture(InputState& input, InputDevice device)
+{
+    input.captureActive = true;
+    input.captureDevice = device;
+    input.capturedKey.clear();
+}
+
+void InputCancelKeyCapture(InputState& input)
+{
+    input.captureActive = false;
+    input.capturedKey.clear();
+}
+
+bool InputIsCapturingKey(const InputState& input)
+{
+    return input.captureActive;
+}
+
+bool InputGetCapturedKey(InputState& input, std::string& outKeyName)
+{
+    if (input.capturedKey.empty())
+        return false;
+    outKeyName = std::move(input.capturedKey);
+    input.capturedKey.clear();
+    return true;
+}
+
+std::string InputGetKeyDisplayName(const InputState& input, const std::string& keyName)
+{
+    InputBinding binding = {};
+    if (!NativeKeyFromName(keyName, binding))
+        return keyName;
+
+    switch (binding.keyKind)
+    {
+    case InputNativeKeyKind::Keyboard:
+    {
+        // The key at this position on the player's layout (Z on AZERTY for W).
+        const SDL_Keycode keycode = SDL_GetKeyFromScancode(binding.keyboardKey, SDL_KMOD_NONE, false);
+        const char* name = SDL_GetKeyName(keycode);
+        return name && name[0] ? std::string(name) : std::string(SDL_GetScancodeName(binding.keyboardKey));
+    }
+    case InputNativeKeyKind::MouseButton:
+    case InputNativeKeyKind::MouseWheelUp:
+    case InputNativeKeyKind::MouseWheelDown:
+        for (const MouseKeyDef& def : kMouseKeys)
+        {
+            if (keyName == def.name)
+                return def.displayName;
+        }
+        return keyName;
+    case InputNativeKeyKind::Mouse2DAxis:
+        return "Mouse";
+    default:
+        break;
+    }
+
+    const SDL_GamepadType type = InputGetGamepadType(input);
+    const bool playstation = type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5;
+    const bool nintendo = type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO || type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR ||
+                          type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT || type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT;
+    const auto pick = [&](const char* xbox, const char* ps, const char* switchName) -> std::string
+    {
+        return playstation ? ps : nintendo ? switchName : xbox;
+    };
+
+    if (binding.keyKind == InputNativeKeyKind::GamepadButton)
+    {
+        switch (SDL_GetGamepadButtonLabelForType(type == SDL_GAMEPAD_TYPE_UNKNOWN ? SDL_GAMEPAD_TYPE_XBOXONE : type, binding.gamepadButton))
+        {
+        case SDL_GAMEPAD_BUTTON_LABEL_A: return "A";
+        case SDL_GAMEPAD_BUTTON_LABEL_B: return "B";
+        case SDL_GAMEPAD_BUTTON_LABEL_X: return "X";
+        case SDL_GAMEPAD_BUTTON_LABEL_Y: return "Y";
+        case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return "Cross";
+        case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return "Circle";
+        case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return "Square";
+        case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return "Triangle";
+        default: break;
+        }
+        switch (binding.gamepadButton)
+        {
+        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return pick("LB", "L1", "L");
+        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return pick("RB", "R1", "R");
+        case SDL_GAMEPAD_BUTTON_LEFT_STICK: return pick("LS", "L3", "Left Stick");
+        case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return pick("RS", "R3", "Right Stick");
+        case SDL_GAMEPAD_BUTTON_BACK: return pick("View", "Create", "-");
+        case SDL_GAMEPAD_BUTTON_START: return pick("Menu", "Options", "+");
+        case SDL_GAMEPAD_BUTTON_DPAD_UP: return "D-Pad Up";
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "D-Pad Down";
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "D-Pad Left";
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "D-Pad Right";
+        default: return keyName;
+        }
+    }
+    if (binding.keyKind == InputNativeKeyKind::GamepadAxis)
+    {
+        switch (binding.gamepadAxis)
+        {
+        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: return pick("LT", "L2", "ZL");
+        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: return pick("RT", "R2", "ZR");
+        case SDL_GAMEPAD_AXIS_LEFTX:
+        case SDL_GAMEPAD_AXIS_LEFTY: return "Left Stick";
+        default: return "Right Stick";
+        }
+    }
+    return binding.keyKind == InputNativeKeyKind::GamepadLeftAxis2D ? "Left Stick" : "Right Stick";
+}
+
+std::string InputGetActionDisplayName(const InputState& input, const char* actionName, InputDevice device)
+{
+    if (const InputAction* action = FindAction(input, actionName))
+    {
+        for (const InputBinding& binding : action->bindings)
+        {
+            if (DeviceOf(binding.keyKind) == device)
+                return InputGetKeyDisplayName(input, binding.key);
+        }
+    }
+    return {};
+}
+
+namespace
+{
+    Uint16 RumbleStrength(float value)
+    {
+        return static_cast<Uint16>(std::clamp(value, 0.0f, 1.0f) * 65535.0f);
+    }
+
+    bool RumbleAllowed(const InputState& input)
+    {
+        const GameSettings* settings = GetGameSettings();
+        return input.gamepad && (!settings || settings->IsGamepadVibrationEnabled());
+    }
+}
+
+bool InputRumble(InputState& input, float lowFrequency, float highFrequency, float seconds)
+{
+    if (!RumbleAllowed(input))
+        return false;
+    const Uint32 ms = static_cast<Uint32>((std::max)(seconds, 0.0f) * 1000.0f);
+    return SDL_RumbleGamepad(input.gamepad, RumbleStrength(lowFrequency), RumbleStrength(highFrequency), ms);
+}
+
+bool InputRumbleTriggers(InputState& input, float left, float right, float seconds)
+{
+    if (!RumbleAllowed(input))
+        return false;
+    const Uint32 ms = static_cast<Uint32>((std::max)(seconds, 0.0f) * 1000.0f);
+    return SDL_RumbleGamepadTriggers(input.gamepad, RumbleStrength(left), RumbleStrength(right), ms);
+}
+
+void InputStopRumble(InputState& input)
+{
+    for (SDL_Gamepad* gamepad : input.gamepads)
+    {
+        SDL_RumbleGamepad(gamepad, 0, 0, 0);
+        SDL_RumbleGamepadTriggers(gamepad, 0, 0, 0);
+    }
 }

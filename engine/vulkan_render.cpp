@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
+#include <unordered_set>
 #include "file_paths.h"
 #include "animation_pose.h"
 #include "scene.h"
@@ -124,6 +125,9 @@ static void DestroyBuffer(Renderer& r, VkBuffer& buffer, VkDeviceMemory& memory)
 
 static VkCommandBuffer BeginSingleTimeCommands(Renderer& r)
 {
+    if (r.uploadBatch)
+        return r.uploadBatch;
+
     VkCommandBufferAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
     allocInfo.commandPool = r.transferCommandPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -164,6 +168,8 @@ static bool CheckGpuResult(Renderer& r, VkResult result, const char* call)
 
 static void EndSingleTimeCommands(Renderer& r, VkCommandBuffer cmd)
 {
+    if (cmd == r.uploadBatch)
+        return;   // submitted with the whole batch
     vkEndCommandBuffer(cmd);
 
     VkSubmitInfo submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
@@ -174,6 +180,48 @@ static void EndSingleTimeCommands(Renderer& r, VkCommandBuffer cmd)
     CheckGpuResult(r, vkQueueWaitIdle(r.graphicsQueue), "vkQueueWaitIdle"); // asset loading is not perf critical here; mirrors D3D11's synchronous immediate-context uploads
 
     vkFreeCommandBuffers(r.device, r.transferCommandPool, 1, &cmd);
+}
+
+// Upload batches
+
+static void SubmitUploadBatch(Renderer& r)
+{
+    if (!r.uploadBatch)
+        return;
+    VkCommandBuffer cmd = r.uploadBatch;
+    r.uploadBatch = VK_NULL_HANDLE;
+    EndSingleTimeCommands(r, cmd);
+    for (auto& [buffer, memory] : r.uploadStaging)
+        DestroyBuffer(r, buffer, memory);
+    r.uploadStaging.clear();
+    r.uploadStagingBytes = 0;
+}
+
+static void BeginUploadBatch(Renderer& r)
+{
+    if (!r.uploadBatch)
+        r.uploadBatch = BeginSingleTimeCommands(r);
+}
+
+// Staging memory of a batch is capped: past this the batch is submitted and a new one begun.
+constexpr VkDeviceSize kMaxBatchStagingBytes = 256ull * 1024 * 1024;
+
+static void ReleaseStaging(Renderer& r, VkBuffer& buffer, VkDeviceMemory& memory, VkDeviceSize size)
+{
+    if (!r.uploadBatch)
+    {
+        DestroyBuffer(r, buffer, memory);
+        return;
+    }
+    r.uploadStaging.emplace_back(buffer, memory);
+    r.uploadStagingBytes += size;
+    buffer = VK_NULL_HANDLE;
+    memory = VK_NULL_HANDLE;
+    if (r.uploadStagingBytes >= kMaxBatchStagingBytes)
+    {
+        SubmitUploadBatch(r);
+        BeginUploadBatch(r);
+    }
 }
 
 static bool CreateDeviceLocalBufferWithData(Renderer& r, const void* data, VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& outBuffer, VkDeviceMemory& outMemory)
@@ -209,7 +257,7 @@ static bool CreateDeviceLocalBufferWithData(Renderer& r, const void* data, VkDev
     vkCmdCopyBuffer(cmd, stagingBuffer, outBuffer, 1, &copyRegion);
     EndSingleTimeCommands(r, cmd);
 
-    DestroyBuffer(r, stagingBuffer, stagingMemory);
+    ReleaseStaging(r, stagingBuffer, stagingMemory, size);
     return true;
 }
 
@@ -353,7 +401,7 @@ static bool UploadImage(Renderer& r, VkImage image, const void* bytes, VkDeviceS
     TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, levels, layers);
 
     EndSingleTimeCommands(r, cmd);
-    DestroyBuffer(r, stagingBuffer, stagingMemory);
+    ReleaseStaging(r, stagingBuffer, stagingMemory, size);
     return true;
 }
 
@@ -2462,9 +2510,18 @@ static const GPUMaterialSet& GetMaterialSet(Renderer& r, const MaterialData* mat
 
     auto it = r.gpuMaterialSets.find(key);
     if (it != r.gpuMaterialSets.end())
+    {
+        it->second.usedStamp = r.cacheStamp;
         return it->second;
+    }
 
     GPUMaterialSet entry;
+    entry.usedStamp = r.cacheStamp;
+    for (const auto& slot : slots)
+    {
+        if (!slot.path->empty())
+            entry.textureKeys.push_back(std::to_string(static_cast<int>(slot.usage)) + "|" + *slot.path);
+    }
     VkDescriptorImageInfo images[render::kMaterialTextureCount] = {};
     for (int i = 0; i < render::kMaterialTextureCount; ++i)
     {
@@ -2684,6 +2741,114 @@ static void DestroyGPUMesh(Renderer& r, GPUMesh& mesh)
 {
     DestroyBuffer(r, mesh.vertexBuffer, mesh.vertexMemory);
     DestroyBuffer(r, mesh.indexBuffer, mesh.indexMemory);
+}
+
+// Caches keyed by asset handles, which mean nothing once the asset system is
+// cleared. Textures and material sets are keyed by file path and survive.
+static void DestroyHandleKeyedCaches(Renderer& r)
+{
+    for (auto& pair : r.gpuMeshes)
+        DestroyGPUMesh(r, pair.second);
+    r.gpuMeshes.clear();
+    for (auto& pair : r.gpuModelMeshes)
+        DestroyGPUMesh(r, pair.second);
+    r.gpuModelMeshes.clear();
+    for (auto& pair : r.gpuShaders)
+        DestroyGPUShaderProgram(r, pair.second);
+    r.gpuShaders.clear();
+}
+
+// After a preload: material sets the new assets didn't use, and textures no
+// remaining set samples. The GPU must be idle.
+static void EvictUnusedTextures(Renderer& r)
+{
+    size_t evictedSets = 0;
+    for (auto it = r.gpuMaterialSets.begin(); it != r.gpuMaterialSets.end();)
+    {
+        if (it->second.usedStamp == r.cacheStamp)
+        {
+            ++it;
+            continue;
+        }
+        if (it->second.set)
+            vkFreeDescriptorSets(r.device, r.descriptorPool, 1, &it->second.set);
+        it = r.gpuMaterialSets.erase(it);
+        ++evictedSets;
+    }
+    std::unordered_set<std::string> used;
+    for (const auto& [key, entry] : r.gpuMaterialSets)
+        used.insert(entry.textureKeys.begin(), entry.textureKeys.end());
+    size_t evictedTextures = 0;
+    for (auto it = r.gpuTextures.begin(); it != r.gpuTextures.end();)
+    {
+        if (used.count(it->first))
+        {
+            ++it;
+            continue;
+        }
+        DestroyGPUTexture(r, it->second);
+        it = r.gpuTextures.erase(it);
+        ++evictedTextures;
+    }
+    if (evictedSets || evictedTextures)
+        EngineLogf("Renderer: released %zu texture(s) and %zu material set(s) the new level doesn't use.", evictedTextures, evictedSets);
+}
+
+void RendererPreloadAssets(Renderer& r, const AssetSystem& assets)
+{
+    KES_ZONE_FN(RENDER);
+    if (!r.fatalError.empty() || r.frameActive || !r.device)
+        return;
+    const uint64_t startTicks = SDL_GetPerformanceCounter();
+    const size_t texturesBefore = r.gpuTextures.size();
+
+    const bool generationChanged = r.assetGeneration != assets.GetGeneration();
+    if (generationChanged)
+    {
+        vkDeviceWaitIdle(r.device);
+        DestroyHandleKeyedCaches(r);
+        r.assetGeneration = assets.GetGeneration();
+    }
+    ++r.cacheStamp;
+
+    BeginUploadBatch(r);
+    size_t meshCount = 0;
+    for (MeshHandle handle = 1; handle < assets.GetMeshCount(); ++handle)
+        meshCount += GetOrUploadMesh(r, handle, assets) ? 1 : 0;
+    for (ModelHandle handle = 1; handle < assets.GetModelCount(); ++handle)
+    {
+        const KModelData* model = assets.GetModel(handle);
+        for (uint32_t index = 0; model && index < static_cast<uint32_t>(model->meshes.size()); ++index)
+            meshCount += GetOrUploadModelMesh(r, handle, index, assets) ? 1 : 0;
+    }
+    GetMaterialSet(r, nullptr);
+    for (bool doubleSided : { false, true })
+    {
+        for (bool transparent : { false, true })
+            GetOrCreateMeshPipelineVariant(r, r.meshDefaultProgram, false, doubleSided, transparent);
+    }
+    for (MaterialHandle handle = 1; handle < assets.GetMaterialCount(); ++handle)
+    {
+        const MaterialData* material = assets.GetMaterial(handle);
+        if (!material)
+            continue;
+        GetMaterialSet(r, material);
+        GPUShaderProgram* program = &r.meshDefaultProgram;
+        if (material->shader != 0)
+        {
+            if (GPUShaderProgram* custom = GetOrCompileShaderProgram(r, material->shader, assets))
+                program = custom;
+        }
+        GetOrCreateMeshPipelineVariant(r, *program, false, IsDoubleSidedMaterial(material), IsTransparentMaterial(material));
+    }
+    SubmitUploadBatch(r);
+
+    if (generationChanged)
+        EvictUnusedTextures(r);
+    const double ms = static_cast<double>(SDL_GetPerformanceCounter() - startTicks) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
+    EngineLogf("Renderer preload: %zu mesh(es), %zu new texture(s), %zu kept, %.1f ms.", meshCount,
+               r.gpuTextures.size() > texturesBefore ? r.gpuTextures.size() - texturesBefore : size_t(0),
+               (std::min)(texturesBefore, r.gpuTextures.size()), ms);
 }
 
 static void DestroyRendererAssetCaches(Renderer& r)
@@ -3866,6 +4031,8 @@ namespace
         {
             kes::vk::RendererRenderScene(m_state, scene, camera, sceneObj, assets);
         }
+
+        void PreloadAssets(const AssetSystem& assets) override { kes::vk::RendererPreloadAssets(m_state, assets); }
 
         void BeginBackbufferOverlay() override { kes::vk::RendererBeginBackbufferOverlay(m_state); }
 

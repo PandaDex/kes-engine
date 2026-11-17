@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <unordered_map>
+#include <unordered_set>
 #include <dxgi1_5.h>
 #include "file_paths.h"
 #include "animation_pose.h"
@@ -1268,6 +1270,78 @@ static void DestroyRendererAssetCaches(Renderer& r)
     r.gpuShaders.clear();
 }
 
+void RendererPreloadAssets(Renderer& r, const AssetSystem& assets)
+{
+    KES_ZONE_FN(RENDER);
+    if (!r.device)
+        return;
+    const uint64_t startTicks = SDL_GetPerformanceCounter();
+
+    // Textures are keyed by file path and survive a level change; everything
+    // keyed by asset handles is rebuilt.
+    const bool generationChanged = r.assetGeneration != assets.GetGeneration();
+    if (generationChanged)
+    {
+        std::unordered_map<std::string, GPUTexture> textures;
+        textures.swap(r.gpuTextures);
+        DestroyRendererAssetCaches(r);
+        r.gpuTextures.swap(textures);
+        r.assetGeneration = assets.GetGeneration();
+    }
+
+    size_t meshCount = 0;
+    for (MeshHandle handle = 1; handle < assets.GetMeshCount(); ++handle)
+        meshCount += GetOrUploadMesh(r, handle, assets) ? 1 : 0;
+    for (ModelHandle handle = 1; handle < assets.GetModelCount(); ++handle)
+    {
+        const KModelData* model = assets.GetModel(handle);
+        for (uint32_t index = 0; model && index < static_cast<uint32_t>(model->meshes.size()); ++index)
+            meshCount += GetOrUploadModelMesh(r, handle, index, assets) ? 1 : 0;
+    }
+
+    std::unordered_set<std::string> used;
+    for (MaterialHandle handle = 1; handle < assets.GetMaterialCount(); ++handle)
+    {
+        const MaterialData* material = assets.GetMaterial(handle);
+        if (!material)
+            continue;
+        const struct { const std::string* path; render::TextureUsage usage; } slots[] = {
+            { &material->baseTexturePath, render::TextureUsage::Color },
+            { &material->normalTexturePath, render::TextureUsage::Normal },
+            { &material->metallicRoughnessTexturePath, render::TextureUsage::Linear },
+            { &material->occlusionTexturePath, render::TextureUsage::Linear },
+            { &material->emissiveTexturePath, render::TextureUsage::Color },
+        };
+        for (const auto& slot : slots)
+        {
+            if (slot.path->empty())
+                continue;
+            GetMaterialTexture(r, *slot.path, slot.usage);
+            used.insert(std::to_string(static_cast<int>(slot.usage)) + "|" + *slot.path);
+        }
+        if (material->shader != 0)
+            GetOrCompileShaderProgram(r, material->shader, assets);
+    }
+
+    size_t evicted = 0;
+    if (generationChanged)
+    {
+        for (auto it = r.gpuTextures.begin(); it != r.gpuTextures.end();)
+        {
+            if (used.count(it->first))
+            {
+                ++it;
+                continue;
+            }
+            DestroyGPUTexture(it->second);
+            it = r.gpuTextures.erase(it);
+            ++evicted;
+        }
+    }
+    const double ms = static_cast<double>(SDL_GetPerformanceCounter() - startTicks) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
+    EngineLogf("Renderer preload: %zu mesh(es), %zu texture(s) resident, %zu released, %.1f ms.", meshCount, r.gpuTextures.size(), evicted, ms);
+}
+
 // Init / resize / options
 
 bool RendererInit(Renderer& r, SDL_Window* window, const AppConfig& config)
@@ -2111,6 +2185,8 @@ namespace
         bool IsVSyncEnabled() const override { return m_state.vsync; }
         void SetGraphicsOptions(const GraphicsOptions& options) override { kes::d3d11::RendererSetGraphicsOptions(m_state, options); }
         GraphicsOptions GetGraphicsOptions() const override { return m_state.options; }
+
+        void PreloadAssets(const AssetSystem& assets) override { kes::d3d11::RendererPreloadAssets(m_state, assets); }
 
         void RenderScene(const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets) override
         {

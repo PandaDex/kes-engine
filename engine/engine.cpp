@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "on_screen_debug.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -127,6 +128,33 @@ namespace
         }
         if (app.window.cursorVisible != visible || app.window.mouseLocked != locked)
             SetAppWindowCursor(app.window, visible, locked);
+    }
+
+    // Uploads a newly loaded level's assets before its first frame.
+    void PreloadLevel(EngineApp &app)
+    {
+        if (!app.renderer || !app.worldInitialized || app.preloadedLevel == app.world.GetLevelGeneration())
+            return;
+        KES_ZONE(RENDER, "Preload level");
+        app.renderer->PreloadAssets(app.world.GetAssets());
+        app.preloadedLevel = app.world.GetLevelGeneration();
+    }
+
+    // Runs a load announced last frame, once that frame (the loading screen) was drawn.
+    void RunQueuedMapLoad(EngineApp &app)
+    {
+        if (app.loadingMap.empty() || !app.loadingFrameDrawn)
+            return;
+        const std::string mapName = std::move(app.loadingMap);
+        app.loadingMap.clear();
+        app.loadingFrameDrawn = false;
+        const bool loaded = app.world.LoadMap(mapName.c_str());
+        PreloadLevel(app);
+        if (app.onMapLoaded)
+            app.onMapLoaded(app, mapName, loaded);
+        // The load's duration isn't game time: no catch-up steps after it.
+        app.prevCounter = SDL_GetPerformanceCounter();
+        app.fixedAccumulator = 0.0f;
     }
 
     bool IsUiNavigationMode(const EngineApp &app)
@@ -315,6 +343,8 @@ bool EngineStart(EngineApp &app)
         std::string error;
         if (!InputAddDefaultActions(app.input, kUiDefaultActionMap, &error))
             EngineLogf("Default UI input actions not added: %s", error.c_str());
+        if (!InputLoadBindingOverrides(app.input, nullptr, &error))
+            EngineLogf("Player input bindings not loaded: %s", error.c_str());
     }
     EngineLog("Input initialized.");
 
@@ -372,9 +402,17 @@ bool EngineStart(EngineApp &app)
     if (!worldInitOk)
         return failStartup("The game world could not be initialized.");
     app.worldInitialized = true;
+    app.settings->AttachAudio(&app.world.GetAudio());
+    app.world.SetDeferMapLoads(true);
     EngineLog("World initialized.");
-    if (!app.world.LoadMap(ENGINE_STARTUP_MAP))
+    if (app.onMapLoadBegin)
+        app.onMapLoadBegin(app, ENGINE_STARTUP_MAP);
+    const bool startupLoaded = app.world.LoadMap(ENGINE_STARTUP_MAP);
+    if (!startupLoaded)
         EngineLogf("Startup map %s could not be loaded; starting with an empty level.", ENGINE_STARTUP_MAP);
+    PreloadLevel(app);
+    if (app.onMapLoaded)
+        app.onMapLoaded(app, ENGINE_STARTUP_MAP, startupLoaded);
     app.performanceFrequency = static_cast<double>(SDL_GetPerformanceFrequency());
     app.prevCounter = SDL_GetPerformanceCounter();
     app.frameDeadline = app.prevCounter;
@@ -459,6 +497,8 @@ bool EngineTick(EngineApp &app)
         KES_PROFILE_PLOT("SDL events / frame", static_cast<int64_t>(eventCount));
     }
 
+    RunQueuedMapLoad(app);
+
     const Uint64 now = SDL_GetPerformanceCounter();
     float dt = static_cast<float>((now - app.prevCounter) / app.performanceFrequency);
     app.prevCounter = now;
@@ -485,8 +525,21 @@ bool EngineTick(EngineApp &app)
     }
 
     app.world.Update(dt);
+    OnScreenDebugUpdate(app.ui, dt);
     app.ui.Update();
     ApplyCursor(app);   // follows the active input device
+
+    // A load queued this frame: announce it, then draw this frame (the
+    // loading screen) before the load blocks.
+    if (app.loadingMap.empty() && app.world.HasPendingMapLoad())
+    {
+        app.loadingMap = app.world.TakePendingMapLoad();
+        app.loadingFrameDrawn = false;
+        if (app.onMapLoadBegin)
+            app.onMapLoadBegin(app, app.loadingMap);
+        app.ui.Update();
+    }
+    PreloadLevel(app);   // also covers World::LoadMap called directly by game code
 
     if (IsAppWindowRenderable(app.window))
     {
@@ -509,10 +562,18 @@ bool EngineTick(EngineApp &app)
         }
     }
     ExitOnGpuFailure(app);
+    if (!app.loadingMap.empty())
+        app.loadingFrameDrawn = true;
 
     LimitFrameRate(app);
     KES_PROFILE_FRAME();
     return app.running;
+}
+
+void EngineLoadMap(EngineApp &app, const std::string &mapName)
+{
+    if (app.worldInitialized && !mapName.empty())
+        app.world.QueueMapLoad(mapName);
 }
 
 void EngineRegisterEntityClass(EngineApp &app, const std::string &className, EntityFactoryFunction factory)
@@ -590,10 +651,12 @@ void EngineShutdown(EngineApp &app)
     KES_ZONE(CORE, "Engine shutdown");
     EngineLog("Engine shutdown begin.");
     app.running = false;
+    InputStopRumble(app.input);
     InputShutdown(app.input);
 
     // Before the world (documents may call into game code) and before the
     // renderer (RmlUi releases its textures through it).
+    OnScreenDebugShutdown(app.ui);
     app.ui.Shutdown();
 
     if (app.settings)
@@ -610,6 +673,7 @@ void EngineShutdown(EngineApp &app)
             app.settings->SaveSettings();
         }
         app.settings->AttachEngine(nullptr, nullptr, nullptr);
+        app.settings->AttachAudio(nullptr);
         app.settings->SetActiveInstance(false);
         app.settings.reset();
     }

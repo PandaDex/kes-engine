@@ -94,6 +94,8 @@ struct GPUMaterialSet
 {
     VkDescriptorSet set = VK_NULL_HANDLE;
     uint32_t textureFlags = 0;
+    uint64_t usedStamp = 0;                // Renderer::cacheStamp of the last preload or draw that used it
+    std::vector<std::string> textureKeys;  // gpuTextures entries it samples
 };
 
 // Depth image array: one framebuffer per layer for rendering, one array view for sampling.
@@ -341,6 +343,13 @@ struct Renderer
     std::unordered_map<std::string, GPUTexture> gpuTextures;   // key: usage + resolved path
     std::unordered_map<std::string, GPUMaterialSet> gpuMaterialSets;   // key: the five texture paths
     uint64_t assetGeneration = 0;
+    uint64_t cacheStamp = 1;   // bumped by every preload; material sets not stamped since are evicted
+
+    // Upload batch (RendererPreloadAssets): uploads share one command buffer
+    // and one queue wait; staging buffers live until the batch is submitted.
+    VkCommandBuffer uploadBatch = VK_NULL_HANDLE;
+    std::vector<std::pair<VkBuffer, VkDeviceMemory>> uploadStaging;
+    VkDeviceSize uploadStagingBytes = 0;
 
     int windowWidth = 0;
     int windowHeight = 0;
@@ -363,6 +372,7 @@ bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
 void RendererSetVSync(Renderer& renderer, bool enabled);
 void RendererSetGraphicsOptions(Renderer& renderer, const GraphicsOptions& options);
 void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
+void RendererPreloadAssets(Renderer& renderer, const AssetSystem& assets);
 void RendererBeginBackbufferOverlay(Renderer& renderer);
 UiTextureHandle RendererCreateUiTexture(Renderer& renderer, int width, int height, const uint8_t* rgbaPixels);
 void RendererDestroyUiTexture(Renderer& renderer, UiTextureHandle texture);

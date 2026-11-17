@@ -134,6 +134,11 @@ public:
     virtual GraphicsOptions GetGraphicsOptions() const = 0;
 
     virtual void RenderScene(const SceneState &scene, const Camera &camera, const Scene &sceneObj, const AssetSystem &assets) = 0;
+    // Uploads every mesh, texture and pipeline the asset system holds, so the
+    // first frames of a level don't stall on uploads. After a level change it
+    // also frees textures the new assets don't use (the rest are kept). Call
+    // between frames, e.g. right after a map load.
+    virtual void PreloadAssets(const AssetSystem &assets) { (void)assets; }
     virtual void BeginBackbufferOverlay() = 0;
 
     // UI textures (fonts, images). Pixels are tightly packed RGBA8 with

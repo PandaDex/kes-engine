@@ -33,6 +33,13 @@ public:
     void SetPaused(bool paused);
     bool IsPaused() const { return paused; }
     void QueueMapLoad(const std::string& mapName);
+    // Deferred: Update leaves queued loads to the owner (the engine draws a
+    // loading frame first), which takes them with TakePendingMapLoad.
+    void SetDeferMapLoads(bool defer) { deferMapLoads = defer; }
+    bool HasPendingMapLoad() const { return !pendingMapLoad.empty(); }
+    std::string TakePendingMapLoad();
+    // Counts successful map loads.
+    uint64_t GetLevelGeneration() const { return levelGeneration; }
     void RegisterEntityClass(const std::string& className, EntityFactoryFunction factory);
     void SetPlayerClassName(const std::string& className);
     const std::string& GetPlayerClassName() const;
@@ -77,4 +84,6 @@ private:
     std::string currentMapName;
     std::string playerClassName;
     bool paused = false;
+    bool deferMapLoads = false;
+    uint64_t levelGeneration = 0;
 };

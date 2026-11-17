@@ -40,5 +40,6 @@ private:
     bool loop = false;
     bool autoPlay = false;   // looping sounds always start with the map
     bool spatial = true;
+    AudioBus bus = AudioBus::Effects;
     AudioVoiceId voiceId = 0;
 };

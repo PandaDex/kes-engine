@@ -1,7 +1,7 @@
 "InputAction_Interact": {
 	"NativeKeys": [
-		{"key": "Gamepad_Face_Bottom", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Keyboard_E", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+		{"key": "Gamepad_Face_Left", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Keyboard_E", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"}
 	],
 	"ValueType": "boolean",
 }
@@ -9,10 +9,10 @@
 "InputAction_Move": {
 	"NativeKeys": [
 		{"key": "Gamepad_LeftAxis_2D", "modifiers": [{"name": "InputMod_deadzone", "value": "0.2"}, {"name": "InputMod_negate", "value": {"y": "true"}}], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Keyboard_W", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Keyboard_S", "modifiers": [{"name": "InputMod_negate", "value": {"y": "true"}}], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Keyboard_A", "modifiers": [{"name": "InputMod_swizzle", "value": "YXZ"}, {"name": "InputMod_negate", "value": {"x": "true"}}], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Keyboard_D", "modifiers": [{"name": "InputMod_swizzle", "value": "YXZ"}], "bPlayerAssignable": "false", "AssignableKey": "none"}
+		{"key": "Keyboard_W", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Keyboard_S", "modifiers": [{"name": "InputMod_negate", "value": {"y": "true"}}], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Keyboard_A", "modifiers": [{"name": "InputMod_swizzle", "value": "YXZ"}, {"name": "InputMod_negate", "value": {"x": "true"}}], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Keyboard_D", "modifiers": [{"name": "InputMod_swizzle", "value": "YXZ"}], "bPlayerAssignable": "true", "AssignableKey": "none"}
 	],
 	"ValueType": "vector2",
 }
@@ -31,18 +31,34 @@
 	"ValueType": "vector2",
 }
 
+"InputAction_Jump": {
+	"NativeKeys": [
+		{"key": "Keyboard_Space", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Gamepad_Face_Bottom", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
+"InputAction_Sprint": {
+	"NativeKeys": [
+		{"key": "Keyboard_Left Shift", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Gamepad_LeftStick", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"}
+	],
+	"ValueType": "boolean",
+}
+
 "InputAction_MoveUp": {
 	"NativeKeys": [
-		{"key": "Keyboard_Space", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Gamepad_RightBumper", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+		{"key": "Keyboard_Space", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Gamepad_RightBumper", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"}
 	],
 	"ValueType": "boolean",
 }
 
 "InputAction_MoveDown": {
 	"NativeKeys": [
-		{"key": "Keyboard_Left Ctrl", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Gamepad_LeftBumper", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
+		{"key": "Keyboard_Left Ctrl", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Gamepad_LeftBumper", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"}
 	],
 	"ValueType": "boolean",
 }

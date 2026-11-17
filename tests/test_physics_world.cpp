@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "test_framework.h"
 #include "camera.h"
 #include "ent_brush.h"
@@ -287,4 +288,108 @@ TEST_CASE("mover: a capsule inside a brush can walk out of it")
         position = world.MoveCapsule(position, { -0.1f, 0.0f, 0.0f }, 0.35f, 0.9f);
     CHECK(!world.CheckCapsule(position, 0.34f, 0.89f));
     CHECK_NEAR(position.x, -7.0 + 0.35, 0.05);
+}
+
+namespace
+{
+    // An isolated course far from the map: a floor whose top is at origin.y,
+    // a 0.3 m step at z 4.5..5.5 and a wall whose face is at z 11.5.
+    struct WalkingCourse
+    {
+        LoadedWorld loaded;
+        Vector3 origin = { 1000.0f, 1000.0f, 1000.0f };
+        EnginePlayerEntity* player = nullptr;
+
+        WalkingCourse()
+        {
+            CollisionWorld& collision = loaded.Collision();
+            collision.AddBox(origin + Vector3{ 0.0f, -0.5f, 0.0f }, { 20.0f, 0.5f, 20.0f });
+            collision.AddBox(origin + Vector3{ 0.0f, 0.15f, 5.0f }, { 2.0f, 0.15f, 0.5f });
+            collision.AddBox(origin + Vector3{ 0.0f, 2.0f, 12.0f }, { 5.0f, 2.0f, 0.5f });
+            player = loaded.world.GetEntities().GetEntityOfClass<EnginePlayerEntity>();
+            REQUIRE(player != nullptr);
+            REQUIRE(player->GetMovementMode() == PlayerMovementMode::Walking);
+            player->Rotation = {};
+            player->Teleport(origin + Vector3{ 0.0f, 2.0f, 0.0f });
+        }
+
+        float StandingHeight() const { return origin.y + 0.35f + 0.55f; }
+        InputActionState& Action(const char* name) { return loaded.input.actionStates[name]; }
+    };
+}
+
+TEST_CASE("player: walking mode falls and stands on the floor")
+{
+    WalkingCourse course;
+    course.loaded.Run(100);
+    CHECK(course.player->IsGrounded());
+    CHECK_NEAR(course.player->Position.y, course.StandingHeight(), 0.05);
+
+    // Standing still stays put.
+    const Vector3 rest = course.player->Position;
+    course.loaded.Run(50);
+    CHECK_NEAR(course.player->Position.y, rest.y, 0.001);
+    CHECK_NEAR(course.player->Position.x, rest.x, 0.001);
+}
+
+TEST_CASE("player: a jump reaches the jump height and lands")
+{
+    WalkingCourse course;
+    course.loaded.Run(100);
+    REQUIRE(course.player->IsGrounded());
+
+    course.Action("InputAction_Jump").pressed = true;
+    course.loaded.Run(1);
+    course.Action("InputAction_Jump").pressed = false;
+
+    float highest = course.player->Position.y;
+    for (int step = 0; step < 100; ++step)
+    {
+        course.loaded.Run(1);
+        highest = (std::max)(highest, course.player->Position.y);
+    }
+    CHECK_NEAR(highest, course.StandingHeight() + 1.1, 0.1);
+    CHECK(course.player->IsGrounded());
+    CHECK_NEAR(course.player->Position.y, course.StandingHeight(), 0.05);
+}
+
+TEST_CASE("player: walks up a step, down again and stops at a wall")
+{
+    WalkingCourse course;
+    course.loaded.Run(100);
+    REQUIRE(course.player->IsGrounded());
+
+    course.Action("InputAction_Move").value3 = { 0.0f, 1.0f, 0.0f };
+    float highest = course.player->Position.y;
+    for (int step = 0; step < 300; ++step)
+    {
+        course.loaded.Run(1);
+        highest = (std::max)(highest, course.player->Position.y);
+    }
+    CHECK_NEAR(highest, course.StandingHeight() + 0.3, 0.05);
+    CHECK(course.player->IsGrounded());
+    CHECK_NEAR(course.player->Position.y, course.StandingHeight(), 0.05);
+    CHECK_NEAR(course.player->Position.z, course.origin.z + 11.5 - 0.35, 0.05);
+    CHECK_NEAR(course.player->Position.x, course.origin.x, 0.01);
+}
+
+TEST_CASE("world: deferred map loads wait for their owner")
+{
+    LoadedWorld loaded;
+    const uint64_t generation = loaded.world.GetLevelGeneration();
+    REQUIRE(generation > 0);
+    loaded.world.SetDeferMapLoads(true);
+    loaded.world.QueueMapLoad("maps/startup.fmapc");
+    loaded.Run(3);
+    CHECK(loaded.world.GetLevelGeneration() == generation);
+    REQUIRE(loaded.world.HasPendingMapLoad());
+    const std::string map = loaded.world.TakePendingMapLoad();
+    CHECK(map == "maps/startup.fmapc");
+    CHECK(!loaded.world.HasPendingMapLoad());
+    REQUIRE(loaded.world.LoadMap(map.c_str()));
+    CHECK(loaded.world.GetLevelGeneration() == generation + 1);
+
+    // A failed load keeps the level and its generation.
+    CHECK(!loaded.world.LoadMap("maps/missing.fmapc"));
+    CHECK(loaded.world.GetLevelGeneration() == generation + 1);
 }

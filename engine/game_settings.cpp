@@ -14,6 +14,7 @@
 #include "logger.h"
 #include "render_backend.h"
 #include "window.h"
+#include <iterator>
 #include "profiler.h"
 
 namespace
@@ -98,6 +99,47 @@ void GameSettings::AttachEngine(AppWindow *window, IRenderer *renderer, const Ap
     m_window = window;
     m_renderer = renderer;
     m_defaults = defaults;
+}
+
+void GameSettings::AttachAudio(AudioSystem *audio)
+{
+    m_audio = audio;
+    ApplyAudioSettings();
+}
+
+void GameSettings::SetMasterVolume(float volume)
+{
+    m_masterVolume = volume;
+    ApplyAudioSettings();
+}
+
+void GameSettings::SetAudioBusVolume(AudioBus bus, float volume)
+{
+    if (bus >= AudioBus::Count)
+        return;
+    m_busVolumes[static_cast<size_t>(bus)] = volume;
+    ApplyAudioSettings();
+}
+
+float GameSettings::GetAudioBusVolume(AudioBus bus) const
+{
+    return bus < AudioBus::Count ? m_busVolumes[static_cast<size_t>(bus)] : 0.0f;
+}
+
+void GameSettings::ApplyAudioSettings()
+{
+    auto fix = [](float &value)
+    {
+        value = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+    };
+    fix(m_masterVolume);
+    for (float &volume : m_busVolumes)
+        fix(volume);
+    if (!m_audio)
+        return;
+    m_audio->SetMasterVolume(m_masterVolume);
+    for (size_t bus = 0; bus < static_cast<size_t>(AudioBus::Count); ++bus)
+        m_audio->SetBusVolume(static_cast<AudioBus>(bus), m_busVolumes[bus]);
 }
 
 const AppConfig &GameSettings::Defaults() const
@@ -268,6 +310,7 @@ void GameSettings::ApplyNonResolutionSettings()
         m_renderer->SetRenderResolution(renderResolution.x, renderResolution.y);
     }
     m_applied.vsync = m_vsync;
+    ApplyAudioSettings();
     // The frame rate limit is read by the engine loop every frame.
 }
 
@@ -311,7 +354,10 @@ void GameSettings::SetToDefaults()
     m_mouseSensitivity = 1.0f;
     m_gamepadLookSensitivity = 1.0f;
     m_invertLookY = false;
+    m_gamepadVibration = true;
     m_crashReportUpload = false;
+    m_masterVolume = 1.0f;
+    std::fill(std::begin(m_busVolumes), std::end(m_busVolumes), 1.0f);
     m_shadowQuality = ShadowQuality::High;
     m_msaaSamples = 4;
     m_postAntiAliasing = PostAntiAliasing::Off;
@@ -411,7 +457,11 @@ void GameSettings::ReadFromIni(const IniFile &ini)
     m_mouseSensitivity = ini.GetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     m_gamepadLookSensitivity = ini.GetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     m_invertLookY = ini.GetBool(kSection, "bInvertLookY", m_invertLookY);
+    m_gamepadVibration = ini.GetBool(kSection, "bGamepadVibration", m_gamepadVibration);
     m_crashReportUpload = ini.GetBool(kSection, "bCrashReportUpload", m_crashReportUpload);
+    m_masterVolume = ini.GetFloat(kSection, "MasterVolume", m_masterVolume);
+    for (size_t bus = 0; bus < static_cast<size_t>(AudioBus::Count); ++bus)
+        m_busVolumes[bus] = ini.GetFloat(kSection, std::string(AudioBusName(static_cast<AudioBus>(bus))) + "Volume", m_busVolumes[bus]);
 
     RendererBackend renderer = m_preferredRenderer;
     const std::string rendererName = ini.GetString(kSection, "PreferredRenderer", RendererBackendName(m_preferredRenderer));
@@ -441,7 +491,11 @@ void GameSettings::WriteToIni(IniFile &ini) const
     ini.SetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     ini.SetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     ini.SetBool(kSection, "bInvertLookY", m_invertLookY);
+    ini.SetBool(kSection, "bGamepadVibration", m_gamepadVibration);
     ini.SetBool(kSection, "bCrashReportUpload", m_crashReportUpload);
+    ini.SetFloat(kSection, "MasterVolume", m_masterVolume);
+    for (size_t bus = 0; bus < static_cast<size_t>(AudioBus::Count); ++bus)
+        ini.SetFloat(kSection, std::string(AudioBusName(static_cast<AudioBus>(bus))) + "Volume", m_busVolumes[bus]);
     ini.SetString(kSection, "PreferredRenderer", RendererBackendName(m_preferredRenderer));
 }
 

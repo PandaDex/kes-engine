@@ -3,4 +3,5 @@
 #include <string>
 
 bool CanImportSoundSource(const std::string& path);
-bool ImportSoundToKSound(const std::string& inputPath, const std::string& outputPath, std::string& error);
+// compress: QOA (about a tenth of the size, near-transparent); otherwise float PCM.
+bool ImportSoundToKSound(const std::string& inputPath, const std::string& outputPath, std::string& error, bool compress = true);

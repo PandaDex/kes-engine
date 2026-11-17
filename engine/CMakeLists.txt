@@ -22,6 +22,8 @@ endif()
 add_library(engine STATIC
     "engine.h"
     "engine.cpp"
+    "on_screen_debug.h"
+    "on_screen_debug.cpp"
     "engine_configuration.h"
     "shared.h"
     "window.h"
@@ -106,6 +108,7 @@ add_library(engine STATIC
     "texture_file.cpp"
     "sound_file.h"
     "sound_file.cpp"
+    "qoa_codec.c"
     "asset_system.h"
     "asset_system.cpp"
     "shader.h"
@@ -139,6 +142,8 @@ add_library(engine STATIC
 target_include_directories(engine PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
 )
+# QOA audio codec (single header, sound_file.cpp); SYSTEM keeps its warnings out of warnings-as-errors.
+target_include_directories(engine SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/external/qoa")
 target_link_libraries(engine PUBLIC SDL3::SDL3)
 
 # UI (cmake/KesUi.cmake). RmlUi is PUBLIC: game code uses the Rml API on the

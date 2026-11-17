@@ -86,6 +86,17 @@ Typical usage:
 - run `EngineTick` in a loop
 - call `EngineShutdown`
 
+### Map loading and loading screens
+
+`EngineLoadMap(app, "maps/next.fmapc")` queues a load, and so do `GameContext::LoadMap` and map script loads made from entity code. A queued load:
+
+1. calls `app.onMapLoadBegin(app, mapName)`: show a loading screen here
+2. draws one more frame, so the loading screen is on screen while the load blocks
+3. loads the map, then uploads its meshes, textures and pipelines to the GPU (`IRenderer::PreloadAssets`), so the first frames of the level don't stall on uploads
+4. calls `app.onMapLoaded(app, mapName, loaded)`
+
+The startup map calls both hooks from `EngineStart`, without the extra frame. Textures used by both the old and the new level stay on the GPU; the rest are released. `World::LoadMap` called directly from game code still loads at once (the GPU upload then happens before the next frame).
+
 ## Window and Cursor
 
 The window supports three modes (`WindowMode`, same values as Unreal's `EWindowMode`):
@@ -164,8 +175,8 @@ Bumping `GameSettings::kSettingsVersion` resets old player files to defaults.
 Custom settings, option 1, key/value pairs stored in `[CustomSettings]`:
 
 ```cpp
-settings->SetCustomFloat("MasterVolume", 0.8f);
-float volume = settings->GetCustomFloat("MasterVolume", 1.0f);
+settings->SetCustomFloat("FieldOfView", 0.8f);
+float volume = settings->GetCustomFloat("FieldOfView", 1.0f);
 ```
 
 Custom settings, option 2, a subclass (like overriding `UGameUserSettings`):
@@ -174,15 +185,15 @@ Custom settings, option 2, a subclass (like overriding `UGameUserSettings`):
 class MySettings : public GameSettings
 {
 public:
-    float masterVolume = 1.0f;
+    float fieldOfView = 90.0f;
 protected:
-    void SetToDefaults() override { GameSettings::SetToDefaults(); masterVolume = 1.0f; }
-    void LoadCustomSettings(const IniFile& ini) override { masterVolume = ini.GetFloat("MySettings", "MasterVolume", masterVolume); }
-    void SaveCustomSettings(IniFile& ini) const override { ini.SetFloat("MySettings", "MasterVolume", masterVolume); }
+    void SetToDefaults() override { GameSettings::SetToDefaults(); fieldOfView = 90.0f; }
+    void LoadCustomSettings(const IniFile& ini) override { fieldOfView = ini.GetFloat("MySettings", "FieldOfView", fieldOfView); }
+    void SaveCustomSettings(IniFile& ini) const override { ini.SetFloat("MySettings", "FieldOfView", fieldOfView); }
 };
 
 EngineSetGameSettingsClass<MySettings>(app);   // before EngineStart
-GetGameSettings<MySettings>()->masterVolume = 0.5f;
+GetGameSettings<MySettings>()->fieldOfView = 100.0f;
 ```
 
 ## Entity Registration
@@ -202,16 +213,24 @@ Use this when you want map files to spawn your own entity classes by name.
 
 ### Default player (`EnginePlayerEntity`)
 
-A first-person fly camera with a collision capsule, moved by `CollisionWorld::MoveCapsule`. It slides along walls and can move out if it starts inside geometry. Its capsule is kinematic, so it pushes dynamic bodies. It reads these input actions from `config/default.imap`:
+A first-person player with a 1.8 m collision capsule (`Position` is its center; the camera sits `eyeOffset`, 0.7 m, above it). Its capsule is kinematic, so it pushes dynamic bodies. `SetMovementMode` picks one of:
+
+- `Walking` (default): gravity, jumping, running, stairs and steps up to `stepHeight` (0.4 m), slopes up to about 45 degrees, sticking to the ground when walking down steps. Simulated in `FixedUpdate`; the camera is interpolated between steps. Jumps get a short input buffer and a grace period after walking off a ledge. Falling 200 m below the spawn point puts the player back at it.
+- `Flying`: free flight that collides and slides along walls (the old default).
+- `Noclip`: free flight through everything.
+
+In debug builds F3 cycles the modes. Input actions from `config/default.imap`:
 
 | Action | Type | Default bindings |
 |---|---|---|
 | `InputAction_Move` | vector2 | WASD, left stick (analog: partial tilt = partial speed) |
-| `InputAction_MoveUp` / `InputAction_MoveDown` | boolean | Space / Left Ctrl, RB / LB |
+| `InputAction_Jump` | boolean | Space, A |
+| `InputAction_Sprint` | boolean | Left Shift, left stick click |
+| `InputAction_MoveUp` / `InputAction_MoveDown` | boolean | Space / Left Ctrl, RB / LB (flying) |
 | `InputAction_Look` | vector2 | mouse (deltas: an angle per frame) |
 | `InputAction_LookStick` | vector2 | right stick (a turn rate, squared response curve) |
 
-Look speed is scaled by `GameSettings` (`MouseSensitivity`, `GamepadLookSensitivity`, `bInvertLookY`). For base values and noclip, see `SetMoveSpeed`, `SetMouseLookScale`, `SetStickLookSpeed` and `SetCollisionEnabled`. Subclasses can reuse `MoveWithCollision` and `UpdateLook`.
+Look speed is scaled by `GameSettings` (`MouseSensitivity`, `GamepadLookSensitivity`, `bInvertLookY`). Tuning: `SetMoveSpeed`, `SetSprintSpeed`, `SetFlySpeed`, `SetJumpHeight`, `SetGravity`, `SetMouseLookScale`, `SetStickLookSpeed`; state: `IsGrounded`, `GetVelocity`, `GetEyePosition`. Subclasses can reuse `StepWalking`, `UpdateFlying`, `MoveWithCollision` and `UpdateLook`, and change the protected tuning fields.
 
 ## `World`
 
@@ -234,7 +253,8 @@ Important functions:
 - `void Update(float dt);`
 - `void FixedUpdate(float fixedDt);`
 - `bool LoadMap(const char* mapName);` loads synchronously. If the file can't be loaded, the current level stays and `false` is returned.
-- `void QueueMapLoad(const std::string& mapName);` loads at the end of the next `Update` (safe from inside entity code).
+- `void QueueMapLoad(const std::string& mapName);` loads at the end of the next `Update` (safe from inside entity code). Under the engine, queued loads are deferred (`SetDeferMapLoads`) and run by `EngineTick` with a loading frame first.
+- `uint64_t GetLevelGeneration() const;` counts successful loads.
 - `const std::string& GetCurrentMapName() const;`
 - `void SetPaused(bool paused);` / `bool IsPaused() const;` stop entity updates and pause audio.
 - `void RegisterEntityClass(const std::string& className, EntityFactoryFunction factory);`
@@ -455,33 +475,29 @@ This is a runtime scene representation, not a full authored scene graph editor A
 
 ## `AudioSystem`
 
-`AudioSystem` provides simple clip caching and voice playback.
+`AudioSystem` plays `.ksound` clips on volume buses, with positional sound and streamed music.
 
 Important functions:
 
-- `bool Init();`
-- `void Shutdown();`
-- `void Update(float dt);`
-- `bool LoadClip(const char* soundFile);`
-- `AudioVoiceId Play2D(const char* soundFile, float volume = 1.0f, float pitch = 1.0f, bool loop = false);`
-- `AudioVoiceId Play3D(const Vector3& location, float attenuation, const char* soundFile, float volume = 1.0f, float pitch = 1.0f, bool loop = false);`
-- `void StopVoice(AudioVoiceId id);`
-- `bool IsVoicePlaying(AudioVoiceId id) const;`
-- `void UpdateVoice3D(AudioVoiceId id, const Vector3& location, float attenuation);`
-- `void SetVoicePitch(AudioVoiceId id, float pitch);`
-- `void SetVoiceVolume(AudioVoiceId id, float volume);`
-
-- `void SetPaused(bool paused);` pauses the output device (voices keep their position)
-- `void StopAll();`
-- `bool HasOutput() const;`
+- `AudioVoiceId Play2D(const char* soundFile, float volume = 1.0f, float pitch = 1.0f, bool loop = false, AudioBus bus = AudioBus::Effects);`
+- `AudioVoiceId Play3D(const Vector3& location, float attenuation, const char* soundFile, float volume = 1.0f, float pitch = 1.0f, bool loop = false, AudioBus bus = AudioBus::Effects);`
+- `AudioVoiceId PlayUi(const char* soundFile, float volume = 1.0f);` keeps playing while paused (Ui bus)
+- `AudioVoiceId PlayMusic(const char* soundFile, float volume = 1.0f, bool loop = true, float fadeSeconds = 1.0f);` one track at a time, crossfaded; keeps playing while paused. `StopMusic(fadeSeconds)`.
+- `void StopVoice(AudioVoiceId id, float fadeSeconds = 0.0f);`, `void FadeVoice(AudioVoiceId id, float gain, float seconds);`
+- `bool IsVoicePlaying(AudioVoiceId id) const;`, `UpdateVoice3D`, `SetVoicePitch`, `SetVoiceVolume`
+- `SetMasterVolume(float)`, `SetBusVolume(AudioBus, float)`: `Effects`, `Music`, `Ambient`, `Voice`, `Ui`. `GameSettings` saves these for the player (`MasterVolume`, `<Bus>Volume`) and applies them live.
+- `void SetPaused(bool paused);` holds every voice except UI sounds and music (voices keep their position)
+- `void StopAll();`, `bool HasOutput() const;`, `size_t GetVoiceCount() const;`
 
 Current behavior:
 
-- loads `.ksound` and caches clips by path, converted once to the mixer format (float stereo, 48 kHz)
-- mixes on SDL's audio thread (an `SDL_AudioStream` bound to the default playback device). SDL converts to the hardware format.
-- 2D and simple positional playback (distance attenuation and stereo pan from the listener the player sets)
-- at most `kMaxVoices` (128) voices at once. Further play calls return 0 and log a warning.
+- resident clips are decoded and converted to the mixer format (float stereo, 48 kHz) on load. QOA clips of 8 s or more (`kStreamMinSeconds`) and all music stay compressed in memory and are decoded while they play (about a tenth of the memory).
+- mixes on SDL's audio thread (an `SDL_AudioStream` bound to the default playback device), with interpolated resampling for pitch and other sample rates. Gain changes ramp across each buffer, so moving 3D sounds and volume changes don't click.
+- 3D gain is `1 / (1 + distance * attenuation)`, faded to exactly 0 where that falls under 1% (`ComputeDistanceGain`), plus stereo pan from the listener
+- up to `kMaxVoices` (256) voices exist at once; the loudest `kMaxMixedVoices` (64) are mixed each buffer and the rest keep their place silently. When the list is full, a new sound replaces the quietest non-looping voice if it is louder; otherwise the play call returns 0.
 - without an output device (headless machine, no sound card), it runs silent instead of failing startup
+
+`AudioSourceEntity` takes a `Bus` property (`Effects`, `Music`, `Ambient`, `Voice`, `Ui`).
 
 ## `UiSystem`
 
@@ -494,11 +510,28 @@ HTML/CSS user interface (RmlUi). The engine owns it in `EngineApp::ui` and drive
 
 Full guide: [ui-system.md](ui-system.md).
 
+## On-screen debug messages
+
+`on_screen_debug.h`: messages in the top-left corner, newest on top, like Unreal's `GEngine->AddOnScreenDebugMessage`. Debug builds only (`ENGINE_ALLOW_DEBUG_MODE`); in shipping builds the calls do nothing.
+
+```cpp
+AddOnScreenDebugMessage(-1, 5.0f, DebugMessageType::Warning, "Door has no target");
+AddOnScreenDebugMessagef(42, 0.0f, DebugMessageType::Info, "Speed %.1f m/s", speed);   // every frame
+```
+
+- `key`: -1 adds a new line; any other value updates the line with that key in place (for values printed every frame)
+- `seconds`: how long it stays; 0 shows it for one frame
+- `DebugMessageType`: `Info` (blue), `Warning` (orange), `Error` (red); see `references/onScreenDebugMsg.html`
+- `RemoveOnScreenDebugMessage(key)`, `ClearOnScreenDebugMessages()`; safe to call from any thread
+- drawn by the UI system as its own document, over other documents, ignoring the mouse; at most 40 lines. The example game posts one of each kind on F2.
+
 ## `InputState`
 
 `InputState` (`input.h`) holds the raw input snapshot and the **input actions** loaded from the project's `config/default.imap`.
 
-Raw state: `keys` / `previousKeys`, `mouseButtons` / `previousMouseButtons`, `mouseDeltaX/Y`, and the connected gamepads (`gamepad` is the one used last; all are opened).
+Raw state: `keys` / `previousKeys`, `mouseButtons` / `previousMouseButtons`, `mouseDeltaX/Y`, `mouseWheel`, and the connected gamepads (`gamepad` is the one used last; all are opened). `InputGetActiveDevice` says whether keyboard/mouse or a gamepad was used last, `InputGetGamepadType` which kind of pad.
+
+Bindable keys: `Keyboard_<SDL scancode name>` (`Keyboard_Left Shift`), `Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_Button4`, `Mouse_Button5`, `Mouse_WheelUp`, `Mouse_WheelDown`, `Mouse_2D_Axis`, and the `Gamepad_*` names (`Gamepad_Face_Bottom`, `Gamepad_LeftTrigger`, `Gamepad_LeftAxis_2D`, ...).
 
 Actions (preferred over raw keys, since players can rebind them and they cover keyboard and gamepad):
 
@@ -508,6 +541,17 @@ Actions (preferred over raw keys, since players can rebind them and they cover k
 - an action held as its context turns on doesn't count as pressed (e.g. the Start that opened a menu)
 
 Raw keys: `InputKeyDown / InputKeyPressed / InputKeyReleased(const InputState&, SDL_Scancode)`.
+
+Rebinding (for a controls menu). Only bindings with `"bPlayerAssignable": "true"` in the map can change, to a key of the same device and shape (a button for a button, a stick for a stick); their modifiers stay:
+
+- `InputGetBindings(input, action)` lists an action's bindings (index, current and default key, device, assignable)
+- `InputBeginKeyCapture(input, device)`, then `InputGetCapturedKey(input, key)` once the player presses something; the press doesn't reach actions
+- `InputRebind(input, action, index, key, &error)`, `InputResetBinding`, `InputResetAllBindings`, `InputFindActionsUsingKey` (to warn about or swap duplicates)
+- `InputSaveBindingOverrides(input)` writes the player's changes to `<user data>/Config/InputBindings.ini`; the engine loads them at startup (`InputLoadBindingOverrides`). A non-`none` `AssignableKey` in the map replaces the default key.
+
+Button prompts: `InputGetKeyDisplayName(input, key)` and `InputGetActionDisplayName(input, action, device)` give text like `E`, `Right Mouse`, `A` / `Cross`, `LB` / `L1`; keyboard names follow the player's layout.
+
+Vibration: `InputRumble(input, low, high, seconds)`, `InputRumbleTriggers`, `InputStopRumble`, on the active pad, off when `GameSettings::SetGamepadVibrationEnabled(false)`.
 
 Engine plumbing: `InputInit`, `InputBeginFrame`, `InputProcessEvent`, `InputEndFrame`, `InputLoadActionMap`, `InputAddDefaultActions`.
 

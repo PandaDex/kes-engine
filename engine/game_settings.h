@@ -5,9 +5,11 @@
 #include "ini_file.h"
 #include "shared.h"
 #include "render_backend.h"   // GraphicsOptions, ShadowQuality
+#include "audio_system.h"     // AudioBus
 
 struct AppWindow;
 class IRenderer;
+class AudioSystem;
 
 // Player-facing engine settings, modelled on Unreal's UGameUserSettings.
 //
@@ -32,15 +34,15 @@ class IRenderer;
 //   class MySettings : public GameSettings
 //   {
 //   public:
-//       float masterVolume = 1.0f;
+//       float fieldOfView = 90.0f;
 //   protected:
-//       void SetToDefaults() override { GameSettings::SetToDefaults(); masterVolume = 1.0f; }
-//       void LoadCustomSettings(const IniFile& ini) override { masterVolume = ini.GetFloat("MySettings", "MasterVolume", masterVolume); }
-//       void SaveCustomSettings(IniFile& ini) const override { ini.SetFloat("MySettings", "MasterVolume", masterVolume); }
+//       void SetToDefaults() override { GameSettings::SetToDefaults(); fieldOfView = 90.0f; }
+//       void LoadCustomSettings(const IniFile& ini) override { fieldOfView = ini.GetFloat("MySettings", "FieldOfView", fieldOfView); }
+//       void SaveCustomSettings(IniFile& ini) const override { ini.SetFloat("MySettings", "FieldOfView", fieldOfView); }
 //   };
 //   EngineSetGameSettingsClass<MySettings>(app);
 //   ...
-//   GetGameSettings<MySettings>()->masterVolume = 0.5f;
+//   GetGameSettings<MySettings>()->fieldOfView = 100.0f;
 class GameSettings
 {
 public:
@@ -109,6 +111,17 @@ public:
     float GetGamepadLookSensitivity() const { return m_gamepadLookSensitivity; }
     void SetLookYInverted(bool inverted) { m_invertLookY = inverted; }
     bool IsLookYInverted() const { return m_invertLookY; }
+    // Gamepad rumble (InputRumble), applied live.
+    void SetGamepadVibrationEnabled(bool enabled) { m_gamepadVibration = enabled; }
+    bool IsGamepadVibrationEnabled() const { return m_gamepadVibration; }
+
+    // Audio volumes (0-1), applied live. A bus volume multiplies the master
+    // volume: Effects, Music, Ambient, Voice and Ui (audio_system.h).
+    void SetMasterVolume(float volume);
+    float GetMasterVolume() const { return m_masterVolume; }
+    void SetAudioBusVolume(AudioBus bus, float volume);
+    float GetAudioBusVolume(AudioBus bus) const;
+    void ApplyAudioSettings();
 
     // Player consent to upload crash reports (docs/crash-reporting.md). Off until
     // the game asks; applied live.
@@ -159,6 +172,7 @@ public:
 
     // Engine wiring (called by the engine, not by game code)
     void AttachEngine(AppWindow *window, IRenderer *renderer, const AppConfig *defaults);
+    void AttachAudio(AudioSystem *audio);
     void SetActiveInstance(bool active);
 
 protected:
@@ -205,7 +219,10 @@ private:
     float m_mouseSensitivity = 1.0f;       // MouseSensitivity
     float m_gamepadLookSensitivity = 1.0f; // GamepadLookSensitivity
     bool m_invertLookY = false;            // bInvertLookY
+    bool m_gamepadVibration = true;        // bGamepadVibration
     bool m_crashReportUpload = false;      // bCrashReportUpload
+    float m_masterVolume = 1.0f;           // MasterVolume
+    float m_busVolumes[static_cast<size_t>(AudioBus::Count)] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}; // <Bus>Volume
 
     IniFile m_ini; // whole document, so unknown sections survive a save
     bool m_loaded = false;
@@ -214,6 +231,7 @@ private:
     AppWindow *m_window = nullptr;
     IRenderer *m_renderer = nullptr;
     const AppConfig *m_defaults = nullptr;
+    AudioSystem *m_audio = nullptr;
 };
 
 // Global accessor (Unreal: UGameUserSettings::GetGameUserSettings()).

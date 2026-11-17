@@ -308,7 +308,7 @@ bool CanImportSoundSource(const std::string& path)
     return extension == ".wav" || extension == ".mp3" || extension == ".ogg";
 }
 
-bool ImportSoundToKSound(const std::string& inputPath, const std::string& outputPath, std::string& error)
+bool ImportSoundToKSound(const std::string& inputPath, const std::string& outputPath, std::string& error, bool compress)
 {
     if (!CanImportSoundSource(inputPath))
     {
@@ -464,5 +464,7 @@ bool ImportSoundToKSound(const std::string& inputPath, const std::string& output
     }
 
     sound.frameCount = static_cast<uint32_t>(sound.samples.size() / sound.channels);
+    if (compress)
+        sound.encoding = SoundEncoding::Qoa;
     return SaveKSoundFile(outputPath.c_str(), sound, &error);
 }

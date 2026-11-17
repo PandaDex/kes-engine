@@ -58,6 +58,16 @@ struct EngineApp
     IntPoint rendererSize = {};       // last backbuffer size handed to the renderer
     unsigned long long frameDeadline = 0;   // frame limiter, performance counter ticks
     int debugFrameCount = 0;          // -debug-gpu-fault
+
+    // Map loading. Queued loads (EngineLoadMap, entities, map scripts) call
+    // onMapLoadBegin, draw one more frame (show a loading screen there), then
+    // load, upload the level to the GPU and call onMapLoaded. The startup map
+    // calls both from EngineStart, without the extra frame. Set before EngineStart.
+    std::function<void(EngineApp &app, const std::string &mapName)> onMapLoadBegin;
+    std::function<void(EngineApp &app, const std::string &mapName, bool loaded)> onMapLoaded;
+    std::string loadingMap;           // announced, loads after this frame is drawn
+    bool loadingFrameDrawn = false;
+    uint64_t preloadedLevel = 0;      // World::GetLevelGeneration the GPU has
 };
 
 // On failure the player has been told why and everything is already shut down.
@@ -74,6 +84,9 @@ void EngineSetCommandLine(int argc, const char* const* argv);
 void EngineSetInputMode(EngineApp& app, InputMode mode);
 InputMode EngineGetInputMode(const EngineApp& app);
 void EngineSetShowMouseCursor(EngineApp& app, bool show);
+
+// Loads a map at the end of the frame, with a loading frame first (onMapLoadBegin).
+void EngineLoadMap(EngineApp& app, const std::string& mapName);
 
 // Pause: entities stop updating and audio is paused, rendering and UI go on
 // (World::SetPaused). Typically paired with InputMode::UIOnly for a pause menu.

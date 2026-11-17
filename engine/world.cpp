@@ -152,7 +152,7 @@ void World::Update(float dt)
     }
     audio.Update(dt);
 
-    if (pendingMapLoad.empty())
+    if (pendingMapLoad.empty() || deferMapLoads)
         return;
 
     std::string mapName = std::move(pendingMapLoad);
@@ -204,6 +204,7 @@ bool World::LoadMap(const char* mapName)
     assets.Clear();
     InstantiateMap(map);
     currentMapName = mapName;
+    ++levelGeneration;
     CrashReporterSetTag("map", mapName);
 
     if (!CreatePlayerEntity())
@@ -212,6 +213,13 @@ bool World::LoadMap(const char* mapName)
     EngineLogf("Map loaded successfully: %s (%zu meshes, %zu brushes, %zu entities, %zu materials).",
                mapName ? mapName : "<null>", map.meshes.size(), map.brushes.size(), map.entities.size(), map.materials.size());
     return true;
+}
+
+std::string World::TakePendingMapLoad()
+{
+    std::string mapName = std::move(pendingMapLoad);
+    pendingMapLoad.clear();
+    return mapName;
 }
 
 void World::QueueMapLoad(const std::string& mapName)

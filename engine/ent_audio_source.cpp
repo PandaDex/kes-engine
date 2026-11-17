@@ -40,8 +40,8 @@ void AudioSourceEntity::Play()
 
     Stop();
     voiceId = spatial
-        ? game->audio->Play3D(Position, attenuation, soundFile.c_str(), volume, pitch, loop)
-        : game->audio->Play2D(soundFile.c_str(), volume, pitch, loop);
+        ? game->audio->Play3D(Position, attenuation, soundFile.c_str(), volume, pitch, loop, bus)
+        : game->audio->Play2D(soundFile.c_str(), volume, pitch, loop, bus);
 }
 
 void AudioSourceEntity::Stop()
@@ -96,6 +96,17 @@ bool AudioSourceEntity::ApplyProperty(const std::string& name, const std::string
     if (name == "AutoPlay")
     {
         autoPlay = entityprops::ParseBool(value, autoPlay);
+        return true;
+    }
+
+    if (name == "Bus")
+    {
+        const std::string busName = entityprops::ParseString(value);
+        for (size_t index = 0; index < static_cast<size_t>(AudioBus::Count); ++index)
+        {
+            if (busName == AudioBusName(static_cast<AudioBus>(index)))
+                bus = static_cast<AudioBus>(index);
+        }
         return true;
     }
 

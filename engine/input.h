@@ -28,7 +28,16 @@ enum class InputNativeKeyKind
     GamepadButton,
     GamepadLeftAxis2D,
     GamepadRightAxis2D,
-    GamepadAxis
+    GamepadAxis,
+    MouseWheelUp,     // one frame per wheel step
+    MouseWheelDown
+};
+
+// Which kind of device the player used last (button prompts, cursor).
+enum class InputDevice
+{
+    KeyboardMouse,
+    Gamepad
 };
 
 K_ENUM()
@@ -56,7 +65,10 @@ struct InputBinding
     SDL_Scancode keyboardKey = SDL_SCANCODE_UNKNOWN;
     SDL_GamepadButton gamepadButton = SDL_GAMEPAD_BUTTON_INVALID;
     SDL_GamepadAxis gamepadAxis = SDL_GAMEPAD_AXIS_INVALID;
+    uint8_t mouseButton = 0;   // SDL_BUTTON_LEFT ...
     std::vector<InputModifier> modifiers;
+    std::string key;           // current key name, e.g. "Keyboard_Space"
+    std::string defaultKey;    // the key the input map gives it
     bool playerAssignable = false;
     std::string assignableKey;
 };
@@ -105,6 +117,8 @@ struct InputState
 
     bool mouseButtons[8] = {};
     bool previousMouseButtons[8] = {};
+    bool mouseButtonsTapped[8] = {};
+    float mouseWheel = 0.0f;   // steps this frame, positive = away from the player
     float mouseDeltaX = 0.0f;
     float mouseDeltaY = 0.0f;
 
@@ -131,6 +145,13 @@ struct InputState
     bool uiActionsEnabled = false;
     bool uiActionsWasEnabled = false;
     bool uiTextInput = false;
+
+    InputDevice activeDevice = InputDevice::KeyboardMouse;
+
+    // Key capture for rebinding menus (InputBeginKeyCapture).
+    bool captureActive = false;
+    InputDevice captureDevice = InputDevice::KeyboardMouse;
+    std::string capturedKey;
 };
 
 void InputInit(InputState& input);
@@ -155,6 +176,54 @@ bool InputActionPressed(const InputState& input, const char* actionName);
 bool InputActionReleased(const InputState& input, const char* actionName);
 Vector2 InputActionValue2D(const InputState& input, const char* actionName);
 Vector3 InputActionValue3D(const InputState& input, const char* actionName);
+
+InputDevice InputGetActiveDevice(const InputState& input);
+// Layout of the active gamepad, for button glyphs (SDL_GAMEPAD_TYPE_UNKNOWN without one).
+SDL_GamepadType InputGetGamepadType(const InputState& input);
+
+// Rebinding. Only bindings marked "bPlayerAssignable" in the input map can be
+// changed, to a key of the same device and shape (a button for a button, a
+// stick for a stick); modifiers stay. Key names are input map names
+// ("Keyboard_F", "Mouse_Right", "Gamepad_Face_Left"). Overrides are kept by
+// action and default key, so they survive edits to the rest of the map.
+struct InputBindingInfo
+{
+    size_t index = 0;          // for InputRebind
+    std::string key;
+    std::string defaultKey;
+    InputDevice device = InputDevice::KeyboardMouse;
+    bool playerAssignable = false;
+};
+std::vector<InputBindingInfo> InputGetBindings(const InputState& input, const char* actionName);
+bool InputRebind(InputState& input, const char* actionName, size_t bindingIndex, const char* keyName, std::string* outError = nullptr);
+void InputResetBinding(InputState& input, const char* actionName, size_t bindingIndex);
+void InputResetAllBindings(InputState& input);
+// Actions of `context` that have a binding on `keyName` (to warn about or swap duplicates).
+std::vector<std::string> InputFindActionsUsingKey(const InputState& input, const char* keyName,
+                                                  InputActionContext context = InputActionContext::Game);
+// Player overrides file; empty path = <user data>/Config/InputBindings.ini.
+// The engine loads it at startup; call it again after InputLoadActionMap.
+bool InputSaveBindingOverrides(const InputState& input, const char* path = nullptr, std::string* outError = nullptr);
+bool InputLoadBindingOverrides(InputState& input, const char* path = nullptr, std::string* outError = nullptr);
+
+// "Press a key" for rebinding: the next button press of `device` is captured
+// (and doesn't reach actions) until InputGetCapturedKey returns it once.
+void InputBeginKeyCapture(InputState& input, InputDevice device);
+void InputCancelKeyCapture(InputState& input);
+bool InputIsCapturingKey(const InputState& input);
+bool InputGetCapturedKey(InputState& input, std::string& outKeyName);
+
+// Text for button prompts: keyboard keys follow the keyboard layout, gamepad
+// buttons the active pad (A / Cross, LB / L1 ...).
+std::string InputGetKeyDisplayName(const InputState& input, const std::string& keyName);
+// First binding of the action on `device`, as display text; empty when none.
+std::string InputGetActionDisplayName(const InputState& input, const char* actionName, InputDevice device);
+
+// Vibration on the active gamepad, 0-1 strengths. False without a pad that
+// supports it or when GameSettings turns vibration off.
+bool InputRumble(InputState& input, float lowFrequency, float highFrequency, float seconds);
+bool InputRumbleTriggers(InputState& input, float left, float right, float seconds);
+void InputStopRumble(InputState& input);
 
 bool InputKeyDown(const InputState& input, SDL_Scancode key);
 bool InputKeyPressed(const InputState& input, SDL_Scancode key);

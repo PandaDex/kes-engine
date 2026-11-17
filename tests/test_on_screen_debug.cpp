@@ -1,0 +1,137 @@
+#include "test_framework.h"
+#include <RmlUi/Core.h>
+#include "engine_configuration.h"
+#include "file_paths.h"
+#include "on_screen_debug.h"
+#include "render_backend.h"
+#include "ui_system.h"
+
+// Lays out the real document with RmlUi and SDL's offscreen video driver; no
+// GPU or visible window.
+namespace
+{
+    class NullRenderer final : public IRenderer
+    {
+    public:
+        RendererBackend GetBackend() const override { return RendererBackend::Auto; }
+        bool Init(SDL_Window*, const AppConfig&) override { return true; }
+        void Shutdown() override {}
+        bool Resize(int, int) override { return true; }
+        bool SetRenderResolution(int, int) override { return true; }
+        void SetVSync(bool) override {}
+        bool IsVSyncEnabled() const override { return false; }
+        void SetGraphicsOptions(const GraphicsOptions&) override {}
+        GraphicsOptions GetGraphicsOptions() const override { return {}; }
+        void RenderScene(const SceneState&, const Camera&, const Scene&, const AssetSystem&) override {}
+        void BeginBackbufferOverlay() override {}
+        UiTextureHandle CreateUiTexture(int, int, const uint8_t*) override { return ++next; }
+        void DestroyUiTexture(UiTextureHandle) override {}
+        void RenderUi(const UiDrawList&) override {}
+        void Present() override {}
+        const std::string& GetFatalError() const override { return error; }
+        UiTextureHandle next = 0;
+        std::string error;
+    };
+
+    struct OffscreenUi
+    {
+        SDL_Window* window = nullptr;
+        NullRenderer renderer;
+        UiSystem ui;
+
+        OffscreenUi()
+        {
+            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+            REQUIRE(SDL_InitSubSystem(SDL_INIT_VIDEO));
+            window = SDL_CreateWindow("ui test", 1280, 720, SDL_WINDOW_HIDDEN);
+            REQUIRE(window != nullptr);
+            const std::string roots = KES_TEST_CONTENT_DIRS;
+            SetAssetRootOverride(roots.substr(roots.find('|') + 1).c_str());   // engine/assets: fonts, kes.rcss
+            REQUIRE(ui.Init(window, &renderer, 1280, 720));
+        }
+
+        ~OffscreenUi()
+        {
+            OnScreenDebugShutdown(ui);
+            ui.Shutdown();
+            SDL_DestroyWindow(window);
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+            SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
+            SetAssetRootOverride("");
+        }
+
+        void Frame(float dt = 0.016f)
+        {
+            OnScreenDebugUpdate(ui, dt);
+            ui.Update();
+        }
+
+        // The message boxes, top to bottom.
+        std::vector<Rml::Element*> Messages()
+        {
+            std::vector<Rml::Element*> result;
+            if (Rml::ElementDocument* document = ui.GetContext()->GetDocument("kes-on-screen-debug"))
+            {
+                for (int i = 0; i < document->GetNumChildren(); ++i)
+                    result.push_back(document->GetChild(i)->GetChild(0));
+            }
+            return result;
+        }
+    };
+
+    Rml::Vector2f BorderSize(Rml::Element* element)
+    {
+        return element->GetBox().GetSize(Rml::BoxArea::Border);
+    }
+}
+
+#if ENGINE_ALLOW_DEBUG_MODE
+TEST_CASE("on-screen debug: boxes are as wide as their text, newest on top")
+{
+    OffscreenUi ui;
+    AddOnScreenDebugMessage(-1, 5.0f, DebugMessageType::Info, "Info here");
+    AddOnScreenDebugMessage(-1, 5.0f, DebugMessageType::Error, "A much longer error message, wider than the info one");
+    ui.Frame();
+
+    const std::vector<Rml::Element*> messages = ui.Messages();
+    REQUIRE(messages.size() == 2);
+    CHECK(messages[0]->IsClassSet("error"));
+    CHECK(messages[1]->IsClassSet("info"));
+    const Rml::Vector2f error = BorderSize(messages[0]);
+    const Rml::Vector2f info = BorderSize(messages[1]);
+    CHECK(info.x > 40.0f);
+    CHECK(error.x > info.x * 2.0f);
+    CHECK(error.x < 1280.0f * 0.8f);
+    CHECK(info.y == error.y);   // one line each
+    CHECK(info.y < 40.0f);
+}
+
+TEST_CASE("on-screen debug: keyed lines update in place and messages expire")
+{
+    OffscreenUi ui;
+    AddOnScreenDebugMessage(7, 0.0f, DebugMessageType::Info, "frame 1");
+    AddOnScreenDebugMessage(-1, 0.5f, DebugMessageType::Warning, "half a second");
+    ui.Frame();
+    REQUIRE(ui.Messages().size() == 2);
+
+    AddOnScreenDebugMessage(7, 0.0f, DebugMessageType::Info, "frame 2");
+    ui.Frame();
+    std::vector<Rml::Element*> messages = ui.Messages();
+    REQUIRE(messages.size() == 2);
+    CHECK(messages[1]->GetInnerRML() == "frame 2");   // kept its place under the newer warning
+
+    ui.Frame();   // not sent again: gone
+    REQUIRE(ui.Messages().size() == 1);
+    ui.Frame(0.6f);
+    CHECK(ui.Messages().empty());
+
+    AddOnScreenDebugMessage(-1, 5.0f, DebugMessageType::Error, "<b>not markup</b> & more");
+    ui.Frame();
+    messages = ui.Messages();
+    REQUIRE(messages.size() == 1);
+    CHECK(messages[0]->GetNumChildren() == 1);   // one text node, no <b> element
+    ClearOnScreenDebugMessages();
+    ui.Frame();
+    CHECK(ui.Messages().empty());
+}
+#endif

@@ -39,6 +39,10 @@ public:
     const AnimationGraphData* GetAnimationGraph(AnimationGraphHandle handle) const;
     const AnimBlendTreeData* GetAnimBlendTree(AnimBlendTreeHandle handle) const;
     uint64_t GetGeneration() const { return generation; }
+    // Handles run from 1 to Get*Count() - 1.
+    size_t GetMeshCount() const { return meshes.size(); }
+    size_t GetModelCount() const { return models.size(); }
+    size_t GetMaterialCount() const { return materials.size(); }
 
     // A file that fails to load is logged once and then returns 0 from the
     // cache until Clear(), so callers may retry freely.

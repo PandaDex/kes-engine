@@ -241,6 +241,7 @@ bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
 void RendererSetVSync(Renderer& renderer, bool enabled);
 void RendererSetGraphicsOptions(Renderer& renderer, const GraphicsOptions& options);
 void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
+void RendererPreloadAssets(Renderer& renderer, const AssetSystem& assets);
 void RendererBeginBackbufferOverlay(Renderer& renderer);
 UiTextureHandle RendererCreateUiTexture(Renderer& renderer, int width, int height, const uint8_t* rgbaPixels);
 void RendererDestroyUiTexture(Renderer& renderer, UiTextureHandle texture);

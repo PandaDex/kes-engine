@@ -307,7 +307,7 @@ At the moment `.ktex` is an uncompressed engine texture container with metadata.
 Container info:
 
 - magic: `KSND`
-- version: `1`
+- version: `2` (version `1` files still load: float PCM, no encoding field)
 - format type: binary
 
 Stored data:
@@ -316,15 +316,15 @@ Stored data:
 - `sampleRate`
 - `channels`
 - `frameCount`
-- `sampleCount`
-- interleaved `float32` PCM sample data
+- `encoding`: `0` = float32 PCM, `1` = QOA
+- payload count: samples for PCM, bytes for QOA
+- payload: interleaved `float32` PCM samples, or a complete QOA stream ([Quite OK Audio](https://qoaformat.org), `external/qoa`)
 
 Notes:
 
 - only mono and stereo are currently supported
-- the importer decodes source audio before writing `.ksound`
-- `.ksound` is not MP3 or Ogg under the hood
-- imported compression is discarded during conversion
+- the importer decodes the source (`.wav`, `.mp3`, `.ogg`) and writes QOA by default (about 3.2 bits per sample, near-transparent); `model-importer --pcm` keeps float PCM
+- QOA frames are self-contained (5120 samples each), so long sounds are decoded while they play (`AudioSystem`)
 
 ## Animation Clip Files: `.kanim`
 

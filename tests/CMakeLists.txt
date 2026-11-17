@@ -15,6 +15,7 @@ add_executable(kes_tests
     "test_physics_world.cpp"
     "test_scene.cpp"
     "test_text_parse.cpp"
+    "test_on_screen_debug.cpp"
 )
 set_property(TARGET kes_tests PROPERTY CXX_STANDARD 20)
 target_link_libraries(kes_tests PRIVATE engine)

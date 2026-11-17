@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -42,10 +43,15 @@ namespace
 
 int main(int argc, char* argv[])
 {
-    const std::vector<std::string> args = CollectPositionalCommandLineArguments(argc, argv);
+    std::vector<std::string> args = CollectPositionalCommandLineArguments(argc, argv);
+    // --pcm: keep sounds as uncompressed float PCM instead of QOA.
+    const auto pcm = std::find(args.begin(), args.end(), "--pcm");
+    const bool soundPcm = pcm != args.end();
+    if (soundPcm)
+        args.erase(pcm);
     if (args.size() < 1 || args.size() > 2)
     {
-        std::cout << "Usage: model-importer [-assetpath <content-root>] <input> [output]\n";
+        std::cout << "Usage: model-importer [-assetpath <content-root>] [--pcm] <input> [output]\n";
         return 1;
     }
 
@@ -74,7 +80,7 @@ int main(int argc, char* argv[])
         imported = ImportTextureToKTex(inputPath, outputPath.string(), error);
         break;
     case ImportKind::Sound:
-        imported = ImportSoundToKSound(inputPath, outputPath.string(), error);
+        imported = ImportSoundToKSound(inputPath, outputPath.string(), error, !soundPcm);
         break;
     default:
         break;
