@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,8 +55,10 @@ private:
     std::vector<KModelData> models;
     std::vector<ShaderData> shaders;
     std::vector<MaterialData> materials;
-    std::vector<AnimationClipData> animationClips;
-    std::vector<AnimationGraphData> animationGraphs;
+    // deque: push_back keeps existing elements in place, so pointers from GetAnimationClip/
+    // GetAnimationGraph stay valid while more assets load (blend trees cache them).
+    std::deque<AnimationClipData> animationClips;
+    std::deque<AnimationGraphData> animationGraphs;
     std::vector<AnimBlendTreeData> blendTrees;
     std::unordered_map<std::string, MeshHandle> meshFiles;
     std::unordered_map<std::string, ModelHandle> modelFiles;
