@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <unordered_map>
@@ -531,7 +532,32 @@ namespace
         return true;
     }
 
-    static bool SaveAnimations(const cgltf_data& data, const std::string& inputPath, const std::string& outputPath, std::string& error)
+    // Clips address nodes by index. When they go onto a model built from another file,
+    // match nodes by name instead and drop tracks for nodes the model doesn't have.
+    static void RetargetTracks(AnimationClipData& clip, const KModelData& model, size_t& outDropped)
+    {
+        std::unordered_map<std::string, int32_t> nodeByName;
+        for (size_t i = 0; i < model.nodes.size(); ++i)
+            nodeByName.emplace(model.nodes[i].name, (int32_t)i);
+
+        std::vector<AnimationNodeTrack> kept;
+        kept.reserve(clip.tracks.size());
+        for (AnimationNodeTrack& track : clip.tracks)
+        {
+            auto found = nodeByName.find(track.nodeName);
+            if (found == nodeByName.end())
+            {
+                outDropped++;
+                continue;
+            }
+            track.nodeIndex = found->second;
+            kept.push_back(std::move(track));
+        }
+        clip.tracks = std::move(kept);
+    }
+
+    static bool SaveAnimations(const cgltf_data& data, const std::string& inputPath, const std::string& outputPath,
+                               bool animationsOnly, const KModelData* target, size_t& outSaved, std::string& error)
     {
         namespace fs = std::filesystem;
 
@@ -539,18 +565,26 @@ namespace
         const fs::path outputDirectory = modelPath.parent_path();
         const std::string modelStem = modelPath.stem().string();
         std::unordered_map<std::string, size_t> clipNameUseCount;
+        size_t droppedTracks = 0;
+
+        // A file exported with just one animation and no mesh tends to call it "Take 001" or
+        // "mixamo.com", so the file name says more about it.
+        const bool nameAfterFile = animationsOnly && data.meshes_count == 0 && data.animations_count == 1;
 
         for (cgltf_size animationIndex = 0; animationIndex < data.animations_count; ++animationIndex)
         {
             const cgltf_animation& sourceAnimation = data.animations[animationIndex];
             AnimationClipData clip = {};
-            clip.name = sourceAnimation.name ? sourceAnimation.name : ("Anim" + std::to_string(animationIndex));
+            clip.name = nameAfterFile ? fs::path(inputPath).stem().string()
+                : sourceAnimation.name ? sourceAnimation.name : ("Anim" + std::to_string(animationIndex));
             clip.sourcePath = fs::path(inputPath).filename().string();
             clip.modelPath = modelPath.filename().string();
             clip.looping = true;
 
             if (!ImportAnimationChannels(sourceAnimation, data, clip, error))
                 return false;
+            if (target)
+                RetargetTracks(clip, *target, droppedTracks);
             if (clip.tracks.empty())
                 continue;
 
@@ -562,24 +596,28 @@ namespace
             const fs::path clipPath = outputDirectory / fileName;
             if (!SaveAnimationClipFile(clipPath.string().c_str(), clip, &error))
                 return false;
+            outSaved++;
         }
 
+        if (droppedTracks > 0)
+            std::printf("Warning: %zu animation tracks target nodes missing from %s and were skipped.\n",
+                        droppedTracks, modelPath.filename().string().c_str());
         return true;
     }
 }
 
-bool ImportGltfToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error)
+bool ImportGltfToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error, const ModelImportOptions& options)
 {
-    cgltf_options options = {};
+    cgltf_options parseOptions = {};
     cgltf_data* data = nullptr;
-    cgltf_result result = cgltf_parse_file(&options, inputPath.c_str(), &data);
+    cgltf_result result = cgltf_parse_file(&parseOptions, inputPath.c_str(), &data);
     if (result != cgltf_result_success)
     {
         error = "cgltf_parse_file failed";
         return false;
     }
 
-    result = cgltf_load_buffers(&options, data, inputPath.c_str());
+    result = cgltf_load_buffers(&parseOptions, data, inputPath.c_str());
     if (result != cgltf_result_success)
     {
         cgltf_free(data);
@@ -595,24 +633,57 @@ bool ImportGltfToKModel(const std::string& inputPath, const std::string& outputP
         return false;
     }
 
-    KModelData model = {};
-    model.sourcePath = std::filesystem::path(inputPath).filename().string();   // shipped with the game
+    if (options.mesh)
+    {
+        if (!options.animations && data->meshes_count == 0)
+        {
+            cgltf_free(data);
+            error = "The file has no meshes";
+            return false;
+        }
 
-    ImportNodes(*data, model);
-    ImportBones(*data, model);
-    if (!ImportMeshes(*data, model, error))
+        KModelData model = {};
+        model.sourcePath = std::filesystem::path(inputPath).filename().string();   // shipped with the game
+
+        ImportNodes(*data, model);
+        ImportBones(*data, model);
+        if (!ImportMeshes(*data, model, error))
+        {
+            cgltf_free(data);
+            return false;
+        }
+
+        CarryOverKModelAttachments(outputPath.c_str(), model);
+        if (!SaveKModelFile(outputPath.c_str(), model, &error))
+        {
+            cgltf_free(data);
+            return false;
+        }
+    }
+
+    if (!options.animations)
     {
         cgltf_free(data);
+        return true;
+    }
+
+    KModelData existing = {};
+    const bool retarget = !options.mesh && std::filesystem::exists(outputPath);
+    if (retarget && !LoadKModelFile(outputPath.c_str(), existing, &error))
+    {
+        cgltf_free(data);
+        error = "Can't read the target model: " + error;
         return false;
     }
 
-    CarryOverKModelAttachments(outputPath.c_str(), model);
-    const bool saved = SaveKModelFile(outputPath.c_str(), model, &error);
-    if (saved && !SaveAnimations(*data, inputPath, outputPath, error))
-    {
-        cgltf_free(data);
-        return false;
-    }
+    size_t savedClips = 0;
+    const cgltf_size sourceClips = data->animations_count;
+    const bool saved = SaveAnimations(*data, inputPath, outputPath, !options.mesh, retarget ? &existing : nullptr, savedClips, error);
     cgltf_free(data);
+    if (saved && !options.mesh && savedClips == 0)
+    {
+        error = sourceClips == 0 ? "The file has no animations" : "None of the animations match the target model's nodes";
+        return false;
+    }
     return saved;
 }

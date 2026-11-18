@@ -44,14 +44,24 @@ namespace
 int main(int argc, char* argv[])
 {
     std::vector<std::string> args = CollectPositionalCommandLineArguments(argc, argv);
-    // --pcm: keep sounds as uncompressed float PCM instead of QOA.
-    const auto pcm = std::find(args.begin(), args.end(), "--pcm");
-    const bool soundPcm = pcm != args.end();
-    if (soundPcm)
-        args.erase(pcm);
+    const auto takeFlag = [&args](const char* flag)
+    {
+        const auto found = std::find(args.begin(), args.end(), flag);
+        if (found == args.end())
+            return false;
+        args.erase(found);
+        return true;
+    };
+    // --pcm keeps sounds as uncompressed float PCM instead of QOA.
+    const bool soundPcm = takeFlag("--pcm");
+    ModelImportOptions modelOptions;
+    modelOptions.mesh = !takeFlag("--no-mesh");
+    modelOptions.animations = !takeFlag("--no-anims");
     if (args.size() < 1 || args.size() > 2)
     {
-        std::cout << "Usage: model-importer [-assetpath <content-root>] [--pcm] <input> [output]\n";
+        std::cout << "Usage: model-importer [-assetpath <content-root>] [--pcm] [--no-mesh] [--no-anims] <input> [output]\n"
+                     "  --no-mesh   write only the .kanim clips; if <output> exists they are matched to its nodes by name\n"
+                     "  --no-anims  write only the .kmodel\n";
         return 1;
     }
 
@@ -74,7 +84,7 @@ int main(int argc, char* argv[])
     switch (importKind)
     {
     case ImportKind::Model:
-        imported = ImportModelToKModel(inputPath, outputPath.string(), error);
+        imported = ImportModelToKModel(inputPath, outputPath.string(), error, modelOptions);
         break;
     case ImportKind::Texture:
         imported = ImportTextureToKTex(inputPath, outputPath.string(), error);

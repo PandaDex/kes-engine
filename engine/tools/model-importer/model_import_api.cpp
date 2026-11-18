@@ -49,15 +49,28 @@ bool CanImportModelSource(const std::string& path)
     return extension == ".obj" || extension == ".gltf" || extension == ".glb" || extension == ".fbx";
 }
 
-bool ImportModelToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error)
+bool ImportModelToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error, const ModelImportOptions& options)
 {
+    if (!options.mesh && !options.animations)
+    {
+        error = "Nothing to import: both the mesh and the animations are turned off";
+        return false;
+    }
+
     const std::string extension = Lowercase(std::filesystem::path(inputPath).extension().string());
     if (extension == ".obj")
+    {
+        if (!options.mesh)
+        {
+            error = "OBJ files have no animations";
+            return false;
+        }
         return ImportObjToKModel(inputPath, outputPath, error);
+    }
     if (extension == ".gltf" || extension == ".glb")
-        return ImportGltfToKModel(inputPath, outputPath, error);
+        return ImportGltfToKModel(inputPath, outputPath, error, options);
     if (extension == ".fbx")
-        return ImportFbxToKModel(inputPath, outputPath, error);
+        return ImportFbxToKModel(inputPath, outputPath, error, options);
 
     error = "Unsupported source format: " + extension;
     return false;

@@ -170,7 +170,7 @@ namespace
     }
 }
 
-bool ImportFbxToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error)
+bool ImportFbxToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error, const ModelImportOptions& options)
 {
     namespace fs = std::filesystem;
 
@@ -195,7 +195,7 @@ bool ImportFbxToKModel(const std::string& inputPath, const std::string& outputPa
         return false;
     }
 
-    const bool imported = ImportGltfToKModel(convertedGlbPath.string(), outputPath, error);
+    const bool imported = ImportGltfToKModel(convertedGlbPath.string(), outputPath, error, options);
     fs::remove(convertedGlbPath);
     return imported;
 }
