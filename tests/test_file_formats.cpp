@@ -70,6 +70,17 @@ namespace
         collider.radius = 0.3f;
         collider.halfHeight = 0.6f;
         model.colliders.push_back(collider);
+
+        model.defaultMaterial = "materials/skin.mat";
+        KModelChild child;
+        child.name = "gun";
+        child.modelPath = "models/pistol.kmodel";
+        child.materialPath = "materials/gun.mat";
+        child.animationPath = "anims/gun_idle.kanim";
+        child.boneIndex = 0;
+        child.translation[0] = 0.1f;
+        child.scale[2] = 2.0f;
+        model.children.push_back(child);
         return model;
     }
 
@@ -293,6 +304,16 @@ TEST_CASE("kmodel: round trip keeps the model")
     REQUIRE(loaded.colliders.size() == 1);
     CHECK(loaded.colliders[0].shape == KModelColliderShape::Capsule);
     CHECK_NEAR(loaded.colliders[0].halfHeight, 0.6, 1e-6);
+
+    CHECK(loaded.defaultMaterial == "materials/skin.mat");
+    REQUIRE(loaded.children.size() == 1);
+    CHECK(loaded.children[0].name == "gun");
+    CHECK(loaded.children[0].modelPath == "models/pistol.kmodel");
+    CHECK(loaded.children[0].materialPath == "materials/gun.mat");
+    CHECK(loaded.children[0].animationPath == "anims/gun_idle.kanim");
+    CHECK(loaded.children[0].boneIndex == 0);
+    CHECK_NEAR(loaded.children[0].translation[0], 0.1, 1e-6);
+    CHECK_NEAR(loaded.children[0].scale[2], 2.0, 1e-6);
 }
 
 TEST_CASE("kmodel: sockets and colliders on missing bones are rejected")
@@ -309,9 +330,14 @@ TEST_CASE("kmodel: sockets and colliders on missing bones are rejected")
     model.colliders[0].shape = (KModelColliderShape)7;
     REQUIRE(SaveKModelFile(path.c_str(), model));
     CHECK(!LoadKModelFile(path.c_str(), loaded));
+
+    model = MakeModel();
+    model.children[0].boneIndex = 3;
+    REQUIRE(SaveKModelFile(path.c_str(), model));
+    CHECK(!LoadKModelFile(path.c_str(), loaded));
 }
 
-TEST_CASE("kmodel: re-import keeps sockets and colliders by bone name")
+TEST_CASE("kmodel: re-import keeps sockets, colliders, children and the default material")
 {
     kestest::TempDir dir;
     const std::string path = dir.File("model.kmodel");
@@ -320,16 +346,21 @@ TEST_CASE("kmodel: re-import keeps sockets and colliders by bone name")
     KModelData reimported = MakeModel();
     reimported.sockets.clear();
     reimported.colliders.clear();
+    reimported.children.clear();
+    reimported.defaultMaterial.clear();
     KModelBone extra;
     extra.name = "pelvis";
     extra.nodeIndex = 0;
     reimported.bones.insert(reimported.bones.begin(), extra);
 
-    CHECK(CarryOverKModelAttachments(path.c_str(), reimported) == 2);
+    CHECK(CarryOverKModelAttachments(path.c_str(), reimported) == 3);
     REQUIRE(reimported.sockets.size() == 1);
     CHECK(reimported.sockets[0].boneIndex == 1);
     REQUIRE(reimported.colliders.size() == 1);
     CHECK(reimported.colliders[0].boneIndex == 1);
+    REQUIRE(reimported.children.size() == 1);
+    CHECK(reimported.children[0].boneIndex == 1);
+    CHECK(reimported.defaultMaterial == "materials/skin.mat");
     CHECK(CarryOverKModelAttachments(dir.File("missing.kmodel").c_str(), reimported) == 0);
 }
 

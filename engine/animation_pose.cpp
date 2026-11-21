@@ -265,3 +265,15 @@ void BuildBoneAttachmentMatrix(const KModelData& model, const std::vector<float>
     }
     MultiplyMatrices(local, nodeWorldMatrices.data() + (size_t)node * 16, outMatrix);
 }
+
+void BuildKModelChildMatrix(const KModelData& parent, const std::vector<float>& nodeWorldMatrices, const KModelChild& child, float outMatrix[16])
+{
+    BuildBoneAttachmentMatrix(parent, nodeWorldMatrices, child.boneIndex, child.translation, child.rotation, child.scale, outMatrix);
+}
+
+void BuildBindPoseWorldMatrices(const KModelData& model, std::vector<float>& outWorldMatrices)
+{
+    std::vector<AnimationTransform> pose;
+    BuildAnimationBindPose(model, pose);
+    BuildAnimationWorldMatrices(model, pose, outWorldMatrices);
+}

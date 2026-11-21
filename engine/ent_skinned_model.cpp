@@ -8,6 +8,7 @@
 #include "entity_property_utils.h"
 #include "game_context.h"
 #include "logger.h"
+#include "render_common.h"
 #include "scene.h"
 #include "profiler.h"
 
@@ -36,6 +37,9 @@ void SkinnedModelEntity::Start()
     }
 
     objectId = game->scene->CreateObject(object);
+    if (game->assets)
+        CreateChildParts(modelHandle, -1, 0);
+    childPartsModel = modelHandle;
     CreateCollider();
     SyncSceneObject(0.0f);
 }
@@ -298,20 +302,15 @@ void SkinnedModelEntity::RefreshAssetHandles()
             meshHandle = game->assets->LoadMesh(modelPath.c_str());
         if (modelHandle == 0)
             modelHandle = game->assets->LoadModel(modelPath.c_str());
-        const KModelData* model = game->assets->GetModel(modelHandle);
-        if (model && model->bones.size() > SceneObject::MaxSkinMatrices)
-            EngineLogf("Model %s has %zu bones; only the first %u are animated.", modelPath.c_str(), model->bones.size(),
+        const KModelData* loaded = game->assets->GetModel(modelHandle);
+        if (loaded && loaded->bones.size() > SceneObject::MaxSkinMatrices)
+            EngineLogf("Model %s has %zu bones; only the first %u are animated.", modelPath.c_str(), loaded->bones.size(),
                        SceneObject::MaxSkinMatrices);
     }
 
-    if (materialPath.empty())
-    {
-        materialHandle = 0;
-    }
-    else if (materialHandle == 0)
-    {
-        materialHandle = game->assets->LoadMaterial(materialPath.c_str());
-    }
+    const KModelData* model = game->assets->GetModel(modelHandle);
+    const std::string& material = materialPath.empty() && model ? model->defaultMaterial : materialPath;
+    materialHandle = material.empty() ? 0 : game->assets->LoadMaterial(material.c_str());
 }
 
 const AnimationGraphData* SkinnedModelEntity::ResolveAnimationGraph()
@@ -425,13 +424,30 @@ void SkinnedModelEntity::SyncSceneObject(float dt)
     object->mesh = meshHandle;
     object->material = materialHandle;
 
+    if (childPartsModel != modelHandle)
+    {
+        DestroyChildParts();
+        CreateChildParts(modelHandle, -1, 0);
+        childPartsModel = modelHandle;
+        object = game->scene->FindObject(objectId);
+        if (!object)
+            return;
+    }
+
     const KModelData* model = game->assets->GetModel(object->model);
     object->skinMatrixCount = 0;
     if (!model)
         return;
 
     if (model->bones.empty())
+    {
+        if (!childParts.empty())
+        {
+            BuildAnimationBindPose(*model, localPoseScratch);
+            UpdateChildParts(*model, localPoseScratch, dt);
+        }
         return;
+    }
 
     currentBoneCount = (uint32_t)model->bones.size();
 
@@ -483,6 +499,7 @@ void SkinnedModelEntity::SyncSceneObject(float dt)
         BuildAnimationBindPose(*model, localPose);
     lastPose = localPose;
     UpdateBoneColliders(*model, localPose, dt);
+    UpdateChildParts(*model, localPose, dt);
 
     if (game->animationDebugEnabled)
         BuildAnimationWorldMatrices(*model, localPose, debugBoneWorldMatrices);
@@ -495,8 +512,201 @@ void SkinnedModelEntity::SyncSceneObject(float dt)
     object->skinMatrices.assign(skinMatricesScratch.begin(), skinMatricesScratch.begin() + (size_t)object->skinMatrixCount * 16);
 }
 
+// LoadModel can reallocate the model storage, so don't keep KModelData refs across it.
+void SkinnedModelEntity::CreateChildParts(ModelHandle parentModel, int parentPart, int depth)
+{
+    constexpr int kMaxChildDepth = 4;   // also catches a model that includes itself
+    const KModelData* model = game->assets->GetModel(parentModel);
+    if (!model || model->children.empty())
+        return;
+    if (depth >= kMaxChildDepth)
+    {
+        EngineLogf("Model %s: child models nested deeper than %d are not drawn.", modelPath.c_str(), kMaxChildDepth);
+        return;
+    }
+    const std::vector<KModelChild> children = model->children;
+    for (size_t index = 0; index < children.size(); ++index)
+    {
+        const KModelChild& child = children[index];
+        if (child.modelPath.empty())
+            continue;
+        const ModelHandle handle = game->assets->LoadModel(child.modelPath.c_str());
+        if (!game->assets->GetModel(handle))
+        {
+            EngineLogf("Model %s: child model %s did not load.", modelPath.c_str(), child.modelPath.c_str());
+            continue;
+        }
+
+        SceneObject object = {};
+        object.mesh = game->assets->LoadMesh(child.modelPath.c_str());
+        const std::string material = child.materialPath.empty() ? game->assets->GetModel(handle)->defaultMaterial : child.materialPath;
+        object.material = material.empty() ? 0 : game->assets->LoadMaterial(material.c_str());
+        object.useWorldMatrix = true;
+
+        ChildPart part;
+        part.objectId = game->scene->CreateObject(object);
+        part.model = handle;
+        part.parentPart = parentPart;
+        part.childIndex = index;
+        part.name = child.name;
+        part.animationPath = child.animationPath;
+        BuildBindPoseWorldMatrices(*game->assets->GetModel(handle), part.nodeWorld);
+        childParts.push_back(std::move(part));
+        CreateChildParts(handle, (int)childParts.size() - 1, depth + 1);
+    }
+}
+
+void SkinnedModelEntity::DestroyChildParts()
+{
+    for (const ChildPart& part : childParts)
+    {
+        if (game && game->scene)
+            game->scene->RemoveObject(part.objectId);
+    }
+    childParts.clear();
+}
+
+void SkinnedModelEntity::UpdateChildParts(const KModelData& model, const std::vector<AnimationTransform>& pose, float dt)
+{
+    if (childParts.empty())
+        return;
+    Transform transform;
+    transform.position = Position;
+    transform.rotation = Rotation;
+    transform.scale = scale;
+    const render::Matrix4 entityMatrix = render::TransformToMatrix(transform);
+    BuildAnimationWorldMatrices(model, pose, rootWorldScratch);
+
+    for (ChildPart& part : childParts)
+    {
+        const bool onRoot = part.parentPart < 0;
+        const ChildPart* parent = onRoot ? nullptr : &childParts[(size_t)part.parentPart];
+        const KModelData* parentModel = onRoot ? &model : game->assets->GetModel(parent->model);
+        const KModelData* childModel = game->assets->GetModel(part.model);
+        if (!parentModel || !childModel || part.childIndex >= parentModel->children.size())
+            continue;
+        float local[16];
+        BuildKModelChildMatrix(*parentModel, onRoot ? rootWorldScratch : parent->nodeWorld, parentModel->children[part.childIndex], local);
+        MultiplyMatrices(local, onRoot ? entityMatrix.m : parent->world, part.world);
+
+        SceneObject* object = game->scene->FindObject(part.objectId);
+        if (!object)
+            continue;
+        std::copy(part.world, part.world + 16, object->worldMatrix);
+        object->transform.position = { part.world[12], part.world[13], part.world[14] };
+
+        object->skinMatrixCount = 0;
+        if (!EvaluateChildAnimation(part, *childModel, dt))
+            continue;
+        BuildAnimationWorldMatrices(*childModel, part.pose, part.nodeWorld);
+        if (childModel->bones.empty() || !BuildAnimationSkinMatrices(*childModel, part.pose, part.skin))
+            continue;
+        object->model = part.model;
+        object->skinMatrixCount = (uint32_t)std::min<size_t>(childModel->bones.size(), SceneObject::MaxSkinMatrices);
+        object->skinMatrices.assign(part.skin.begin(), part.skin.begin() + (size_t)object->skinMatrixCount * 16);
+    }
+}
+
+void SkinnedModelEntity::LoadChildAnimation(ChildPart& part)
+{
+    if (part.animationLoaded || part.animationPath.empty() || !game || !game->assets)
+        return;
+    part.animationLoaded = true;
+    if (!IsAnimBlendTreePath(part.animationPath))
+    {
+        part.clip = game->assets->LoadAnimationClip(part.animationPath.c_str());
+        return;
+    }
+    const AnimBlendTreeData* data = game->assets->GetAnimBlendTree(game->assets->LoadAnimBlendTree(part.animationPath.c_str()));
+    std::string error;
+    if (!data)
+        EngineLogf("Model %s: child animation %s did not load.", modelPath.c_str(), part.animationPath.c_str());
+    else if (!part.blendTree.Build(*data, &error))
+        EngineLogf("Model %s: child animation %s: %s", modelPath.c_str(), part.animationPath.c_str(), error.c_str());
+}
+
+bool SkinnedModelEntity::EvaluateChildAnimation(ChildPart& part, const KModelData& model, float dt)
+{
+    if (part.animationPath.empty())
+        return false;
+    LoadChildAnimation(part);
+
+    part.pose.clear();
+    if (IsAnimBlendTreePath(part.animationPath))
+    {
+        if (!part.blendTree.IsBuilt())
+            return false;
+        const AnimBlendTreeInstance::ClipResolver clips = [this](const std::string& path)
+        { return game->assets->GetAnimationClip(game->assets->LoadAnimationClip(path.c_str())); };
+        return part.blendTree.Evaluate(model, dt, clips, part.pose);
+    }
+    const AnimationClipData* clip = game->assets->GetAnimationClip(part.clip);
+    if (!clip)
+        return false;
+    part.clipTime += dt;
+    return SampleAnimationClip(model, *clip, part.clipTime, part.pose);
+}
+
+void SkinnedModelEntity::ResetChildAnimation(ChildPart& part, const std::string& path)
+{
+    part.animationPath = path;
+    part.blendTree = {};
+    part.animationLoaded = false;
+    part.clip = 0;
+    part.clipTime = 0.0f;
+    part.pose.clear();
+    if (const KModelData* childModel = game && game->assets ? game->assets->GetModel(part.model) : nullptr)
+        BuildBindPoseWorldMatrices(*childModel, part.nodeWorld);
+}
+
+template<typename Fn> bool SkinnedModelEntity::ForEachChildNamed(const std::string& name, Fn&& fn)
+{
+    bool found = false;
+    for (ChildPart& part : childParts)
+    {
+        if (part.name != name)
+            continue;
+        fn(part);
+        found = true;
+    }
+    return found;
+}
+
+bool SkinnedModelEntity::SetChildAnimation(const std::string& child, const std::string& path)
+{
+    return ForEachChildNamed(child, [&](ChildPart& part) { ResetChildAnimation(part, path); });
+}
+
+bool SkinnedModelEntity::SetChildAnimFloat(const std::string& child, const std::string& name, float value)
+{
+    return ForEachChildNamed(child, [&](ChildPart& part)
+                             {
+                                 LoadChildAnimation(part);
+                                 part.blendTree.SetFloat(name, value);
+                             });
+}
+
+bool SkinnedModelEntity::SetChildAnimBool(const std::string& child, const std::string& name, bool value)
+{
+    return ForEachChildNamed(child, [&](ChildPart& part)
+                             {
+                                 LoadChildAnimation(part);
+                                 part.blendTree.SetBool(name, value);
+                             });
+}
+
+bool SkinnedModelEntity::SetChildAnimInt(const std::string& child, const std::string& name, int value)
+{
+    return ForEachChildNamed(child, [&](ChildPart& part)
+                             {
+                                 LoadChildAnimation(part);
+                                 part.blendTree.SetInt(name, value);
+                             });
+}
+
 void SkinnedModelEntity::OnDestroy()
 {
+    DestroyChildParts();
     if (game && game->scene)
         game->scene->RemoveObject(objectId);
     if (game && game->collision && collider != 0)

@@ -119,6 +119,7 @@
             ],
             "class": "",
             "group": "Room",
+            "guid": "a1640a05-bd9b-4f67-a4f1-eae63da573e7",
             "id": 1,
             "kv": {
             },
@@ -260,6 +261,7 @@
             ],
             "class": "",
             "group": "Room",
+            "guid": "7fa2e8cd-0aba-46c4-a72d-bc65a167e56f",
             "id": 2,
             "kv": {
             },
@@ -401,6 +403,7 @@
             ],
             "class": "",
             "group": "Room",
+            "guid": "b31dec4a-5038-4ca3-ae8d-83c062bcb272",
             "id": 3,
             "kv": {
             },
@@ -542,6 +545,7 @@
             ],
             "class": "",
             "group": "Room",
+            "guid": "8dc4444b-21cd-4a2c-b473-577eea1c2b94",
             "id": 4,
             "kv": {
             },
@@ -683,6 +687,7 @@
             ],
             "class": "",
             "group": "Room",
+            "guid": "ffd990bc-667b-4a35-b9ed-486d8bfbd5c9",
             "id": 5,
             "kv": {
             },
@@ -824,6 +829,7 @@
             ],
             "class": "",
             "group": "Platform",
+            "guid": "4de3e491-1f28-4b12-b3c7-bcd6ef91cd5b",
             "id": 6,
             "kv": {
             },
@@ -1007,6 +1013,7 @@
             ],
             "class": "",
             "group": "Platform",
+            "guid": "febcff18-863e-4f84-9f9f-0fd58a6316a5",
             "id": 7,
             "kv": {
             },
@@ -1125,6 +1132,7 @@
             ],
             "class": "",
             "group": "Platform",
+            "guid": "f19cfd2d-7981-4d1b-af93-859e8647d37d",
             "id": 8,
             "kv": {
             },
@@ -1266,6 +1274,7 @@
             ],
             "class": "BrushEntity",
             "group": "",
+            "guid": "df663bab-1915-4fa1-8d20-dc0fe8c40ce0",
             "id": 9,
             "kv": {
                 "Solid": "1",
@@ -1301,6 +1310,7 @@
             ],
             "class": "PlayerStartEntity",
             "group": "",
+            "guid": "3db863f3-4fed-4394-8128-93d49dab59c7",
             "id": 10,
             "kv": {
             },
@@ -1334,6 +1344,7 @@
             ],
             "class": "LightEntity",
             "group": "",
+            "guid": "de94eb50-b74b-455b-854d-fc0ff0bc7ba5",
             "id": 11,
             "kv": {
                 "Color": "1 0.92 0.8",
@@ -1371,6 +1382,7 @@
             ],
             "class": "LightEntity",
             "group": "",
+            "guid": "1f509ac7-a8cb-475b-8438-ab59ab1836d6",
             "id": 12,
             "kv": {
                 "Color": "1 0.3 0.2",
@@ -1408,6 +1420,7 @@
             ],
             "class": "SkyboxEntity",
             "group": "",
+            "guid": "4cb4827a-1fbc-46b8-971f-2c846ff91139",
             "id": 13,
             "kv": {
                 "Active": "1",
@@ -1434,6 +1447,48 @@
                 0,
                 0,
                 256
+            ],
+            "outputs": [
+            ],
+            "solid": false,
+            "visgroup": "",
+            "visible": true
+        },
+        {
+            "angles": [
+                0,
+                0,
+                0
+            ],
+            "class": "StaticMeshEntity",
+            "group": "",
+            "guid": "efffe566-e633-4866-aec6-e3f217629a47",
+            "id": 14,
+            "kv": {
+                "Collider": "Box",
+                "Density": "500",
+                "Dynamic": "0",
+                "Friction": "0.6",
+                "Model": "meshes/plane.kmodel",
+                "Restitution": "0",
+                "RollingResistance": "0.1",
+                "Scale": "1 1 1"
+            },
+            "maxs": [
+                16,
+                16,
+                16
+            ],
+            "mins": [
+                -16,
+                -16,
+                -16
+            ],
+            "name": "StaticMeshEntity_1",
+            "origin": [
+                144,
+                -304,
+                96
             ],
             "outputs": [
             ],

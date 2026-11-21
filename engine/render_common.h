@@ -14,6 +14,7 @@
 
 class Scene;
 struct SkySettings;
+struct SceneObject;
 
 namespace render
 {
@@ -189,6 +190,8 @@ namespace render
     // World-space sphere of a local sphere, `world` being TransformToMatrix of a transform with this scale.
     void TransformSphere(const Matrix4& world, const Vector3& scale, const Vector3& localCenter, float localRadius, Vector3& outCenter, float& outRadius);
     Matrix4 TransformToMatrix(const Transform& transform);
+    // outScale is what the bounding sphere has to be scaled by
+    Matrix4 SceneObjectMatrix(const SceneObject& object, Vector3& outScale);
 
     uint16_t FloatToHalf(float value);
 }

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include "test_framework.h"
 #include "camera.h"
 #include "ent_brush.h"
@@ -70,6 +71,59 @@ namespace
             return -1e9f;
         }
     };
+
+    // "upper" sits 1 unit above "lower" and the bend clip turns it 90 degrees about Z,
+    // so a point at its tip moves from (0, 2, 0) to (-1, 1, 0).
+    KModelData MakeBenderModel()
+    {
+        KModelData model;
+        KModelMesh mesh;
+        mesh.vertices.resize(3);
+        mesh.vertices[1].px = 0.1f;
+        mesh.vertices[2].py = 2.0f;
+        mesh.indices = { 0, 1, 2 };
+        mesh.primitives.push_back({ 0, 3, -1 });
+        model.meshes.push_back(mesh);
+        KModelNode meshNode;
+        meshNode.meshIndex = 0;
+        KModelNode lower;
+        lower.name = "lower";
+        lower.boneIndex = 0;
+        KModelNode upper;
+        upper.name = "upper";
+        upper.parentIndex = 1;
+        upper.boneIndex = 1;
+        upper.translation[1] = 1.0f;
+        model.nodes = { meshNode, lower, upper };
+        KModelBone lowerBone;
+        lowerBone.name = "lower";
+        lowerBone.nodeIndex = 1;
+        KModelBone upperBone;
+        upperBone.name = "upper";
+        upperBone.nodeIndex = 2;
+        upperBone.parentBoneIndex = 0;
+        upperBone.inverseBindMatrix[13] = -1.0f;
+        model.bones = { lowerBone, upperBone };
+        KModelCollider tip;
+        tip.shape = KModelColliderShape::Sphere;
+        tip.boneIndex = 1;
+        tip.center[1] = 1.0f;
+        tip.radius = 0.2f;
+        model.colliders.push_back(tip);
+        return model;
+    }
+
+    AnimationClipData MakeBendClip()
+    {
+        AnimationClipData clip;
+        clip.duration = 1.0f;
+        clip.looping = false;
+        AnimationNodeTrack track;
+        track.nodeIndex = 2;
+        track.rotationKeys = { { 0.0f, { 0.0f, 0.0f, 0.0f, 1.0f } }, { 1.0f, { 0.0f, 0.0f, 0.70710678f, 0.70710678f } } };
+        clip.tracks.push_back(track);
+        return clip;
+    }
 
     Vector3 RunBallScene()
     {
@@ -159,52 +213,11 @@ TEST_CASE("world: colliders on bones follow the animation")
     LoadedWorld loaded;
     kestest::TempDir dir;
 
-    // "upper" sits 1 unit above "lower" and the clip bends it 90 degrees about Z,
-    // so a sphere at its tip moves from (0, 2, 0) to (-1, 1, 0).
-    KModelData model;
-    KModelMesh mesh;
-    mesh.vertices.resize(3);
-    mesh.vertices[1].px = 0.1f;
-    mesh.vertices[2].py = 2.0f;
-    mesh.indices = { 0, 1, 2 };
-    mesh.primitives.push_back({ 0, 3, -1 });
-    model.meshes.push_back(mesh);
-    KModelNode meshNode;
-    meshNode.meshIndex = 0;
-    KModelNode lower;
-    lower.name = "lower";
-    lower.boneIndex = 0;
-    KModelNode upper;
-    upper.name = "upper";
-    upper.parentIndex = 1;
-    upper.boneIndex = 1;
-    upper.translation[1] = 1.0f;
-    model.nodes = { meshNode, lower, upper };
-    KModelBone lowerBone;
-    lowerBone.name = "lower";
-    lowerBone.nodeIndex = 1;
-    KModelBone upperBone;
-    upperBone.name = "upper";
-    upperBone.nodeIndex = 2;
-    upperBone.parentBoneIndex = 0;
-    upperBone.inverseBindMatrix[13] = -1.0f;
-    model.bones = { lowerBone, upperBone };
-    KModelCollider tip;
-    tip.shape = KModelColliderShape::Sphere;
-    tip.boneIndex = 1;
-    tip.center[1] = 1.0f;
-    tip.radius = 0.2f;
-    model.colliders.push_back(tip);
+    KModelData model = MakeBenderModel();
     const std::string modelPath = dir.File("bender.kmodel");
     REQUIRE(SaveKModelFile(modelPath.c_str(), model));
 
-    AnimationClipData clip;
-    clip.duration = 1.0f;
-    clip.looping = false;
-    AnimationNodeTrack track;
-    track.nodeIndex = 2;
-    track.rotationKeys = { { 0.0f, { 0.0f, 0.0f, 0.0f, 1.0f } }, { 1.0f, { 0.0f, 0.0f, 0.70710678f, 0.70710678f } } };
-    clip.tracks.push_back(track);
+    const AnimationClipData clip = MakeBendClip();
     const std::string clipPath = dir.File("bend.kanim");
     REQUIRE(SaveAnimationClipFile(clipPath.c_str(), clip));
 
@@ -226,6 +239,172 @@ TEST_CASE("world: colliders on bones follow the animation")
     loaded.Run(75);
     CHECK_NEAR(hitAt(-1.0f, 1.0f), origin.y + 1.2f, 0.05);
     CHECK(hitAt(0.0f, 2.0f) < -1e8f);
+}
+
+TEST_CASE("world: child models follow their bone and keep their own material")
+{
+    LoadedWorld loaded;
+    kestest::TempDir dir;
+
+    KModelData gun;
+    KModelMesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[1].px = 0.1f;
+    mesh.vertices[2].py = 0.1f;
+    mesh.indices = { 0, 1, 2 };
+    mesh.primitives.push_back({ 0, 3, -1 });
+    gun.meshes.push_back(mesh);
+    KModelNode gunNode;
+    gunNode.meshIndex = 0;
+    gun.nodes.push_back(gunNode);
+    gun.defaultMaterial = "materials/trim.mat";
+    const std::string gunPath = dir.File("gun.kmodel");
+    REQUIRE(SaveKModelFile(gunPath.c_str(), gun));
+
+    KModelData hands = MakeBenderModel();
+    hands.colliders.clear();
+    hands.defaultMaterial = "materials/brick.mat";
+    KModelChild child;
+    child.modelPath = gunPath;
+    child.boneIndex = 1;
+    child.translation[1] = 1.0f;
+    hands.children.push_back(child);
+    const std::string handsPath = dir.File("hands.kmodel");
+    REQUIRE(SaveKModelFile(handsPath.c_str(), hands));
+    const std::string clipPath = dir.File("bend.kanim");
+    REQUIRE(SaveAnimationClipFile(clipPath.c_str(), MakeBendClip()));
+
+    const Vector3 origin = { 500.0f, 500.0f, 500.0f };
+    auto* entity = loaded.world.GetEntities().CreateEntity<SkinnedModelEntity>();
+    entity->ApplyProperty("Model", handsPath);
+    entity->ApplyProperty("AnimClip", clipPath);
+    entity->Teleport(origin);
+    loaded.Run(1);
+
+    AssetSystem& assets = loaded.world.GetAssets();
+    const MaterialHandle brick = assets.LoadMaterial("materials/brick.mat");
+    const MaterialHandle trim = assets.LoadMaterial("materials/trim.mat");
+    REQUIRE(brick != 0);
+    REQUIRE(trim != 0);
+    const auto findObjects = [&](const SceneObject*& parent, const SceneObject*& attached)
+    {
+        parent = attached = nullptr;
+        for (const SceneObject& object : loaded.world.GetScene().GetObjects())
+        {
+            if (object.model == entity->GetModelHandle())
+                parent = &object;
+            else if (object.useWorldMatrix)
+                attached = &object;
+        }
+        REQUIRE(parent != nullptr);
+        REQUIRE(attached != nullptr);
+    };
+
+    const SceneObject* parent = nullptr;
+    const SceneObject* attached = nullptr;
+    findObjects(parent, attached);
+    CHECK(parent->material == brick);
+    CHECK(attached->material == trim);
+    CHECK_NEAR(attached->worldMatrix[12], origin.x, 0.05);
+    CHECK_NEAR(attached->worldMatrix[13], origin.y + 2.0f, 0.05);
+
+    loaded.Run(75);
+    entity->ApplyProperty("Material", "materials/floor.mat");
+    loaded.Run(1);
+    findObjects(parent, attached);
+    CHECK_NEAR(attached->worldMatrix[12], origin.x - 1.0f, 0.02);
+    CHECK_NEAR(attached->worldMatrix[13], origin.y + 1.0f, 0.02);
+    CHECK(parent->material == assets.LoadMaterial("materials/floor.mat"));
+    CHECK(attached->material == trim);
+
+    const size_t objectsBefore = loaded.world.GetScene().GetObjects().size();
+    entity->Destroy();
+    loaded.Run(1);
+    CHECK(loaded.world.GetScene().GetObjects().size() == objectsBefore - 2);
+}
+
+TEST_CASE("world: a child model plays its own animation and carries its children")
+{
+    LoadedWorld loaded;
+    kestest::TempDir dir;
+
+    KModelData marker;
+    KModelMesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[1].px = 0.1f;
+    mesh.vertices[2].py = 0.1f;
+    mesh.indices = { 0, 1, 2 };
+    mesh.primitives.push_back({ 0, 3, -1 });
+    marker.meshes.push_back(mesh);
+    KModelNode markerNode;
+    markerNode.meshIndex = 0;
+    marker.nodes.push_back(markerNode);
+    const std::string markerPath = dir.File("marker.kmodel");
+    REQUIRE(SaveKModelFile(markerPath.c_str(), marker));
+
+    KModelData bender = MakeBenderModel();
+    bender.colliders.clear();
+    KModelChild tip;
+    tip.name = "tip";
+    tip.modelPath = markerPath;
+    tip.boneIndex = 1;
+    tip.translation[1] = 1.0f;
+    bender.children.push_back(tip);
+    const std::string benderPath = dir.File("bender.kmodel");
+    REQUIRE(SaveKModelFile(benderPath.c_str(), bender));
+    const std::string clipPath = dir.File("bend.kanim");
+    REQUIRE(SaveAnimationClipFile(clipPath.c_str(), MakeBendClip()));
+
+    KModelData holder = marker;
+    KModelChild arm;
+    arm.name = "arm";
+    arm.modelPath = benderPath;
+    arm.animationPath = clipPath;
+    arm.translation[0] = 3.0f;
+    holder.children.push_back(arm);
+    const std::string holderPath = dir.File("holder.kmodel");
+    REQUIRE(SaveKModelFile(holderPath.c_str(), holder));
+
+    const Vector3 origin = { 500.0f, 500.0f, 500.0f };
+    auto* entity = loaded.world.GetEntities().CreateEntity<SkinnedModelEntity>();
+    entity->ApplyProperty("Model", holderPath);
+    entity->Teleport(origin);
+    loaded.Run(76);
+
+    const auto attached = [&](uint32_t& skinned) -> std::vector<const SceneObject*>
+    {
+        std::vector<const SceneObject*> out;
+        skinned = 0;
+        for (const SceneObject& object : loaded.world.GetScene().GetObjects())
+        {
+            if (!object.useWorldMatrix)
+                continue;
+            out.push_back(&object);
+            skinned += object.skinMatrixCount > 0 ? 1u : 0u;
+        }
+        return out;
+    };
+    uint32_t skinned = 0;
+    std::vector<const SceneObject*> objects = attached(skinned);
+    REQUIRE(objects.size() == 2);
+    CHECK(skinned == 1);
+    const auto tipAt = [&](float x, float y)
+    {
+        for (const SceneObject* object : objects)
+        {
+            if (object->skinMatrixCount == 0 && std::fabs(object->worldMatrix[12] - x) < 0.02f && std::fabs(object->worldMatrix[13] - y) < 0.02f)
+                return true;
+        }
+        return false;
+    };
+    CHECK(tipAt(origin.x + 3.0f - 1.0f, origin.y + 1.0f));
+
+    CHECK(!entity->SetChildAnimation("missing", clipPath));
+    CHECK(entity->SetChildAnimation("arm", ""));
+    loaded.Run(1);
+    objects = attached(skinned);
+    CHECK(skinned == 0);
+    CHECK(tipAt(origin.x + 3.0f, origin.y + 2.0f));
 }
 
 TEST_CASE("world: a dynamic brush falls and its scene object follows")

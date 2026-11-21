@@ -165,6 +165,21 @@ namespace render
         return r;
     }
 
+    Matrix4 SceneObjectMatrix(const SceneObject& object, Vector3& outScale)
+    {
+        if (!object.useWorldMatrix)
+        {
+            outScale = object.transform.scale;
+            return TransformToMatrix(object.transform);
+        }
+        Matrix4 r;
+        std::memcpy(r.m, object.worldMatrix, sizeof(r.m));
+        const auto rowLength = [&](int row)
+        { return std::sqrt(r.m[row * 4] * r.m[row * 4] + r.m[row * 4 + 1] * r.m[row * 4 + 1] + r.m[row * 4 + 2] * r.m[row * 4 + 2]); };
+        outScale = { rowLength(0), rowLength(1), rowLength(2) };
+        return r;
+    }
+
     uint16_t FloatToHalf(float value)
     {
         uint32_t bits = 0;

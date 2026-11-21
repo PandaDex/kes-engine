@@ -51,6 +51,13 @@ public:
     // Socket transform in model space (before the entity transform) for the current pose.
     bool GetSocketModelMatrix(const std::string& name, float outMatrix[16]) const;
 
+    // Applies to every child with that name, nested ones too. Returns false if there is none.
+    // An empty animation path puts the child back in its bind pose.
+    bool SetChildAnimation(const std::string& child, const std::string& path);
+    bool SetChildAnimFloat(const std::string& child, const std::string& name, float value);
+    bool SetChildAnimBool(const std::string& child, const std::string& name, bool value);
+    bool SetChildAnimInt(const std::string& child, const std::string& name, int value);
+
 private:
     void RefreshAssetHandles();
     const AnimationGraphData* ResolveAnimationGraph();
@@ -60,6 +67,9 @@ private:
     const AnimationClipData* ResolveAnimationClipHandle(const std::string& path, AnimationClipHandle& handle, std::string& cachedPath);
     void SyncSceneObject(float dt);
     void CreateCollider();
+    void CreateChildParts(ModelHandle parentModel, int parentPart, int depth);
+    void DestroyChildParts();
+    void UpdateChildParts(const KModelData& model, const std::vector<AnimationTransform>& pose, float dt);
     void OnDestroy() override;
 
     uint32_t objectId = 0;
@@ -108,4 +118,31 @@ private:
     };
     std::vector<BoneCollider> boneColliders;
     std::vector<float> boneWorldScratch;
+
+    // a parent is always stored before its children, UpdateChildParts relies on it
+    struct ChildPart
+    {
+        uint32_t objectId = 0;
+        ModelHandle model = 0;
+        int parentPart = -1;          // -1 = attached to the entity's own model
+        size_t childIndex = 0;
+        std::string name;
+        std::vector<float> nodeWorld;
+        float world[16] = {};
+
+        std::string animationPath;
+        AnimBlendTreeInstance blendTree;
+        bool animationLoaded = false;
+        AnimationClipHandle clip = 0;
+        float clipTime = 0.0f;
+        std::vector<AnimationTransform> pose;
+        std::vector<float> skin;
+    };
+    void LoadChildAnimation(ChildPart& part);
+    bool EvaluateChildAnimation(ChildPart& part, const KModelData& model, float dt);
+    void ResetChildAnimation(ChildPart& part, const std::string& path);
+    template<typename Fn> bool ForEachChildNamed(const std::string& name, Fn&& fn);
+    std::vector<ChildPart> childParts;
+    ModelHandle childPartsModel = 0;
+    std::vector<float> rootWorldScratch;
 };

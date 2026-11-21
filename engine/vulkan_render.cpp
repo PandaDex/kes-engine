@@ -3491,7 +3491,8 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
             item.object = &obj;
             item.material = assets.GetMaterial(obj.material);
             item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
-            item.world = render::TransformToMatrix(obj.transform);
+            Vector3 worldScale;
+            item.world = render::SceneObjectMatrix(obj, worldScale);
             const KModelData* model = assets.GetModel(obj.model);
             item.skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
             if (!item.skinned)
@@ -3499,7 +3500,7 @@ void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& cam
                 item.mesh = GetOrUploadMesh(r, obj.mesh, assets);
                 if (!item.mesh)
                     continue;
-                render::TransformSphere(item.world, obj.transform.scale, item.mesh->boundsCenter, item.mesh->boundsRadius,
+                render::TransformSphere(item.world, worldScale, item.mesh->boundsCenter, item.mesh->boundsRadius,
                                         item.boundsCenter, item.boundsRadius);
             }
             (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);

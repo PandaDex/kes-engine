@@ -105,22 +105,37 @@ struct KModelCollider
     float halfHeight = 0.5f;
 };
 
+// Another model attached to a bone of this one (boneIndex -1 = model root), like a gun in the hands.
+struct KModelChild
+{
+    std::string name;
+    std::string modelPath;
+    std::string materialPath;   // empty = use the child model's default material
+    std::string animationPath;
+    int32_t boneIndex = -1;
+    float translation[3] = { 0.0f, 0.0f, 0.0f };
+    float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    float scale[3] = { 1.0f, 1.0f, 1.0f };
+};
+
 struct KModelData
 {
     std::string sourcePath;
+    std::string defaultMaterial;   // entity Material overrides it
     std::vector<KModelMaterial> materials;
     std::vector<KModelMesh> meshes;
     std::vector<KModelNode> nodes;
     std::vector<KModelBone> bones;
     std::vector<KModelSocket> sockets;
     std::vector<KModelCollider> colliders;
+    std::vector<KModelChild> children;
 };
 
 bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outError = nullptr);
 bool SaveKModelFile(const char* path, const KModelData& model, std::string* outError = nullptr);
 bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::string* outError = nullptr, uint32_t meshIndex = KModelAllMeshes);
-// Re-import keeps hand-made sockets and colliders: copies them from the .kmodel
-// at existingPath (if any), remapping bones by name. Returns how many were kept.
+// Re-import keeps hand-made sockets, colliders, children and the default material: copies them
+// from the .kmodel at existingPath (if any), remapping bones by name. Returns how many were kept.
 size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model);
 const KModelSocket* FindKModelSocket(const KModelData& model, const char* name);
 void ConvertMeshDataToKModelMesh(const MeshData& mesh, KModelMesh& outMesh, const char* name = nullptr);

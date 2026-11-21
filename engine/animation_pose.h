@@ -4,6 +4,7 @@
 #include "animation_clip.h"
 
 struct KModelData;
+struct KModelChild;
 
 void BuildAnimationWorldMatrices(const KModelData& model, const std::vector<AnimationTransform>& localPose, std::vector<float>& outWorldMatrices);
 // Matrices are row-major for row vectors (v * M), translation in elements 12..14.
@@ -14,4 +15,6 @@ void DecomposeMatrix(const float matrix[16], float outTranslation[3], float outR
 // given node world matrices from BuildAnimationWorldMatrices.
 void BuildBoneAttachmentMatrix(const KModelData& model, const std::vector<float>& nodeWorldMatrices, int32_t boneIndex,
                                const float translation[3], const float rotation[4], const float scale[3], float outMatrix[16]);
+void BuildKModelChildMatrix(const KModelData& parent, const std::vector<float>& nodeWorldMatrices, const KModelChild& child, float outMatrix[16]);
+void BuildBindPoseWorldMatrices(const KModelData& model, std::vector<float>& outWorldMatrices);
 bool BuildAnimationSkinMatrices(const KModelData& model, const std::vector<AnimationTransform>& localPose, std::vector<float>& outSkinMatrices, std::string* outError = nullptr);

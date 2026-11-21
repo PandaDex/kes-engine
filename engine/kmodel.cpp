@@ -11,7 +11,7 @@
 namespace
 {
     static constexpr uint32_t kKModelMagic = 0x4C444D4Bu; // KMDL
-    static constexpr uint32_t kKModelVersion = 2u; // 2 added sockets and colliders
+    static constexpr uint32_t kKModelVersion = 4u; // 2: sockets/colliders, 3: default material + children, 4: child animations
 
     // Vertices are read and written field by field in this order, without padding.
     static_assert(sizeof(KModelVertex) == 88 && std::is_trivially_copyable_v<KModelVertex>, "KModelVertex file layout");
@@ -370,6 +370,29 @@ bool SaveKModelFile(const char* path, const KModelData& model, std::string* outE
         }
     }
 
+    if (!WriteString(file, model.defaultMaterial) || !WriteValue(file, (uint32_t)model.children.size()))
+    {
+        if (outError)
+            *outError = "Failed to write kmodel children";
+        return false;
+    }
+    for (const KModelChild& child : model.children)
+    {
+        if (!WriteString(file, child.name) ||
+            !WriteString(file, child.modelPath) ||
+            !WriteString(file, child.materialPath) ||
+            !WriteValue(file, child.boneIndex) ||
+            !WriteFloatArray(file, child.translation, 3) ||
+            !WriteFloatArray(file, child.rotation, 4) ||
+            !WriteFloatArray(file, child.scale, 3) ||
+            !WriteString(file, child.animationPath))
+        {
+            if (outError)
+                *outError = "Failed to write kmodel child";
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -435,6 +458,11 @@ namespace
                 return "KModel collider references a missing bone";
             if ((uint32_t)collider.shape > (uint32_t)KModelColliderShape::Capsule)
                 return "KModel collider has an unknown shape";
+        }
+        for (const KModelChild& child : model.children)
+        {
+            if (child.boneIndex < -1 || child.boneIndex >= boneCount)
+                return "KModel child model references a missing bone";
         }
         return nullptr;
     }
@@ -575,6 +603,29 @@ bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outErro
             return fail("Failed to read kmodel collider");
     }
 
+    if (version >= 3u)
+    {
+        outModel.defaultMaterial = file.string();
+        const uint32_t childCount = file.u32();
+        if (!file.count(childCount, version >= 4u ? 60 : 56))
+            return fail("Failed to read kmodel children");
+        outModel.children.resize(childCount);
+        for (KModelChild& child : outModel.children)
+        {
+            child.name = file.string();
+            child.modelPath = file.string();
+            child.materialPath = file.string();
+            child.boneIndex = file.i32();
+            file.bytes(child.translation, sizeof(child.translation));
+            file.bytes(child.rotation, sizeof(child.rotation));
+            file.bytes(child.scale, sizeof(child.scale));
+            if (version >= 4u)
+                child.animationPath = file.string();
+        }
+        if (!file.ok())
+            return fail("Failed to read kmodel child");
+    }
+
     if (const char* error = FindKModelError(outModel))
         return fail(error);
     return true;
@@ -712,5 +763,16 @@ size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model)
         model.colliders.push_back(collider);
         ++kept;
     }
+    for (KModelChild child : existing.children)
+    {
+        bool ok = false;
+        child.boneIndex = remapBone(child.boneIndex, ok);
+        if (!ok)
+            continue;
+        model.children.push_back(child);
+        ++kept;
+    }
+    if (model.defaultMaterial.empty())
+        model.defaultMaterial = existing.defaultMaterial;
     return kept;
 }

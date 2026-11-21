@@ -27,6 +27,9 @@ struct SceneObject
     MaterialHandle material = 0;
     uint32_t skinMatrixCount = 0;
     std::vector<float> skinMatrices;   // skinMatrixCount * 16, empty for static objects
+    // Used instead of transform when set. transform.position is still used for sorting, so keep it in sync.
+    bool useWorldMatrix = false;
+    float worldMatrix[16] = {};
     bool active = true;
 };
 
