@@ -34,15 +34,15 @@ struct EngineApp
     AppConfig config = {};
     AppWindow window = {};
     InputState input = {};
-    std::unique_ptr<IRenderer> renderer;   // active backend, created in EngineStart
-    UiSystem ui;                           // HTML/CSS UI (ui_system.h), drawn over the scene
+    std::unique_ptr<IRenderer> renderer; // active backend, created in EngineStart
+    UiSystem ui; // HTML/CSS UI (ui_system.h), drawn over the scene
     Camera camera = {};
     SceneState sceneState = {};
     Platform* platform = nullptr;
     bool platformInitialized = false;
     World world = {};
     bool running = false;
-    int exitCode = 0;                 // non-zero after a fatal runtime error
+    int exitCode = 0; // non-zero after a fatal runtime error
     unsigned long long prevProcessCpu = 0;
     unsigned long long prevCounter = 0;
     double performanceFrequency = 0.0;
@@ -52,27 +52,27 @@ struct EngineApp
     bool worldInitialized = false;
 
     std::unique_ptr<GameSettings> settings;
-    std::function<std::unique_ptr<GameSettings>()> settingsFactory;   // EngineSetGameSettingsClass
+    std::function<std::unique_ptr<GameSettings>()> settingsFactory; // EngineSetGameSettingsClass
 
     InputMode inputMode = InputMode::GameOnly;
-    bool showMouseCursor = true;      // for GameAndUI / UIOnly
-    IntPoint rendererSize = {};       // last backbuffer size handed to the renderer
-    unsigned long long frameDeadline = 0;   // frame limiter, performance counter ticks
-    int debugFrameCount = 0;          // -debug-gpu-fault
+    bool showMouseCursor = true; // for GameAndUI / UIOnly
+    IntPoint rendererSize = {}; // last backbuffer size handed to the renderer
+    unsigned long long frameDeadline = 0; // frame limiter, performance counter ticks
+    int debugFrameCount = 0; // -debug-gpu-fault
 
     // Map loading. Queued loads (EngineLoadMap, entities, map scripts) call
     // onMapLoadBegin, draw one more frame (show a loading screen there), then
     // load, upload the level to the GPU and call onMapLoaded. The startup map
     // calls both from EngineStart, without the extra frame. Set before EngineStart.
-    std::function<void(EngineApp &app, const std::string &mapName)> onMapLoadBegin;
-    std::function<void(EngineApp &app, const std::string &mapName, bool loaded)> onMapLoaded;
+    std::function<void(EngineApp& app, const std::string& mapName)> onMapLoadBegin;
+    std::function<void(EngineApp& app, const std::string& mapName, bool loaded)> onMapLoaded;
     // Runs after the UI documents were reloaded for a new language, so any
     // Rml::ElementDocument pointers held from before are dangling.
-    std::function<void(EngineApp &app)> onLanguageChanged;
+    std::function<void(EngineApp& app)> onLanguageChanged;
     uint64_t localizationGeneration = 0;
-    std::string loadingMap;           // announced, loads after this frame is drawn
+    std::string loadingMap; // announced, loads after this frame is drawn
     bool loadingFrameDrawn = false;
-    uint64_t preloadedLevel = 0;      // World::GetLevelGeneration the GPU has
+    uint64_t preloadedLevel = 0; // World::GetLevelGeneration the GPU has
 };
 
 // On failure the player has been told why and everything is already shut down.
@@ -113,7 +113,8 @@ template<typename T>
 void EngineSetGameSettingsClass(EngineApp& app)
 {
     static_assert(std::is_base_of_v<GameSettings, T>, "Settings class must derive from GameSettings");
-    app.settingsFactory = []() -> std::unique_ptr<GameSettings> { return std::make_unique<T>(); };
+    app.settingsFactory = []() -> std::unique_ptr<GameSettings>
+    { return std::make_unique<T>(); };
 }
 
 template<typename T>
@@ -139,8 +140,8 @@ void EngineRegisterPlayerClass(EngineApp& app, const std::string& className)
 {
     static_assert(std::is_base_of_v<Entity, T>, "Registered player class must derive from Entity");
     static_assert(std::is_constructible_v<T, Camera&, InputState&> || std::is_constructible_v<T, InputState&> ||
-                      std::is_default_constructible_v<T>,
-                  "Registered player class must be constructible from (Camera&, InputState&), (InputState&) or ()");
+            std::is_default_constructible_v<T>,
+        "Registered player class must be constructible from (Camera&, InputState&), (InputState&) or ()");
 
     EngineRegisterEntityClass(
         app,

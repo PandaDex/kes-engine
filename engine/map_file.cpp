@@ -169,7 +169,7 @@ bool LoadCompiledMap(const char* path, CompiledMap& outMap, std::string* outErro
     const uint32_t version = r.u32();
     if (version != kMapVersion)
         return fail("Unsupported compiled map version " + std::to_string(version) +
-                    " (expected " + std::to_string(kMapVersion) + "); rebuild the map with the current editor");
+            " (expected " + std::to_string(kMapVersion) + "); rebuild the map with the current editor");
     r.u32(); // flags, reserved
 
     while (r.ok() && r.remaining() > 0)

@@ -229,7 +229,7 @@ forge --compile game/content/maps/startup.fmap game/content/maps/startup.fmapc
 
 ## Import Tool: `model-importer`
 
-`model-importer` is the current asset import CLI, built by the engine build as the `model-importer` target (Windows only). Forge runs it for its Import command.
+`model-importer` is the current asset import CLI, built by the engine build as the `model-importer` target (Windows only, source in `tools/modelImporter`). Forge runs it for its Import command.
 
 Usage:
 
@@ -268,7 +268,7 @@ That means imported MP3/Ogg compression does not remain in the runtime asset.
 
 ## Pak Tool: `pak-tool`
 
-`pak-tool` builds a `.pak` archive from a source directory.
+`pak-tool` builds a `.pak` archive from a source directory. The engine build builds it (source in `tools/pakTool`).
 
 Usage:
 
@@ -327,6 +327,18 @@ The staged folder contains:
 
 Packs are encrypted when `KES_PAK_ENCRYPTION_KEY` is set (64 hex characters). The same key is compiled into the engine, so packaged builds can read them.
 
+Any configuration can be packaged (`--config Debug` too), and these cache variables change what goes in:
+
+| Variable | Values | Default |
+| --- | --- | --- |
+| `KES_PACKAGE_CONTENT` | `pak`, or `loose`: content as plain files under `content/`, the development layout. The engine reads loose files before paks. | `pak` |
+| `KES_PACKAGE_SYMBOLS` | `archive` (separate `-symbols-<version>.zip`, not shipped), `package` (PDBs / debug info next to the binaries), `both`, `none` | `archive` |
+| `KES_PACKAGE_SUFFIX` | appended to the package name, `<name>-<platform><suffix>`, so variants don't overwrite each other | empty |
+| `KES_PACKAGE_STRIP_SOURCES` | leave `.slang`, `.slangnodes` and `.fmap` out | `ON` |
+| `KES_PACKAGE_VC_RUNTIME` | copy the MSVC runtime DLLs into Windows packages. Debug builds get the debug runtime, which Microsoft doesn't allow redistributing, so only use that internally. | `OFF` |
+
+Feature options such as `KES_CRASH_REPORTER`, `KES_DEBUG_TOOLS`, `KES_PROFILING` and `KES_RENDERERS_<PLATFORM>` apply as well; a package carries whatever the build folder was configured with. The [Build Launcher](#build-launcher) keeps those combinations as profiles.
+
 Development builds don't use paks: content, engine assets, shaders and `config/` are copied loose next to the exe on every build. Games set this up with one call (see `game/CMakeLists.txt`):
 
 ```cmake
@@ -337,6 +349,29 @@ kes_add_game(game
 ```
 
 Extra executables (samples, test games) use the same call with two more options. `EXTRA_CONTENT_DIRS` copies other content folders first, so they can reuse another game's maps (development layout only, and their shaders aren't compiled). `NO_PACKAGE` skips the `kes_package` target, which only one game per build can own. See `samples/ui/CMakeLists.txt`.
+
+## Build Launcher
+
+`tools/buildLauncher` builds `kesBuildLauncher` (a Qt 6 window) and `kesbuild` (the same thing on the command line). Both are built with the other Qt tools into `tools/bin`. Each **profile** is one build recipe: platform, configuration, engine features, renderers, profiler categories, packaging options, CMake generator and extra arguments, and whether to start the game afterwards. Profiles are JSON files in `build-profiles/`, so they can be committed and shared. On first start the launcher writes five stock profiles:
+
+| Profile | What it makes |
+| --- | --- |
+| Development | Debug build with loose content next to the exe; runs it |
+| Shipping | what `package.ps1` makes: Release, paks, crash reporter, no debug tools |
+| Debug Pak | Debug package with paks, no crash reporter, PDBs and debug runtime in the folder |
+| Release Loose | Release package with loose content |
+| Profiling | Development (RelWithDebInfo) package with Tracy |
+
+Every profile gets its own build folder (`out/build/profile-<name>`), because most options are configure-time; switching profiles never reconfigures another profile's build. The **Commands** tab shows the exact `cmake` commands a profile runs, and the editor flags combinations that can't work (a `msixvc` package for Windows, a malformed pak key) or need care (debug runtime in a package, an inline key). Select several profiles and use **Build Selected** to run them one after another.
+
+```txt
+kesbuild --list
+kesbuild "Debug Pak" "Release Loose"      run profiles in order (--keep-going continues after a failure)
+kesbuild Shipping --dry-run               print the commands only
+kesbuild path/to/profile.json --no-launch
+```
+
+Pak keys can come from an environment variable (recommended, the default variable is `KES_PAK_KEY`) or be stored in the profile, which puts the key in a file you might commit.
 
 ## Pak Encryption
 

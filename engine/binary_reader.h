@@ -6,9 +6,6 @@
 #include <type_traits>
 #include <vector>
 
-// Bounds-checked little-endian reader over bytes in memory. A failed read
-// leaves the reader failed; later reads return zeroes, so callers can read a
-// whole record and check ok() once.
 class BinaryReader
 {
 public:
@@ -66,8 +63,6 @@ public:
         return value;
     }
 
-    // Guards an element count against the bytes actually left, so a corrupt
-    // count can't trigger a huge allocation.
     bool count(uint64_t value, size_t minBytesPerElement)
     {
         if (minBytesPerElement > 0 && value > remaining() / minBytesPerElement)

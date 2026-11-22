@@ -29,7 +29,7 @@ enum class InputNativeKeyKind
     GamepadLeftAxis2D,
     GamepadRightAxis2D,
     GamepadAxis,
-    MouseWheelUp,     // one frame per wheel step
+    MouseWheelUp, // one frame per wheel step
     MouseWheelDown
 };
 
@@ -65,10 +65,10 @@ struct InputBinding
     SDL_Scancode keyboardKey = SDL_SCANCODE_UNKNOWN;
     SDL_GamepadButton gamepadButton = SDL_GAMEPAD_BUTTON_INVALID;
     SDL_GamepadAxis gamepadAxis = SDL_GAMEPAD_AXIS_INVALID;
-    uint8_t mouseButton = 0;   // SDL_BUTTON_LEFT ...
+    uint8_t mouseButton = 0; // SDL_BUTTON_LEFT ...
     std::vector<InputModifier> modifiers;
-    std::string key;           // current key name, e.g. "Keyboard_Space"
-    std::string defaultKey;    // the key the input map gives it
+    std::string key; // current key name, e.g. "Keyboard_Space"
+    std::string defaultKey; // the key the input map gives it
     bool playerAssignable = false;
     std::string assignableKey;
 };
@@ -113,12 +113,12 @@ struct InputState
 {
     bool keys[SDL_SCANCODE_COUNT] = {};
     bool previousKeys[SDL_SCANCODE_COUNT] = {};
-    bool keysTapped[SDL_SCANCODE_COUNT] = {};   // went down this frame, so a press and release in one frame still counts
+    bool keysTapped[SDL_SCANCODE_COUNT] = {}; // went down this frame, so a press and release in one frame still counts
 
     bool mouseButtons[8] = {};
     bool previousMouseButtons[8] = {};
     bool mouseButtonsTapped[8] = {};
-    float mouseWheel = 0.0f;   // steps this frame, positive = away from the player
+    float mouseWheel = 0.0f; // steps this frame, positive = away from the player
     float mouseDeltaX = 0.0f;
     float mouseDeltaY = 0.0f;
 
@@ -135,7 +135,7 @@ struct InputState
     //   mouseLookEnabled = false -> mouse motion doesn't feed Mouse2DAxis bindings
     //                               (the cursor is free, so its motion isn't "look")
     bool gameInputEnabled = true;
-    bool gameInputWasEnabled = true;   // last InputEvaluateActions: suppresses "pressed" for keys held while re-enabling
+    bool gameInputWasEnabled = true; // last InputEvaluateActions: suppresses "pressed" for keys held while re-enabling
     bool mouseLookEnabled = true;
 
     // Set by the engine / UI system for InputActionContext::UI actions:
@@ -188,7 +188,7 @@ SDL_GamepadType InputGetGamepadType(const InputState& input);
 // action and default key, so they survive edits to the rest of the map.
 struct InputBindingInfo
 {
-    size_t index = 0;          // for InputRebind
+    size_t index = 0; // for InputRebind
     std::string key;
     std::string defaultKey;
     InputDevice device = InputDevice::KeyboardMouse;
@@ -200,7 +200,7 @@ void InputResetBinding(InputState& input, const char* actionName, size_t binding
 void InputResetAllBindings(InputState& input);
 // Actions of `context` that have a binding on `keyName` (to warn about or swap duplicates).
 std::vector<std::string> InputFindActionsUsingKey(const InputState& input, const char* keyName,
-                                                  InputActionContext context = InputActionContext::Game);
+    InputActionContext context = InputActionContext::Game);
 // Player overrides file; empty path = <user data>/Config/InputBindings.ini.
 // The engine loads it at startup; call it again after InputLoadActionMap.
 bool InputSaveBindingOverrides(const InputState& input, const char* path = nullptr, std::string* outError = nullptr);

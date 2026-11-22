@@ -12,14 +12,13 @@ void TriggerEntity::Update(float dt)
     currentOverlaps.clear();
     enteredEntities.clear();
     game->entities->ForEachActive([&](Entity& entity)
-    {
+        {
         if (&entity == this || !IsInside(entity.Position) || (!filterTag.empty() && !entity.HasTag(filterTag)))
             return;
 
         currentOverlaps.insert(entity.GetEntityId());
         if (overlappingEntities.find(entity.GetEntityId()) == overlappingEntities.end())
-            enteredEntities.push_back(&entity);
-    });
+            enteredEntities.push_back(&entity); });
 
     for (Entity* entity : enteredEntities)
     {
@@ -100,6 +99,6 @@ bool TriggerEntity::AcceptInput(const std::string& input, const MapScriptCall& c
         return false;
     enabled = input == "Enable" || (input == "Toggle" && !enabled);
     if (!enabled)
-        overlappingEntities.clear();   // re-enabling fires OnStartTouch for whoever is inside
+        overlappingEntities.clear(); // re-enabling fires OnStartTouch for whoever is inside
     return true;
 }

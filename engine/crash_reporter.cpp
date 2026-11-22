@@ -110,9 +110,15 @@ void CrashReporterReportFatal(const std::string& message)
 
 #else
 
-bool CrashReporterInitialize(const CrashReporterConfig&) { return false; }
+bool CrashReporterInitialize(const CrashReporterConfig&)
+{
+    return false;
+}
 void CrashReporterShutdown() {}
-bool CrashReporterCrashedLastRun() { return false; }
+bool CrashReporterCrashedLastRun()
+{
+    return false;
+}
 void CrashReporterSetUploadConsent(bool) {}
 void CrashReporterSetTag(const char*, const char*) {}
 void CrashReporterReportFatal(const std::string&) {}

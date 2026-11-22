@@ -7,7 +7,7 @@
 namespace
 {
     constexpr int kMaxPluralDepth = 64;
-    constexpr size_t kMaxPluralNodes = 256;   // bounds evaluation recursion
+    constexpr size_t kMaxPluralNodes = 256; // bounds evaluation recursion
 
     std::string_view TrimView(std::string_view text)
     {
@@ -21,18 +21,17 @@ namespace
     bool EqualsIgnoreCase(std::string_view a, std::string_view b)
     {
         return a.size() == b.size() &&
-               std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-                   return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-               });
+            std::equal(a.begin(), a.end(), b.begin(), [](char x, char y)
+                { return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y)); });
     }
 
     // Recursive descent over the C subset gettext allows in Plural-Forms.
     class PluralParser
     {
     public:
-        PluralParser(std::string_view text, std::vector<PoCatalog::PluralNode> &nodes) : m_text(text), m_nodes(nodes) {}
+        PluralParser(std::string_view text, std::vector<PoCatalog::PluralNode>& nodes) : m_text(text), m_nodes(nodes) {}
 
-        bool Parse(std::string *outError)
+        bool Parse(std::string* outError)
         {
             m_nodes.clear();
             const int root = ParseTernary(0);
@@ -126,30 +125,86 @@ namespace
             return left;
         }
 
-        bool MatchOperator(int level, Op &op)
+        bool MatchOperator(int level, Op& op)
         {
             switch (level)
             {
-            case 0: if (Accept("||")) { op = Op::Or; return true; } return false;
-            case 1: if (Accept("&&")) { op = Op::And; return true; } return false;
+            case 0:
+                if (Accept("||"))
+                {
+                    op = Op::Or;
+                    return true;
+                }
+                return false;
+            case 1:
+                if (Accept("&&"))
+                {
+                    op = Op::And;
+                    return true;
+                }
+                return false;
             case 2:
-                if (Accept("==")) { op = Op::Equal; return true; }
-                if (Accept("!=")) { op = Op::NotEqual; return true; }
+                if (Accept("=="))
+                {
+                    op = Op::Equal;
+                    return true;
+                }
+                if (Accept("!="))
+                {
+                    op = Op::NotEqual;
+                    return true;
+                }
                 return false;
             case 3:
-                if (Accept("<=")) { op = Op::LessEqual; return true; }
-                if (Accept(">=")) { op = Op::GreaterEqual; return true; }
-                if (Accept("<")) { op = Op::Less; return true; }
-                if (Accept(">")) { op = Op::Greater; return true; }
+                if (Accept("<="))
+                {
+                    op = Op::LessEqual;
+                    return true;
+                }
+                if (Accept(">="))
+                {
+                    op = Op::GreaterEqual;
+                    return true;
+                }
+                if (Accept("<"))
+                {
+                    op = Op::Less;
+                    return true;
+                }
+                if (Accept(">"))
+                {
+                    op = Op::Greater;
+                    return true;
+                }
                 return false;
             case 4:
-                if (Accept("+")) { op = Op::Add; return true; }
-                if (Accept("-")) { op = Op::Subtract; return true; }
+                if (Accept("+"))
+                {
+                    op = Op::Add;
+                    return true;
+                }
+                if (Accept("-"))
+                {
+                    op = Op::Subtract;
+                    return true;
+                }
                 return false;
             case 5:
-                if (Accept("*")) { op = Op::Multiply; return true; }
-                if (Accept("/")) { op = Op::Divide; return true; }
-                if (Accept("%")) { op = Op::Modulo; return true; }
+                if (Accept("*"))
+                {
+                    op = Op::Multiply;
+                    return true;
+                }
+                if (Accept("/"))
+                {
+                    op = Op::Divide;
+                    return true;
+                }
+                if (Accept("%"))
+                {
+                    op = Op::Modulo;
+                    return true;
+                }
                 return false;
             default:
                 return false;
@@ -183,35 +238,45 @@ namespace
 
         std::string_view m_text;
         size_t m_pos = 0;
-        std::vector<PoCatalog::PluralNode> &m_nodes;
+        std::vector<PoCatalog::PluralNode>& m_nodes;
     };
 
-    uint64_t EvaluatePlural(const std::vector<PoCatalog::PluralNode> &nodes, int index, uint64_t n)
+    uint64_t EvaluatePlural(const std::vector<PoCatalog::PluralNode>& nodes, int index, uint64_t n)
     {
         using Op = PoCatalog::PluralNode::Op;
-        const PoCatalog::PluralNode &node = nodes[static_cast<size_t>(index)];
-        auto a = [&] { return EvaluatePlural(nodes, node.a, n); };
-        auto b = [&] { return EvaluatePlural(nodes, node.b, n); };
+        const PoCatalog::PluralNode& node = nodes[static_cast<size_t>(index)];
+        auto a = [&]
+        { return EvaluatePlural(nodes, node.a, n); };
+        auto b = [&]
+        { return EvaluatePlural(nodes, node.b, n); };
         switch (node.op)
         {
-        case Op::N: return n;
+        case Op::N:        return n;
         case Op::Constant: return node.value;
-        case Op::Not: return a() == 0;
-        case Op::Negate: return 0 - a();
+        case Op::Not:      return a() == 0;
+        case Op::Negate:   return 0 - a();
         case Op::Multiply: return a() * b();
-        case Op::Divide: { const uint64_t d = b(); return d ? a() / d : 0; }
-        case Op::Modulo: { const uint64_t d = b(); return d ? a() % d : 0; }
-        case Op::Add: return a() + b();
-        case Op::Subtract: return a() - b();
-        case Op::Less: return a() < b();
-        case Op::Greater: return a() > b();
-        case Op::LessEqual: return a() <= b();
+        case Op::Divide:
+        {
+            const uint64_t d = b();
+            return d ? a() / d : 0;
+        }
+        case Op::Modulo:
+        {
+            const uint64_t d = b();
+            return d ? a() % d : 0;
+        }
+        case Op::Add:          return a() + b();
+        case Op::Subtract:     return a() - b();
+        case Op::Less:         return a() < b();
+        case Op::Greater:      return a() > b();
+        case Op::LessEqual:    return a() <= b();
         case Op::GreaterEqual: return a() >= b();
-        case Op::Equal: return a() == b();
-        case Op::NotEqual: return a() != b();
-        case Op::And: return a() && b();
-        case Op::Or: return a() || b();
-        case Op::Ternary: return a() ? b() : EvaluatePlural(nodes, node.c, n);
+        case Op::Equal:        return a() == b();
+        case Op::NotEqual:     return a() != b();
+        case Op::And:          return a() && b();
+        case Op::Or:           return a() || b();
+        case Op::Ternary:      return a() ? b() : EvaluatePlural(nodes, node.c, n);
         }
         return 0;
     }
@@ -233,7 +298,7 @@ namespace
         return {};
     }
 
-    bool ParseQuoted(std::string_view text, size_t &pos, std::string &out, std::string &error)
+    bool ParseQuoted(std::string_view text, size_t& pos, std::string& out, std::string& error)
     {
         ++pos;
         while (pos < text.size())
@@ -251,14 +316,17 @@ namespace
             const char escape = text[pos++];
             switch (escape)
             {
-            case 'n': out.push_back('\n'); break;
-            case 't': out.push_back('\t'); break;
-            case 'r': out.push_back('\r'); break;
-            case 'a': out.push_back('\a'); break;
-            case 'b': out.push_back('\b'); break;
-            case 'f': out.push_back('\f'); break;
-            case 'v': out.push_back('\v'); break;
-            case '\\': case '"': case '\'': case '?': out.push_back(escape); break;
+            case 'n':  out.push_back('\n'); break;
+            case 't':  out.push_back('\t'); break;
+            case 'r':  out.push_back('\r'); break;
+            case 'a':  out.push_back('\a'); break;
+            case 'b':  out.push_back('\b'); break;
+            case 'f':  out.push_back('\f'); break;
+            case 'v':  out.push_back('\v'); break;
+            case '\\':
+            case '"':
+            case '\'':
+            case '?':  out.push_back(escape); break;
             case 'x':
             {
                 int value = 0, digits = 0;
@@ -317,7 +385,7 @@ void PoCatalog::Clear()
     m_skippedCount = 0;
 }
 
-bool PoCatalog::ParsePluralForms(std::string_view header, size_t &outCount, std::vector<PluralNode> &outNodes, std::string *outError)
+bool PoCatalog::ParsePluralForms(std::string_view header, size_t& outCount, std::vector<PluralNode>& outNodes, std::string* outError)
 {
     // nplurals=3; plural=(n==1 ? 0 : ...);
     const size_t countPos = header.find("nplurals");
@@ -370,7 +438,7 @@ bool PoCatalog::ParsePluralForms(std::string_view header, size_t &outCount, std:
     return true;
 }
 
-bool PoCatalog::Parse(std::string_view text, std::string *outError)
+bool PoCatalog::Parse(std::string_view text, std::string* outError)
 {
     KES_ZONE_FN(IO);
     Clear();
@@ -381,17 +449,19 @@ bool PoCatalog::Parse(std::string_view text, std::string *outError)
     int lineNumber = 0;
     int entryLine = 0;
     PoEntry entry;
-    std::string *current = nullptr;   // string continued by a "..." line
+    std::string* current = nullptr; // string continued by a "..." line
     bool haveHeader = false;
 
-    auto fail = [&](const std::string &message) {
+    auto fail = [&](const std::string& message)
+    {
         if (outError)
             *outError = "line " + std::to_string(lineNumber) + ": " + message;
         Clear();
         return false;
     };
 
-    auto finishEntry = [&]() -> bool {
+    auto finishEntry = [&]() -> bool
+    {
         PoEntry done = std::move(entry);
         entry = PoEntry{};
         current = nullptr;
@@ -410,7 +480,7 @@ bool PoCatalog::Parse(std::string_view text, std::string *outError)
             if (haveHeader)
                 return true;
             haveHeader = true;
-            const std::string &header = done.msgstr.empty() ? std::string() : done.msgstr[0];
+            const std::string& header = done.msgstr.empty() ? std::string() : done.msgstr[0];
             m_language = std::string(HeaderField(header, "Language"));
             const std::string_view contentType = HeaderField(header, "Content-Type");
             const size_t charsetPos = contentType.find("charset=");
@@ -441,10 +511,11 @@ bool PoCatalog::Parse(std::string_view text, std::string *outError)
             ++m_skippedCount;
             return true;
         }
-        Entry &stored = m_entries[std::string(LocalizationStripKey(done.msgid))];
+        Entry& stored = m_entries[std::string(LocalizationStripKey(done.msgid))];
         stored.translations.clear();
         const bool translated = !done.fuzzy && !done.msgstr.empty() &&
-                                std::all_of(done.msgstr.begin(), done.msgstr.end(), [](const std::string &s) { return !s.empty(); });
+            std::all_of(done.msgstr.begin(), done.msgstr.end(), [](const std::string& s)
+                { return !s.empty(); });
         if (translated)
             stored.translations = std::move(done.msgstr);
         return true;
@@ -508,7 +579,7 @@ bool PoCatalog::Parse(std::string_view text, std::string *outError)
         if (rest.empty() || rest[0] != '"')
             return fail("expected a quoted string after " + std::string(keyword));
 
-        std::string *target = nullptr;
+        std::string* target = nullptr;
         if (keyword == "msgctxt" || keyword == "msgid")
         {
             const bool startsNew = entry.hasMsgstr || (keyword == "msgid" && entry.hasMsgid) || (keyword == "msgctxt" && (entry.hasContext || entry.hasMsgid));
@@ -552,7 +623,8 @@ bool PoCatalog::Parse(std::string_view text, std::string *outError)
             const std::string_view indexText = keyword.substr(7, keyword.size() - 8);
             size_t index = 0;
             if (indexText.empty() || indexText.size() > 2 ||
-                !std::all_of(indexText.begin(), indexText.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); }))
+                !std::all_of(indexText.begin(), indexText.end(), [](char c)
+                    { return std::isdigit(static_cast<unsigned char>(c)); }))
                 return fail("bad plural index in " + std::string(keyword));
             for (char c : indexText)
                 index = index * 10 + static_cast<size_t>(c - '0');
@@ -579,22 +651,22 @@ bool PoCatalog::Parse(std::string_view text, std::string *outError)
     return finishEntry();
 }
 
-const PoCatalog::Entry *PoCatalog::FindEntry(std::string_view key) const
+const PoCatalog::Entry* PoCatalog::FindEntry(std::string_view key) const
 {
     key = LocalizationStripKey(key);
     auto found = m_entries.find(key);
     return found != m_entries.end() ? &found->second : nullptr;
 }
 
-const std::string *PoCatalog::Find(std::string_view key) const
+const std::string* PoCatalog::Find(std::string_view key) const
 {
-    const Entry *entry = FindEntry(key);
+    const Entry* entry = FindEntry(key);
     return entry && !entry->translations.empty() ? &entry->translations.front() : nullptr;
 }
 
-const std::string *PoCatalog::FindPlural(std::string_view key, uint64_t n) const
+const std::string* PoCatalog::FindPlural(std::string_view key, uint64_t n) const
 {
-    const Entry *entry = FindEntry(key);
+    const Entry* entry = FindEntry(key);
     if (!entry || entry->translations.empty())
         return nullptr;
     const size_t index = PluralIndex(n);
@@ -620,7 +692,6 @@ bool LocalizationIsKeyReference(std::string_view text)
 {
     if (text.size() < 2 || text.front() != '#' || !std::isalpha(static_cast<unsigned char>(text[1])))
         return false;
-    return std::all_of(text.begin() + 1, text.end(), [](char ch) {
-        return std::isalnum(static_cast<unsigned char>(ch)) || ch == '.' || ch == '_' || ch == '-';
-    });
+    return std::all_of(text.begin() + 1, text.end(), [](char ch)
+        { return std::isalnum(static_cast<unsigned char>(ch)) || ch == '.' || ch == '_' || ch == '-'; });
 }

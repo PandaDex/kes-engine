@@ -1,6 +1,6 @@
 # UI System
 
-The engine UI is HTML/CSS based and built on [RmlUi](https://github.com/mikke89/RmlUi) 6.3, with [FreeType](https://freetype.org) 2.14.3 for fonts. Both are git submodules built from source as static libraries (`cmake/KesUi.cmake`), so the UI builds the same way on every platform the engine supports. There is no scripting language: documents describe layout and style, and behaviour lives in C++.
+The engine UI is HTML/CSS based and built on [RmlUi](https://github.com/mikke89/RmlUi) 6.3, with [FreeType](https://freetype.org) 2.14.3 for fonts. Both are git submodules built from source (`cmake/KesUi.cmake`); FreeType is static, RmlUi is a shared library whenever the engine is (`KES_ENGINE_SHARED`), so the UI builds the same way on every platform the engine supports. There is no scripting language: documents describe layout and style, and behaviour lives in C++.
 
 ```
 git submodule update --init external/RmlUi external/freetype

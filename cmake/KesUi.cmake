@@ -1,6 +1,8 @@
 # KES UI: RmlUi (HTML/CSS-like documents, external/RmlUi) with the FreeType
 # font engine (external/freetype). Both are git submodules built from source
-# as static libraries, so the UI works on every platform the engine builds for.
+# from source, so the UI works on every platform the engine builds for. FreeType
+# is always static; RmlUi is shared when the engine is (KES_ENGINE_SHARED), so
+# the engine and game code share one RmlUi instance.
 #
 #   git submodule update --init external/RmlUi external/freetype
 #
@@ -45,6 +47,7 @@ set(RMLUI_SVG_PLUGIN OFF)
 set(RMLUI_LOTTIE_PLUGIN OFF)
 set(RMLUI_TRACY_PROFILING OFF)
 set(RMLUI_WARNINGS_AS_ERRORS OFF)
+set(BUILD_SHARED_LIBS ${KES_ENGINE_SHARED})
 add_subdirectory("${_kes_rmlui_dir}" "${CMAKE_BINARY_DIR}/external/RmlUi" EXCLUDE_FROM_ALL)
 
 set(BUILD_SHARED_LIBS "${_kes_saved_build_shared_libs}")

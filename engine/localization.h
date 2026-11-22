@@ -10,17 +10,17 @@
 // msgid is the key and msgstr the text. A missing translation falls back to
 // the source language file, then to "#Key". Main thread only.
 
-inline constexpr const char *kLocalizationDirectory = "localization";
+inline constexpr const char* kLocalizationDirectory = "localization";
 
 // "auto" picks the first OS language that has a .po file.
 bool LocalizationSetLanguage(std::string_view language);
-const std::string &LocalizationGetRequestedLanguage();
-const std::string &LocalizationGetLanguage();
+const std::string& LocalizationGetRequestedLanguage();
+const std::string& LocalizationGetLanguage();
 void LocalizationReload();
 void LocalizationShutdown();
 
 void LocalizationSetSourceLanguage(std::string_view language);
-const std::string &LocalizationGetSourceLanguage();
+const std::string& LocalizationGetSourceLanguage();
 
 std::vector<std::string> LocalizationGetAvailableLanguages();
 

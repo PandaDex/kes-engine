@@ -40,8 +40,8 @@ struct MapVertex
 
 struct MapMesh
 {
-    int32_t entity = -1;          // -1 = world
-    uint32_t material = 0;        // index into CompiledMap::materials
+    int32_t entity = -1; // -1 = world
+    uint32_t material = 0; // index into CompiledMap::materials
     std::vector<MapVertex> vertices;
     std::vector<uint32_t> indices;
 };
@@ -60,10 +60,10 @@ struct MapEntity
 {
     std::string className;
     std::string name;
-    Guid guid;            // assigned when the entity was placed in the editor
+    Guid guid; // assigned when the entity was placed in the editor
     bool solid = false;
     Vector3 origin;
-    Vector3 angles;   // pitch, yaw, roll in degrees (editor convention)
+    Vector3 angles; // pitch, yaw, roll in degrees (editor convention)
     Vector3 mins;
     Vector3 maxs;
     std::vector<std::pair<std::string, std::string>> keyValues;
@@ -73,13 +73,13 @@ struct MapEntity
 struct MapPlane
 {
     Vector3 normal;
-    float dist = 0.0f;   // dot(normal, p) == dist on the plane, normal points out of the brush
+    float dist = 0.0f; // dot(normal, p) == dist on the plane, normal points out of the brush
 };
 
 struct MapBrush
 {
     int32_t entity = -1;
-    Vector3 mins;   // bounds of the hull (same space as the planes)
+    Vector3 mins; // bounds of the hull (same space as the planes)
     Vector3 maxs;
     std::vector<MapPlane> planes;
 };
@@ -96,7 +96,7 @@ bool LoadCompiledMap(const char* path, CompiledMap& outMap, std::string* outErro
 
 // Editor space -> engine space.
 float GetMapUnitScale();
-Vector3 ConvertMapPosition(const Vector3& editorPosition);   // swizzled and scaled
+Vector3 ConvertMapPosition(const Vector3& editorPosition); // swizzled and scaled
 Vector3 ConvertMapDirection(const Vector3& editorDirection); // swizzled only
-Vector3 ConvertMapExtents(const Vector3& editorExtents);     // swizzled, scaled, positive
+Vector3 ConvertMapExtents(const Vector3& editorExtents); // swizzled, scaled, positive
 Vector3 ConvertMapAngles(const Vector3& editorAnglesDegrees); // -> engine Rotation (radians)

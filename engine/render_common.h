@@ -22,8 +22,8 @@ namespace render
     constexpr int kMaxCascades = 4;
     constexpr int kMaxLocalShadowSlices = 16;
     constexpr int kEnvironmentFaceSize = 128;
-    constexpr int kEnvironmentMipCount = 6;   // 128 .. 4; mip = roughness * (count - 1)
-    constexpr int kMaterialTextureCount = 5;  // base, normal, metallicRoughness, occlusion, emissive
+    constexpr int kEnvironmentMipCount = 6; // 128 .. 4; mip = roughness * (count - 1)
+    constexpr int kMaterialTextureCount = 5; // base, normal, metallicRoughness, occlusion, emissive
 
     // Row-major, multiplied as mul(vector, matrix) like the shaders.
     struct Matrix4
@@ -40,37 +40,37 @@ namespace render
     // GPU layouts, std140 / HLSL cbuffer compatible (float4 granularity).
     struct GPULight
     {
-        float position[4];   // xyz, w = range
-        float color[4];      // rgb = radiance (color * intensity * pi), w unused
-        float direction[4];  // xyz = direction the light travels, w = spot outer cos
-        float params[4];     // x = type (0 dir, 1 point, 2 spot), y = spot inner cos,
-                             // z = shadow: directional 1 = sun cascades, local first slice; -1 none
+        float position[4]; // xyz, w = range
+        float color[4]; // rgb = radiance (color * intensity * pi), w unused
+        float direction[4]; // xyz = direction the light travels, w = spot outer cos
+        float params[4]; // x = type (0 dir, 1 point, 2 spot), y = spot inner cos,
+        // z = shadow: directional 1 = sun cascades, local first slice; -1 none
     };
 
     struct SceneCBData
     {
         float viewProj[16];
-        float cameraPosition[4];       // xyz
-        float cameraForward[4];        // xyz (view depth for cascade selection)
-        float ambientSH[9][4];        // irradiance / pi, pre-convolved (rgb)
-        float environmentParams[4];    // x = specular mip count, y = environment intensity, z = time in seconds
-        float lightCounts[4];          // x = light count
+        float cameraPosition[4]; // xyz
+        float cameraForward[4]; // xyz (view depth for cascade selection)
+        float ambientSH[9][4]; // irradiance / pi, pre-convolved (rgb)
+        float environmentParams[4]; // x = specular mip count, y = environment intensity, z = time in seconds
+        float lightCounts[4]; // x = light count
         GPULight lights[kMaxLights];
         float fogColor[4];
-        float fogParams[4];            // x = start, y = end, z = enabled, w = max density
+        float fogParams[4]; // x = start, y = end, z = enabled, w = max density
         float cascadeViewProj[kMaxCascades][16];
-        float cascadeSplits[4];        // view-space depth where each cascade ends
-        float cascadeTexelSize[4];     // world size of one shadow texel per cascade (normal offset)
-        float shadowParams[4];         // x = cascade count, y = 1 / cascade resolution, z = 1 / local resolution, w = enabled
+        float cascadeSplits[4]; // view-space depth where each cascade ends
+        float cascadeTexelSize[4]; // world size of one shadow texel per cascade (normal offset)
+        float shadowParams[4]; // x = cascade count, y = 1 / cascade resolution, z = 1 / local resolution, w = enabled
         float localShadowViewProj[kMaxLocalShadowSlices][16];
     };
 
     struct MaterialCBData
     {
         float baseColor[4];
-        float emissive[4];     // rgb = emissive color * intensity, a = alpha cutoff
-        float pbr[4];          // x = metallic, y = roughness, z = normal scale, w = occlusion strength
-        uint32_t flags[4];     // x = MaterialFlags incl. the Has*Texture bits
+        float emissive[4]; // rgb = emissive color * intensity, a = alpha cutoff
+        float pbr[4]; // x = metallic, y = roughness, z = normal scale, w = occlusion strength
+        uint32_t flags[4]; // x = MaterialFlags incl. the Has*Texture bits
     };
 
     struct ModelCBData
@@ -78,7 +78,7 @@ namespace render
         float worldViewProj[16];
         float world[16];
         float skinInfo[4];
-        float skinMatrices[128 * 16];   // last: static draws only need what comes before
+        float skinMatrices[128 * 16]; // last: static draws only need what comes before
     };
 
     struct SkyCBData
@@ -97,7 +97,7 @@ namespace render
 
     struct TonemapCBData
     {
-        float params[4];   // x = exposure, y = dither strength
+        float params[4]; // x = exposure, y = dither strength
     };
 
     // Offsets as Slang lays out kes_common.slang (checked with -reflection-json).
@@ -128,15 +128,15 @@ namespace render
     struct ShadowView
     {
         Matrix4 viewProj;
-        int slice = 0;          // layer in the cascade or the local shadow array
+        int slice = 0; // layer in the cascade or the local shadow array
         bool cascade = false;
-        Vector3 origin;         // light position (local) for distance culling
-        float radius = 0.0f;    // local: light range; cascade: unused
+        Vector3 origin; // light position (local) for distance culling
+        float radius = 0.0f; // local: light range; cascade: unused
     };
 
     struct Frustum
     {
-        float planes[6][4] = {};   // ax + by + cz + d >= 0 inside
+        float planes[6][4] = {}; // ax + by + cz + d >= 0 inside
     };
     Frustum ExtractFrustum(const Matrix4& viewProj);
     bool SphereInFrustum(const Frustum& frustum, const Vector3& center, float radius);
@@ -151,7 +151,7 @@ namespace render
         ShadowConfig shadows;
     };
     void BuildFrameSetup(FrameSetup& out, const SceneState& state, const Camera& camera, const Scene& scene,
-                         float aspect, const GraphicsOptions& options);
+        float aspect, const GraphicsOptions& options);
 
     // Ambient environment (IBL) from the sky gradient, or the flat
     // SceneState::ambient when no sky is active. Rebuilt only when its key changes.
@@ -179,8 +179,8 @@ namespace render
     };
     enum class TextureUsage
     {
-        Color,    // sRGB (base color, emissive)
-        Linear,   // data (metallic/roughness, occlusion)
+        Color, // sRGB (base color, emissive)
+        Linear, // data (metallic/roughness, occlusion)
         Normal,
     };
     void GenerateMips(const uint8_t* rgba, uint32_t width, uint32_t height, TextureUsage usage, std::vector<MipLevel>& outLevels);

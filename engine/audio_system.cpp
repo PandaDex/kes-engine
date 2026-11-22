@@ -11,7 +11,7 @@
 namespace
 {
     constexpr float kSilentGain = 0.00001f;
-    constexpr float kDistanceCutoff = 0.01f;   // -40 dB
+    constexpr float kDistanceCutoff = 0.01f; // -40 dB
 }
 
 const char* AudioBusName(AudioBus bus)
@@ -19,11 +19,11 @@ const char* AudioBusName(AudioBus bus)
     switch (bus)
     {
     case AudioBus::Effects: return "Effects";
-    case AudioBus::Music: return "Music";
+    case AudioBus::Music:   return "Music";
     case AudioBus::Ambient: return "Ambient";
-    case AudioBus::Voice: return "Voice";
-    case AudioBus::Ui: return "Ui";
-    case AudioBus::Count: break;
+    case AudioBus::Voice:   return "Voice";
+    case AudioBus::Ui:      return "Ui";
+    case AudioBus::Count:   break;
     }
     return "?";
 }
@@ -63,7 +63,7 @@ bool AudioSystem::Init()
 
     // The mixer works in one fixed format; SDL converts to whatever the
     // hardware wants. Resident clips are converted to this format when loaded.
-    deviceSpec = {SDL_AUDIO_F32, 2, 48000};
+    deviceSpec = { SDL_AUDIO_F32, 2, 48000 };
     stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &deviceSpec, &AudioSystem::SDLAudioCallback, this);
     if (!stream)
     {
@@ -157,7 +157,8 @@ size_t AudioSystem::GetVoiceCount() const
     if (!mutex)
         return 0;
     SDL_LockMutex(mutex);
-    const size_t count = static_cast<size_t>(std::count_if(voices.begin(), voices.end(), [](const AudioVoice& voice) { return voice.playing; }));
+    const size_t count = static_cast<size_t>(std::count_if(voices.begin(), voices.end(), [](const AudioVoice& voice)
+        { return voice.playing; }));
     SDL_UnlockMutex(mutex);
     return count;
 }
@@ -258,7 +259,7 @@ AudioVoiceId AudioSystem::Play2D(const char* soundFile, float volume, float pitc
 }
 
 AudioVoiceId AudioSystem::Play3D(const Vector3& location, float attenuation, const char* soundFile, float volume, float pitch,
-                                 bool loop, AudioBus bus)
+    bool loop, AudioBus bus)
 {
     if (!stream || !mutex)
         return 0;
@@ -426,7 +427,7 @@ void AudioSystem::SDLAudioCallback(void* userdata, SDL_AudioStream* stream, int 
 
     const int frameBytes = static_cast<int>(sizeof(float)) * 2;
     const int frameCount = (additionalAmount + frameBytes - 1) / frameBytes;
-    std::vector<float>& buffer = self->mixBuffer;   // only touched on this thread
+    std::vector<float>& buffer = self->mixBuffer; // only touched on this thread
     buffer.assign(static_cast<size_t>(frameCount) * 2, 0.0f);
 
     SDL_LockMutex(self->mutex);
@@ -465,7 +466,8 @@ bool AudioSystem::ReadFrame(AudioVoice& voice, int frame, float& left, float& ri
     {
         const uint32_t block = static_cast<uint32_t>(frame) / kQoaFrameLength;
         const uint32_t offset = static_cast<uint32_t>(frame) % kQoaFrameLength;
-        int slot = voice.blockIndex[0] == block ? 0 : voice.blockIndex[1] == block ? 1 : -1;
+        int slot = voice.blockIndex[0] == block ? 0 : voice.blockIndex[1] == block ? 1
+                                                                                   : -1;
         if (slot < 0)
         {
             slot = 1 - voice.nextBlockSlot;
@@ -572,7 +574,7 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
         ComputeVoiceGains(voice, gains);
         voice.loudness = (std::max)(gains[0], gains[1]);
         const bool wasAudible = voice.gainApplied && (std::max)(voice.appliedGain[0], voice.appliedGain[1]) > kSilentGain;
-        if (voice.loudness > kSilentGain || wasAudible)   // a voice going silent still ramps down
+        if (voice.loudness > kSilentGain || wasAudible) // a voice going silent still ramps down
             mixOrder.push_back(i);
         else
         {
@@ -589,7 +591,8 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
     if (mixOrder.size() > kMaxMixedVoices)
     {
         std::nth_element(mixOrder.begin(), mixOrder.begin() + kMaxMixedVoices, mixOrder.end(),
-                         [this](size_t a, size_t b) { return voices[a].loudness > voices[b].loudness; });
+            [this](size_t a, size_t b)
+            { return voices[a].loudness > voices[b].loudness; });
         for (size_t i = kMaxMixedVoices; i < mixOrder.size(); ++i)
         {
             AudioVoice& voice = voices[mixOrder[i]];
@@ -651,7 +654,7 @@ const AudioClip* AudioSystem::GetOrLoadClip(const char* soundFile, bool forceStr
         clip.encoded = std::move(sound.encoded);
         auto inserted = clipCache.emplace(resolvedPath, std::move(clip));
         EngineLogf("Loaded audio clip: %s (%.1f s, %u channels, streamed, %zu KB).", resolvedPath.c_str(), seconds, sound.channels,
-                   inserted.first->second.encoded.size() / 1024);
+            inserted.first->second.encoded.size() / 1024);
         return &inserted.first->second;
     }
 
@@ -662,9 +665,9 @@ const AudioClip* AudioSystem::GetOrLoadClip(const char* soundFile, bool forceStr
     }
 
     SDL_AudioSpec srcSpec = {};
-    srcSpec.format   = SDL_AUDIO_F32;
+    srcSpec.format = SDL_AUDIO_F32;
     srcSpec.channels = static_cast<int>(sound.channels);
-    srcSpec.freq     = static_cast<int>(sound.sampleRate);
+    srcSpec.freq = static_cast<int>(sound.sampleRate);
 
     const bool needsConversion =
         srcSpec.format != deviceSpec.format ||
@@ -678,7 +681,7 @@ const AudioClip* AudioSystem::GetOrLoadClip(const char* soundFile, bool forceStr
         const int srcLen = static_cast<int>(sound.samples.size() * sizeof(float));
 
         if (!SDL_ConvertAudioSamples(&srcSpec, reinterpret_cast<const Uint8*>(sound.samples.data()), srcLen,
-                                      &deviceSpec, &convertedData, &convertedLen))
+                &deviceSpec, &convertedData, &convertedLen))
         {
             EngineLogf("SDL_ConvertAudioSamples failed for %s: %s", resolvedPath.c_str(), SDL_GetError());
             return nullptr;

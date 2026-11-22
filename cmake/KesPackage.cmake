@@ -26,6 +26,8 @@
 #   -> <name>-<platform>-symbols-<version>.zip   PDBs / .debug files for crash reports.
 #      Keep one per release and don't ship it.
 #   Paks are encrypted when KES_PAK_ENCRYPTION_KEY is set.
+#   Any configuration packages (Debug too). The KES_PACKAGE_* options below change
+#   what goes in; tools/buildLauncher sets them per profile.
 
 include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/KesPlatform.cmake")
@@ -36,6 +38,38 @@ set(KES_PACKAGE_FORMAT_WINDOWS "zip"    CACHE STRING "Package format for Windows
 set(KES_PACKAGE_FORMAT_GDK     "msixvc" CACHE STRING "Package format for GDK (msixvc, zip, folder)")
 set(KES_PACKAGE_FORMAT_LINUX   "tar.gz" CACHE STRING "Package format for Linux (tar.gz, zip, folder)")
 set(KES_PACKAGE_FORMAT_MACOS   "zip"    CACHE STRING "Package format for macOS (zip, folder)")
+
+set(KES_PACKAGE_CONTENT "pak" CACHE STRING "How packages carry content: pak (content/*.pak) or loose (plain files under content/)")
+set_property(CACHE KES_PACKAGE_CONTENT PROPERTY STRINGS pak loose)
+set(KES_PACKAGE_SYMBOLS "archive" CACHE STRING "Debug symbols: archive (separate zip, not shipped), package (next to the binaries), both, none")
+set_property(CACHE KES_PACKAGE_SYMBOLS PROPERTY STRINGS archive package both none)
+set(KES_PACKAGE_SUFFIX "" CACHE STRING "Appended to package names: <name>-<platform><suffix>")
+option(KES_PACKAGE_STRIP_SOURCES "Leave shader sources (.slang, .slangnodes) and map sources (.fmap) out of packages" ON)
+option(KES_PACKAGE_VC_RUNTIME "Copy the MSVC runtime DLLs into Windows packages (the debug runtime for Debug builds, which Microsoft doesn't allow redistributing)" OFF)
+if(NOT KES_PACKAGE_CONTENT MATCHES "^(pak|loose)$")
+    message(FATAL_ERROR "KES_PACKAGE_CONTENT must be pak or loose, not '${KES_PACKAGE_CONTENT}'")
+endif()
+if(NOT KES_PACKAGE_SYMBOLS MATCHES "^(archive|package|both|none)$")
+    message(FATAL_ERROR "KES_PACKAGE_SYMBOLS must be archive, package, both or none, not '${KES_PACKAGE_SYMBOLS}'")
+endif()
+
+# Release and debug MSVC runtime DLL lists, written to a file the staging script reads
+# (paths with spaces don't survive the custom command line). Picked per configuration.
+function(_kes_write_msvc_runtime_list file)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+    set(CMAKE_INSTALL_UCRT_LIBRARIES TRUE)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS "")
+    include(InstallRequiredSystemLibraries)
+    set(_release ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS})
+    set(CMAKE_INSTALL_DEBUG_LIBRARIES TRUE)
+    set(CMAKE_INSTALL_DEBUG_LIBRARIES_ONLY TRUE)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS "")
+    include(InstallRequiredSystemLibraries)
+    file(WRITE "${file}"
+        "set(VC_RUNTIME_RELEASE [==[${_release}]==])
+set(VC_RUNTIME_DEBUG [==[${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}]==])
+")
+endfunction()
 
 # GDK identity (MicrosoftGame.config). Placeholders work for local builds.
 set(KES_GDK_IDENTITY_NAME "KES.Game"      CACHE STRING "GDK package identity name (3-50 chars: letters, digits, '.', '-')")
@@ -60,30 +94,35 @@ function(kes_add_game target)
         OUTPUT_DIR "${CMAKE_BINARY_DIR}/compiled_shaders/${target}"
         INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/engine/shaders")
 
-    # Development layout next to the exe
+    # Development layout next to the exe. A custom target without outputs runs on
+    # every build, so content edits show up even when nothing recompiles.
     set(_extra_content_commands "")
     foreach(_extra_dir IN LISTS ARG_EXTRA_CONTENT_DIRS)
         list(APPEND _extra_content_commands
             COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_extra_dir}" "${_exe_dir}/content")
     endforeach()
-    add_custom_command(TARGET ${target} POST_BUILD
+    set(_config_commands "")
+    if(ARG_CONFIG_DIR)
+        set(_config_commands
+            COMMAND "${CMAKE_COMMAND}" -E remove_directory "${_exe_dir}/config"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ARG_CONFIG_DIR}" "${_exe_dir}/config")
+    endif()
+    add_custom_target(${target}_content ALL
         COMMAND "${CMAKE_COMMAND}" -E remove_directory "${_exe_dir}/content"
         ${_extra_content_commands}
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ARG_CONTENT_DIR}" "${_exe_dir}/content"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_engine_assets}" "${_exe_dir}/content"
-        COMMENT "Copying content for ${target}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "$<TARGET_PROPERTY:engine_shaders,KES_SHADER_OUTPUT_DIR>" "${_exe_dir}/content/engine/shaders"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "$<TARGET_PROPERTY:${target}_shaders,KES_SHADER_OUTPUT_DIR>" "${_exe_dir}/content"
+        ${_config_commands}
+        COMMENT "Copying content and config for ${target}"
         VERBATIM)
-    kes_deploy_shaders(${target} engine_shaders "content/engine/shaders")
-    kes_deploy_shaders(${target} ${target}_shaders "content")
+    add_dependencies(${target}_content engine_shaders ${target}_shaders)
+    add_dependencies(${target} ${target}_content)
 
     kes_deploy_crash_handler(${target})
-
-    if(ARG_CONFIG_DIR)
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND "${CMAKE_COMMAND}" -E remove_directory "${_exe_dir}/config"
-            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ARG_CONFIG_DIR}" "${_exe_dir}/config"
-            VERBATIM)
-    endif()
 
     # Platform files copied to the package root 
     set(_platform_files "")
@@ -131,6 +170,18 @@ function(kes_add_game target)
     set(_symbol_files_arg "")
     if(MSVC)
         set(_symbol_files_arg "$<TARGET_PDB_FILE:${target}>")
+        if(KES_ENGINE_SHARED)
+            string(APPEND _symbol_files_arg "|$<TARGET_PDB_FILE:engine>")
+        endif()
+    endif()
+    set(_vc_runtime_list "")
+    if(MSVC AND KES_PACKAGE_VC_RUNTIME)
+        set(_vc_runtime_list "${CMAKE_CURRENT_BINARY_DIR}/kes_msvc_runtime.cmake")
+        _kes_write_msvc_runtime_list("${_vc_runtime_list}")
+    endif()
+    set(_split_libs_arg "")
+    if(KES_ENGINE_SHARED AND NOT WIN32)
+        set(_split_libs_arg "$<TARGET_FILE_NAME:engine>")
     endif()
 
     add_custom_target(kes_package
@@ -144,6 +195,7 @@ function(kes_add_game target)
             "-DRUNTIME_FILES=$<JOIN:$<TARGET_RUNTIME_DLLS:${target}>,|>"
             "-DCRASH_FILES=${_crash_files_arg}"
             "-DSYMBOL_FILES=${_symbol_files_arg}"
+            "-DSPLIT_LIBS=${_split_libs_arg}"
             "-DOBJCOPY=${CMAKE_OBJCOPY}"
             "-DPAK_TOOL=$<TARGET_FILE:pak-tool>"
             "-DPAK_KEY=${KES_PAK_ENCRYPTION_KEY}"
@@ -154,11 +206,16 @@ function(kes_add_game target)
             "-DCONFIG_DIR=${ARG_CONFIG_DIR}"
             "-DPLATFORM_FILES=${_platform_files_arg}"
             "-DFORMAT=${_format}"
+            "-DCONTENT_MODE=${KES_PACKAGE_CONTENT}"
+            "-DSYMBOLS_MODE=${KES_PACKAGE_SYMBOLS}"
+            "-DSUFFIX=${KES_PACKAGE_SUFFIX}"
+            "-DSTRIP_SOURCES=${KES_PACKAGE_STRIP_SOURCES}"
+            "-DVC_RUNTIME_LIST=${_vc_runtime_list}"
             "-DOUTPUT_DIR=${KES_PACKAGE_DIR}"
             "-DMAKEPKG=${KES_GDK_MAKEPKG}"
             -P "${_KES_PACKAGE_STAGE_SCRIPT}"
         DEPENDS "${_KES_PACKAGE_STAGE_SCRIPT}"
-        COMMENT "Packaging ${KES_PROJECT_NAME} for ${KES_PLATFORM} ($<CONFIG>, ${_format})"
+        COMMENT "Packaging ${KES_PROJECT_NAME} for ${KES_PLATFORM} ($<CONFIG>, ${_format}, ${KES_PACKAGE_CONTENT} content)"
         VERBATIM)
     add_dependencies(kes_package ${target} pak-tool ${target}_shaders engine_shaders ${KES_CRASH_RUNTIME_TARGETS})
 endfunction()

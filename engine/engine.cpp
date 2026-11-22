@@ -33,20 +33,20 @@ namespace
     // Tries each candidate backend in order (requested one first, then the
     // platform priority list). The window is recreated per attempt because
     // backends need different window flags (e.g. SDL_WINDOW_VULKAN).
-    bool CreateWindowAndRenderer(EngineApp &app)
+    bool CreateWindowAndRenderer(EngineApp& app)
     {
         KES_ZONE_FN(CORE);
-        GameSettings &settings = *app.settings;
+        GameSettings& settings = *app.settings;
 
         // AppConfig::renderer wins over the player's saved preference.
         const RendererBackend preferred = app.config.renderer != RendererBackend::Auto
-                                              ? app.config.renderer
-                                              : settings.GetPreferredRenderer();
+            ? app.config.renderer
+            : settings.GetPreferredRenderer();
 
         const std::vector<RendererBackend> candidates = BuildRendererCandidateList(preferred);
         for (RendererBackend backend : candidates)
         {
-            const char *backendName = RendererBackendName(backend);
+            const char* backendName = RendererBackendName(backend);
 
             // Created windowed and hidden; ApplySettings switches to the saved
             // window mode before the window is shown.
@@ -60,7 +60,7 @@ namespace
             if (!CreateAppWindow(app.window, desc))
                 return false;
             EngineLogf("Application window created: \"%s\" (%dx%d, pixels %dx%d).", ENGINE_PROJECT_NAME,
-                       app.window.width, app.window.height, app.window.pixelWidth, app.window.pixelHeight);
+                app.window.width, app.window.height, app.window.pixelWidth, app.window.pixelHeight);
 
             AppConfig rendererConfig = app.config;
             rendererConfig.windowWidth = app.window.pixelWidth;
@@ -80,7 +80,7 @@ namespace
             if (rendererReady)
             {
                 app.renderer = std::move(renderer);
-                app.rendererSize = {app.window.pixelWidth, app.window.pixelHeight};
+                app.rendererSize = { app.window.pixelWidth, app.window.pixelHeight };
                 EngineLogf("Renderer initialized: %s.", backendName);
                 return true;
             }
@@ -94,12 +94,12 @@ namespace
         return false;
     }
 
-    void ResizeRendererToWindow(EngineApp &app)
+    void ResizeRendererToWindow(EngineApp& app)
     {
         KES_ZONE_FN(RENDER);
         if (!app.renderer || !IsAppWindowRenderable(app.window))
             return;
-        const IntPoint size = {app.window.pixelWidth, app.window.pixelHeight};
+        const IntPoint size = { app.window.pixelWidth, app.window.pixelHeight };
         if (size == app.rendererSize)
             return;
         if (app.renderer->Resize(size.x, size.y))
@@ -115,14 +115,14 @@ namespace
 
     // Locked for mouse look in GameOnly. Otherwise shown (EngineSetShowMouseCursor),
     // except while the gamepad navigates the UI (DefaultUi.ini HideCursorWithGamepad).
-    void ApplyCursor(EngineApp &app)
+    void ApplyCursor(EngineApp& app)
     {
         bool visible = false;
         bool locked = true;
         if (app.inputMode != InputMode::GameOnly)
         {
             const bool gamepadNavigating = app.ui.IsNavigationEnabled() &&
-                                           app.ui.GetActiveInputDevice() == UiInputDevice::Gamepad;
+                app.ui.GetActiveInputDevice() == UiInputDevice::Gamepad;
             visible = app.showMouseCursor && !(gamepadNavigating && app.ui.GetConfig().hideCursorWithGamepad);
             locked = false;
         }
@@ -131,7 +131,7 @@ namespace
     }
 
     // Uploads a newly loaded level's assets before its first frame.
-    void PreloadLevel(EngineApp &app)
+    void PreloadLevel(EngineApp& app)
     {
         if (!app.renderer || !app.worldInitialized || app.preloadedLevel == app.world.GetLevelGeneration())
             return;
@@ -141,7 +141,7 @@ namespace
     }
 
     // RmlUi translates text only while parsing, so documents have to be reloaded.
-    void ApplyLanguageChange(EngineApp &app)
+    void ApplyLanguageChange(EngineApp& app)
     {
         const uint64_t generation = LocalizationGetGeneration();
         if (generation == app.localizationGeneration)
@@ -153,7 +153,7 @@ namespace
     }
 
     // Runs a load announced last frame, once that frame (the loading screen) was drawn.
-    void RunQueuedMapLoad(EngineApp &app)
+    void RunQueuedMapLoad(EngineApp& app)
     {
         if (app.loadingMap.empty() || !app.loadingFrameDrawn)
             return;
@@ -169,7 +169,7 @@ namespace
         app.fixedAccumulator = 0.0f;
     }
 
-    bool IsUiNavigationMode(const EngineApp &app)
+    bool IsUiNavigationMode(const EngineApp& app)
     {
         switch (app.ui.GetConfig().navigation)
         {
@@ -182,7 +182,7 @@ namespace
         }
     }
 
-    void ApplyInputMode(EngineApp &app)
+    void ApplyInputMode(EngineApp& app)
     {
         app.ui.SetInputEnabled(app.inputMode != InputMode::GameOnly);
         // UI_* actions drive the UI (DefaultUi.ini GamepadNavigation).
@@ -205,7 +205,7 @@ namespace
     }
 
     // Sleeps until the next frame slot when a frame rate limit is set.
-    void LimitFrameRate(EngineApp &app)
+    void LimitFrameRate(EngineApp& app)
     {
         KES_ZONE(CORE, "Frame rate limit");
         const float limit = app.settings ? app.settings->GetFrameRateLimit() : 0.0f;
@@ -230,16 +230,16 @@ namespace
         app.frameDeadline = target;
     }
 
-    bool IsAltEnter(const SDL_Event &event)
+    bool IsAltEnter(const SDL_Event& event)
     {
         return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
-               (event.key.scancode == SDL_SCANCODE_RETURN || event.key.scancode == SDL_SCANCODE_KP_ENTER) &&
-               (event.key.mod & SDL_KMOD_ALT) != 0;
+            (event.key.scancode == SDL_SCANCODE_RETURN || event.key.scancode == SDL_SCANCODE_KP_ENTER) &&
+            (event.key.mod & SDL_KMOD_ALT) != 0;
     }
 
     // The device can't be recovered without reloading every GPU resource, so
     // tell the player what happened and leave instead of showing a dead window.
-    void ExitOnGpuFailure(EngineApp &app)
+    void ExitOnGpuFailure(EngineApp& app)
     {
         std::string error = app.renderer->GetFatalError();
 #if ENGINE_ALLOW_DEBUG_MODE
@@ -258,28 +258,29 @@ namespace
         SetAppWindowCursor(app.window, true, false);
         SDL_HideWindow(app.window.handle);
         const std::string message = "The graphics device stopped responding, so the game has to close.\n\n"
-                                    "Updating your graphics driver may help.\n\n" + error;
+                                    "Updating your graphics driver may help.\n\n" +
+            error;
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, ENGINE_PROJECT_NAME, message.c_str(), nullptr);
     }
 
-    bool IsKeyPress(const SDL_Event &event, SDL_Scancode scancode)
+    bool IsKeyPress(const SDL_Event& event, SDL_Scancode scancode)
     {
         return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == scancode;
     }
 }
 
-void EngineSetCommandLine(int argc, const char *const *argv)
+void EngineSetCommandLine(int argc, const char* const* argv)
 {
     CommandLineInit(argc, argv);
 }
 
-bool EngineStart(EngineApp &app)
+bool EngineStart(EngineApp& app)
 {
     KES_PROFILE_THREAD_NAME("Main");
     KES_ZONE(CORE, "Engine startup");
     KES_PROFILE_APP_INFO(ENGINE_PROJECT_NAME, std::strlen(ENGINE_PROJECT_NAME));
     // `reason` is shown to the player; null when the failing code already did.
-    const auto failStartup = [&app](const char *reason) -> bool
+    const auto failStartup = [&app](const char* reason) -> bool
     {
         EngineLog("Startup failed. Beginning shutdown cleanup.");
         if (reason)
@@ -377,7 +378,7 @@ bool EngineStart(EngineApp &app)
     if (CommandLineHasFlag("debug-crash"))
     {
         EngineLog("Crashing on purpose (-debug-crash).");
-        volatile int *volatile target = nullptr;
+        volatile int* volatile target = nullptr;
         *target = 1;
     }
 #endif
@@ -397,13 +398,13 @@ bool EngineStart(EngineApp &app)
     // Non-fatal: the game still runs without UI (e.g. missing fonts are only
     // a warning, a failed RmlUi init just logs).
     if (!app.ui.Init(app.window.handle, app.renderer.get(), app.window.pixelWidth, app.window.pixelHeight,
-                     &app.input, LoadProjectUiConfig()))
+            &app.input, LoadProjectUiConfig()))
         EngineLog("UI system failed to initialize; continuing without UI.");
     app.localizationGeneration = LocalizationGetGeneration();
-    app.ui.SetSoundCallback([&app](const std::string &path) {
+    app.ui.SetSoundCallback([&app](const std::string& path)
+        {
         if (app.worldInitialized)
-            app.world.GetAudio().PlayUi(path.c_str());
-    });
+            app.world.GetAudio().PlayUi(path.c_str()); });
 
     EngineLogf("Main camera initialized at position (%.2f, %.2f, %.2f).", app.camera.x, app.camera.y, app.camera.z);
 
@@ -436,7 +437,7 @@ bool EngineStart(EngineApp &app)
     return true;
 }
 
-bool EngineTick(EngineApp &app)
+bool EngineTick(EngineApp& app)
 {
     if (!app.running)
         return false;
@@ -496,14 +497,14 @@ bool EngineTick(EngineApp &app)
                 ApplyInputMode(app);
                 LocalizationReload();
                 if (app.localizationGeneration == LocalizationGetGeneration())
-                    app.ui.ReloadDocuments();   // otherwise ApplyLanguageChange does it
+                    app.ui.ReloadDocuments(); // otherwise ApplyLanguageChange does it
             }
             if (!uiConsumed && IsKeyPress(event, SDL_SCANCODE_F8))
             {
                 const bool show = !app.ui.IsDebuggerVisible();
                 app.ui.SetDebuggerVisible(show);
                 if (show && app.inputMode == InputMode::GameOnly)
-                    EngineSetInputMode(app, InputMode::GameAndUI);   // the debugger needs the cursor
+                    EngineSetInputMode(app, InputMode::GameAndUI); // the debugger needs the cursor
             }
 #endif
         }
@@ -543,7 +544,7 @@ bool EngineTick(EngineApp &app)
     app.world.Update(dt);
     OnScreenDebugUpdate(app.ui, dt);
     app.ui.Update();
-    ApplyCursor(app);   // follows the active input device
+    ApplyCursor(app); // follows the active input device
 
     // A load queued this frame: announce it, then draw this frame (the
     // loading screen) before the load blocks.
@@ -555,7 +556,7 @@ bool EngineTick(EngineApp &app)
             app.onMapLoadBegin(app, app.loadingMap);
         app.ui.Update();
     }
-    PreloadLevel(app);   // also covers World::LoadMap called directly by game code
+    PreloadLevel(app); // also covers World::LoadMap called directly by game code
 
     if (IsAppWindowRenderable(app.window))
     {
@@ -586,61 +587,61 @@ bool EngineTick(EngineApp &app)
     return app.running;
 }
 
-void EngineLoadMap(EngineApp &app, const std::string &mapName)
+void EngineLoadMap(EngineApp& app, const std::string& mapName)
 {
     if (app.worldInitialized && !mapName.empty())
         app.world.QueueMapLoad(mapName);
 }
 
-void EngineRegisterEntityClass(EngineApp &app, const std::string &className, EntityFactoryFunction factory)
+void EngineRegisterEntityClass(EngineApp& app, const std::string& className, EntityFactoryFunction factory)
 {
     app.world.RegisterEntityClass(className, std::move(factory));
 }
 
-void EngineSetPlayerClass(EngineApp &app, const std::string &className)
+void EngineSetPlayerClass(EngineApp& app, const std::string& className)
 {
     app.world.SetPlayerClassName(className);
 }
 
-void EngineSetInputMode(EngineApp &app, InputMode mode)
+void EngineSetInputMode(EngineApp& app, InputMode mode)
 {
     app.inputMode = mode;
     ApplyInputMode(app);
 }
 
-InputMode EngineGetInputMode(const EngineApp &app)
+InputMode EngineGetInputMode(const EngineApp& app)
 {
     return app.inputMode;
 }
 
-void EngineSetShowMouseCursor(EngineApp &app, bool show)
+void EngineSetShowMouseCursor(EngineApp& app, bool show)
 {
     app.showMouseCursor = show;
     ApplyInputMode(app);
 }
 
-void EngineSetPaused(EngineApp &app, bool paused)
+void EngineSetPaused(EngineApp& app, bool paused)
 {
     if (app.worldInitialized)
         app.world.SetPaused(paused);
 }
 
-bool EngineIsPaused(const EngineApp &app)
+bool EngineIsPaused(const EngineApp& app)
 {
     return app.worldInitialized && app.world.IsPaused();
 }
 
-void EngineSetWindowTitle(EngineApp &app, const char *title)
+void EngineSetWindowTitle(EngineApp& app, const char* title)
 {
     SetWindowTitle(app.window, title);
 }
 
-void EngineToggleFullscreen(EngineApp &app)
+void EngineToggleFullscreen(EngineApp& app)
 {
     if (!app.settings)
         return;
 
-    GameSettings &settings = *app.settings;
+    GameSettings& settings = *app.settings;
     const bool toFullscreen = settings.GetFullscreenMode() == WindowMode::Windowed;
     if (!toFullscreen && app.window.mode == WindowMode::Windowed)
         settings.SetScreenResolution(app.window.windowedSize); // keep the size the player dragged to
@@ -652,17 +653,17 @@ void EngineToggleFullscreen(EngineApp &app)
     ResizeRendererToWindow(app);
 }
 
-GameSettings &EngineGetGameSettings(EngineApp &app)
+GameSettings& EngineGetGameSettings(EngineApp& app)
 {
     return *app.settings;
 }
 
-UiSystem &EngineGetUi(EngineApp &app)
+UiSystem& EngineGetUi(EngineApp& app)
 {
     return app.ui;
 }
 
-void EngineShutdown(EngineApp &app)
+void EngineShutdown(EngineApp& app)
 {
     KES_ZONE(CORE, "Engine shutdown");
     EngineLog("Engine shutdown begin.");

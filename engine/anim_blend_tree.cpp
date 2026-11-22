@@ -31,69 +31,84 @@ namespace
 {
     using Pose = std::vector<AnimationTransform>;
 
-    AnimNodePortInfo PosePort(const char* name) { return { name, AnimPortType::Pose, 0.0f }; }
-    AnimNodePortInfo FloatPort(const char* name, float value = 0.0f) { return { name, AnimPortType::Float, value }; }
-    AnimNodePortInfo IntPort(const char* name, float value = 0.0f) { return { name, AnimPortType::Int, value }; }
-    AnimNodePortInfo BoolPort(const char* name, float value = 0.0f) { return { name, AnimPortType::Bool, value }; }
+    AnimNodePortInfo PosePort(const char* name)
+    {
+        return { name, AnimPortType::Pose, 0.0f };
+    }
+    AnimNodePortInfo FloatPort(const char* name, float value = 0.0f)
+    {
+        return { name, AnimPortType::Float, value };
+    }
+    AnimNodePortInfo IntPort(const char* name, float value = 0.0f)
+    {
+        return { name, AnimPortType::Int, value };
+    }
+    AnimNodePortInfo BoolPort(const char* name, float value = 0.0f)
+    {
+        return { name, AnimPortType::Bool, value };
+    }
 
     std::vector<AnimNodeInfo> BuildCatalog()
     {
         std::vector<AnimNodeInfo> c;
         c.push_back({ "Output", "Output Pose", "Output", "The final pose of the model. A graph has exactly one.",
-                      { PosePort("Pose") }, {}, {} });
+            { PosePort("Pose") }, {}, {} });
         c.push_back({ "BindPose", "Bind Pose", "Pose", "The model's rest pose.", {}, { PosePort("Pose") }, {} });
         c.push_back({ "Clip", "Play Clip", "Pose", "Plays a .kanim clip. Progress is 0..1 through the clip.",
-                      { FloatPort("Speed", 1.0f) },
-                      { PosePort("Pose"), FloatPort("Progress") },
-                      { { "Clip", AnimParamKind::Clip, "", {} }, { "Loop", AnimParamKind::Bool, "true", {} } } });
+            { FloatPort("Speed", 1.0f) },
+            { PosePort("Pose"), FloatPort("Progress") },
+            { { "Clip", AnimParamKind::Clip, "", {} }, { "Loop", AnimParamKind::Bool, "true", {} } } });
         c.push_back({ "Blend", "Blend", "Blend", "Mixes A and B. Alpha 0 is all A, 1 is all B.",
-                      { PosePort("A"), PosePort("B"), FloatPort("Alpha", 0.5f) }, { PosePort("Pose") }, {} });
+            { PosePort("A"), PosePort("B"), FloatPort("Alpha", 0.5f) }, { PosePort("Pose") }, {} });
         c.push_back({ "Blend1D", "Blend Space 1D", "Blend",
-                      "Blends between the connected poses by Value, each placed at its threshold (T0..T3).",
-                      { FloatPort("Value"), PosePort("P0"), PosePort("P1"), PosePort("P2"), PosePort("P3") },
-                      { PosePort("Pose") },
-                      { { "T0", AnimParamKind::Float, "0", {} }, { "T1", AnimParamKind::Float, "1", {} },
-                        { "T2", AnimParamKind::Float, "2", {} }, { "T3", AnimParamKind::Float, "3", {} } } });
+            "Blends between the connected poses by Value, each placed at its threshold (T0..T3).",
+            { FloatPort("Value"), PosePort("P0"), PosePort("P1"), PosePort("P2"), PosePort("P3") },
+            { PosePort("Pose") },
+            { { "T0", AnimParamKind::Float, "0", {} }, { "T1", AnimParamKind::Float, "1", {} },
+                { "T2", AnimParamKind::Float, "2", {} }, { "T3", AnimParamKind::Float, "3", {} } } });
         c.push_back({ "Additive", "Additive", "Blend",
-                      "Adds the difference between Additive and the bind pose on top of Base.",
-                      { PosePort("Base"), PosePort("Additive"), FloatPort("Alpha", 1.0f) }, { PosePort("Pose") }, {} });
+            "Adds the difference between Additive and the bind pose on top of Base.",
+            { PosePort("Base"), PosePort("Additive"), FloatPort("Alpha", 1.0f) }, { PosePort("Pose") }, {} });
         c.push_back({ "LayerBlend", "Layer Blend", "Blend",
-                      "Blends Layer over Base only on Bone and its children (e.g. upper body).",
-                      { PosePort("Base"), PosePort("Layer"), FloatPort("Alpha", 1.0f) }, { PosePort("Pose") },
-                      { { "Bone", AnimParamKind::Bone, "", {} } } });
+            "Blends Layer over Base only on Bone and its children (e.g. upper body).",
+            { PosePort("Base"), PosePort("Layer"), FloatPort("Alpha", 1.0f) }, { PosePort("Pose") },
+            { { "Bone", AnimParamKind::Bone, "", {} } } });
         c.push_back({ "SelectBool", "Select by Bool", "State",
-                      "Picks True or False by Condition and cross-fades over BlendTime seconds when it changes.",
-                      { PosePort("True"), PosePort("False"), BoolPort("Condition") }, { PosePort("Pose") },
-                      { { "BlendTime", AnimParamKind::Float, "0.2", {} } } });
+            "Picks True or False by Condition and cross-fades over BlendTime seconds when it changes.",
+            { PosePort("True"), PosePort("False"), BoolPort("Condition") }, { PosePort("Pose") },
+            { { "BlendTime", AnimParamKind::Float, "0.2", {} } } });
         c.push_back({ "SelectInt", "Select by Int", "State",
-                      "Picks P0..P3 by Index and cross-fades over BlendTime seconds when it changes.",
-                      { IntPort("Index"), PosePort("P0"), PosePort("P1"), PosePort("P2"), PosePort("P3") },
-                      { PosePort("Pose") }, { { "BlendTime", AnimParamKind::Float, "0.2", {} } } });
+            "Picks P0..P3 by Index and cross-fades over BlendTime seconds when it changes.",
+            { IntPort("Index"), PosePort("P0"), PosePort("P1"), PosePort("P2"), PosePort("P3") },
+            { PosePort("Pose") }, { { "BlendTime", AnimParamKind::Float, "0.2", {} } } });
         c.push_back({ "FloatParam", "Float Parameter", "Parameter", "A float set by game code (SetAnimFloat).",
-                      {}, { FloatPort("Value") },
-                      { { "Name", AnimParamKind::Name, "Speed", {} }, { "Default", AnimParamKind::Float, "0", {} } } });
+            {}, { FloatPort("Value") },
+            { { "Name", AnimParamKind::Name, "Speed", {} }, { "Default", AnimParamKind::Float, "0", {} } } });
         c.push_back({ "BoolParam", "Bool Parameter", "Parameter", "A bool set by game code (SetAnimBool).",
-                      {}, { BoolPort("Value") },
-                      { { "Name", AnimParamKind::Name, "IsMoving", {} }, { "Default", AnimParamKind::Bool, "false", {} } } });
+            {}, { BoolPort("Value") },
+            { { "Name", AnimParamKind::Name, "IsMoving", {} }, { "Default", AnimParamKind::Bool, "false", {} } } });
         c.push_back({ "IntParam", "Int Parameter", "Parameter", "An int set by game code (SetAnimInt).",
-                      {}, { IntPort("Value") },
-                      { { "Name", AnimParamKind::Name, "State", {} }, { "Default", AnimParamKind::Int, "0", {} } } });
+            {}, { IntPort("Value") },
+            { { "Name", AnimParamKind::Name, "State", {} }, { "Default", AnimParamKind::Int, "0", {} } } });
         c.push_back({ "Math", "Math", "Logic", "A op B.", { FloatPort("A"), FloatPort("B") }, { FloatPort("Result") },
-                      { { "Op", AnimParamKind::Enum, "Add", { "Add", "Subtract", "Multiply", "Divide", "Min", "Max" } } } });
+            { { "Op", AnimParamKind::Enum, "Add", { "Add", "Subtract", "Multiply", "Divide", "Min", "Max" } } } });
         c.push_back({ "Compare", "Compare", "Logic", "True when A op B.", { FloatPort("A"), FloatPort("B") },
-                      { BoolPort("Result") },
-                      { { "Op", AnimParamKind::Enum, "Greater",
-                          { "Greater", "Less", "GreaterEqual", "LessEqual", "Equal", "NotEqual" } } } });
+            { BoolPort("Result") },
+            { { "Op", AnimParamKind::Enum, "Greater",
+                { "Greater", "Less", "GreaterEqual", "LessEqual", "Equal", "NotEqual" } } } });
         c.push_back({ "Logic", "Logic", "Logic", "A op B on bools. NotA ignores B.", { BoolPort("A"), BoolPort("B") },
-                      { BoolPort("Result") }, { { "Op", AnimParamKind::Enum, "And", { "And", "Or", "Xor", "NotA" } } } });
+            { BoolPort("Result") }, { { "Op", AnimParamKind::Enum, "And", { "And", "Or", "Xor", "NotA" } } } });
         c.push_back({ "MapRange", "Map Range", "Logic", "Maps Value from In Min..In Max to Out Min..Out Max.",
-                      { FloatPort("Value"), FloatPort("InMin", 0.0f), FloatPort("InMax", 1.0f), FloatPort("OutMin", 0.0f),
-                        FloatPort("OutMax", 1.0f) },
-                      { FloatPort("Result") }, { { "Clamp", AnimParamKind::Bool, "true", {} } } });
+            { FloatPort("Value"), FloatPort("InMin", 0.0f), FloatPort("InMax", 1.0f), FloatPort("OutMin", 0.0f),
+                FloatPort("OutMax", 1.0f) },
+            { FloatPort("Result") }, { { "Clamp", AnimParamKind::Bool, "true", {} } } });
         return c;
     }
 
-    float Lerp(float a, float b, float t) { return a + (b - a) * t; }
+    float Lerp(float a, float b, float t)
+    {
+        return a + (b - a) * t;
+    }
 
     void NormalizeQuat(float q[4])
     {
@@ -148,7 +163,10 @@ namespace
             BlendTransform(a[i], b[i], t, out[i]);
     }
 
-    float Clamp01(float value) { return std::clamp(value, 0.0f, 1.0f); }
+    float Clamp01(float value)
+    {
+        return std::clamp(value, 0.0f, 1.0f);
+    }
 }
 
 int AnimNodeInfo::InputIndex(const std::string& name) const
@@ -226,7 +244,8 @@ bool IsAnimBlendTreePath(const std::string& path)
     if (path.size() < extension.size())
         return false;
     return std::equal(extension.rbegin(), extension.rend(), path.rbegin(),
-                      [](char a, char b) { return a == std::tolower(static_cast<unsigned char>(b)); });
+        [](char a, char b)
+        { return a == std::tolower(static_cast<unsigned char>(b)); });
 }
 
 bool LoadAnimBlendTreeFile(const char* path, AnimBlendTreeData& outTree, std::string* outError)
@@ -353,11 +372,22 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
     };
 
     static const std::unordered_map<std::string, Kind> kinds = {
-        { "Output", Kind::Output }, { "BindPose", Kind::BindPose }, { "Clip", Kind::Clip }, { "Blend", Kind::Blend },
-        { "Blend1D", Kind::Blend1D }, { "Additive", Kind::Additive }, { "LayerBlend", Kind::LayerBlend },
-        { "SelectBool", Kind::SelectBool }, { "SelectInt", Kind::SelectInt }, { "FloatParam", Kind::FloatParam },
-        { "BoolParam", Kind::BoolParam }, { "IntParam", Kind::IntParam }, { "Math", Kind::Math },
-        { "Compare", Kind::Compare }, { "Logic", Kind::Logic }, { "MapRange", Kind::MapRange },
+        { "Output", Kind::Output },
+        { "BindPose", Kind::BindPose },
+        { "Clip", Kind::Clip },
+        { "Blend", Kind::Blend },
+        { "Blend1D", Kind::Blend1D },
+        { "Additive", Kind::Additive },
+        { "LayerBlend", Kind::LayerBlend },
+        { "SelectBool", Kind::SelectBool },
+        { "SelectInt", Kind::SelectInt },
+        { "FloatParam", Kind::FloatParam },
+        { "BoolParam", Kind::BoolParam },
+        { "IntParam", Kind::IntParam },
+        { "Math", Kind::Math },
+        { "Compare", Kind::Compare },
+        { "Logic", Kind::Logic },
+        { "MapRange", Kind::MapRange },
     };
 
     std::unordered_map<int32_t, int32_t> indexById;
@@ -380,7 +410,8 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
             const AnimNodeParamInfo* param = info->Param(key);
             return param ? param->defaultValue : std::string();
         };
-        const auto number = [&](const std::string& key) { return textparse::ParseFloat(text(key), 0.0f); };
+        const auto number = [&](const std::string& key)
+        { return textparse::ParseFloat(text(key), 0.0f); };
 
         node.inputs.resize(info->inputs.size());
         for (size_t i = 0; i < info->inputs.size(); ++i)
@@ -420,10 +451,11 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
         if (node.kind == Kind::FloatParam || node.kind == Kind::BoolParam || node.kind == Kind::IntParam)
         {
             const AnimPortType type = node.kind == Kind::FloatParam ? AnimPortType::Float
-                                      : node.kind == Kind::BoolParam ? AnimPortType::Bool
-                                                                     : AnimPortType::Int;
+                : node.kind == Kind::BoolParam                      ? AnimPortType::Bool
+                                                                    : AnimPortType::Int;
             const bool known = std::any_of(parameters.begin(), parameters.end(),
-                                           [&](const AnimBlendTreeParameter& p) { return p.name == node.text; });
+                [&](const AnimBlendTreeParameter& p)
+                { return p.name == node.text; });
             if (!node.text.empty() && !known)
                 parameters.push_back({ node.text, type, node.params[1] });
         }
@@ -606,11 +638,11 @@ float AnimBlendTreeInstance::EvalScalar(int32_t nodeIndex, int32_t port)
         const float b = InputScalar(node, 1);
         switch (node.op)
         {
-        case 0: result = a + b; break;
-        case 1: result = a - b; break;
-        case 2: result = a * b; break;
-        case 3: result = std::fabs(b) > 1e-8f ? a / b : 0.0f; break;
-        case 4: result = std::min(a, b); break;
+        case 0:  result = a + b; break;
+        case 1:  result = a - b; break;
+        case 2:  result = a * b; break;
+        case 3:  result = std::fabs(b) > 1e-8f ? a / b : 0.0f; break;
+        case 4:  result = std::min(a, b); break;
         default: result = std::max(a, b); break;
         }
         break;
@@ -622,11 +654,11 @@ float AnimBlendTreeInstance::EvalScalar(int32_t nodeIndex, int32_t port)
         bool r = false;
         switch (node.op)
         {
-        case 0: r = a > b; break;
-        case 1: r = a < b; break;
-        case 2: r = a >= b; break;
-        case 3: r = a <= b; break;
-        case 4: r = std::fabs(a - b) <= 1e-5f; break;
+        case 0:  r = a > b; break;
+        case 1:  r = a < b; break;
+        case 2:  r = a >= b; break;
+        case 3:  r = a <= b; break;
+        case 4:  r = std::fabs(a - b) <= 1e-5f; break;
         default: r = std::fabs(a - b) > 1e-5f; break;
         }
         result = r ? 1.0f : 0.0f;
@@ -639,9 +671,9 @@ float AnimBlendTreeInstance::EvalScalar(int32_t nodeIndex, int32_t port)
         bool r = false;
         switch (node.op)
         {
-        case 0: r = a && b; break;
-        case 1: r = a || b; break;
-        case 2: r = a != b; break;
+        case 0:  r = a && b; break;
+        case 1:  r = a || b; break;
+        case 2:  r = a != b; break;
         default: r = !a; break;
         }
         result = r ? 1.0f : 0.0f;
@@ -772,7 +804,8 @@ const std::vector<AnimationTransform>& AnimBlendTreeInstance::EvalPose(int32_t n
             node.pose = bindPose;
             break;
         }
-        std::stable_sort(points.begin(), points.end(), [](const Point& a, const Point& b) { return a.threshold < b.threshold; });
+        std::stable_sort(points.begin(), points.end(), [](const Point& a, const Point& b)
+            { return a.threshold < b.threshold; });
         if (value <= points.front().threshold || points.size() == 1)
         {
             node.pose = InputPose(node, points.front().input, weight);

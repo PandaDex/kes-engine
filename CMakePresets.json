@@ -160,19 +160,25 @@
             "name": "package-windows",
             "configurePreset": "package-windows",
             "configuration": "Release",
-            "targets": [ "kes_package" ]
+            "targets": [
+                "kes_package"
+            ]
         },
         {
             "name": "package-gdk",
             "configurePreset": "package-gdk",
             "configuration": "Release",
-            "targets": [ "kes_package" ]
+            "targets": [
+                "kes_package"
+            ]
         },
         {
             "name": "package-linux",
             "configurePreset": "package-linux",
             "configuration": "Release",
-            "targets": [ "kes_package" ]
+            "targets": [
+                "kes_package"
+            ]
         }
     ]
 }

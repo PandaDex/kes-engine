@@ -1,8 +1,9 @@
 #ifndef NOMINMAX
-#define NOMINMAX   // file_paths.h includes <windows.h>
+#define NOMINMAX // file_paths.h includes <windows.h>
 #endif
 #include "ui_system.h"
 
+#include <optional>
 #include <algorithm>
 #include <cmath>
 #include <cctype>
@@ -30,7 +31,7 @@
 
 namespace
 {
-    std::string Trim(const std::string &text)
+    std::string Trim(const std::string& text)
     {
         const size_t begin = text.find_first_not_of(" \t\r\n");
         if (begin == std::string::npos)
@@ -41,12 +42,12 @@ namespace
 
     std::string Lower(std::string text)
     {
-        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c)
+            { return static_cast<char>(std::tolower(c)); });
         return text;
     }
 
-    // "a, b, c" -> {"a", "b", "c"}
-    std::vector<std::string> SplitList(const std::string &text)
+    std::vector<std::string> SplitList(const std::string& text)
     {
         std::vector<std::string> items;
         size_t start = 0;
@@ -63,16 +64,14 @@ namespace
         return items;
     }
 
-    // System interface: SDL time, cursors, clipboard and IME from RmlUi's SDL
-    // platform code; log messages go to the engine log.
     class KesUiSystemInterface final : public SystemInterface_SDL
     {
     public:
-        explicit KesUiSystemInterface(SDL_Window *window) : SystemInterface_SDL(window) {}
+        explicit KesUiSystemInterface(SDL_Window* window) : SystemInterface_SDL(window) {}
 
-        bool LogMessage(Rml::Log::Type type, const Rml::String &message) override
+        bool LogMessage(Rml::Log::Type type, const Rml::String& message) override
         {
-            const char *level = "Info";
+            const char* level = "Info";
             switch (type)
             {
             case Rml::Log::LT_ERROR:
@@ -89,12 +88,10 @@ namespace
                 break;
             }
             EngineLogf("[UI] %s: %s", level, message.c_str());
-            return true;   // never break into the debugger from UI logs
+            return true;
         }
 
-        // Only a text node that is exactly a #Key is translated. The whitespace
-        // around it is kept so layout doesn't change.
-        int TranslateString(Rml::String &translated, const Rml::String &input) override
+        int TranslateString(Rml::String& translated, const Rml::String& input) override
         {
             size_t begin = 0;
             size_t end = input.size();
@@ -115,12 +112,10 @@ namespace
         }
     };
 
-    // File interface: loose content or mounted paks (LoadAssetFileBytes).
-    // Files are small (documents, stylesheets, fonts), so they are read whole.
     class KesUiFileInterface final : public Rml::FileInterface
     {
     public:
-        Rml::FileHandle Open(const Rml::String &path) override
+        Rml::FileHandle Open(const Rml::String& path) override
         {
             KES_ZONE(UI, "UI file open");
             KES_ZONE_TEXT(UI, path.c_str(), path.size());
@@ -133,9 +128,9 @@ namespace
 
         void Close(Rml::FileHandle handle) override { delete Get(handle); }
 
-        size_t Read(void *buffer, size_t size, Rml::FileHandle handle) override
+        size_t Read(void* buffer, size_t size, Rml::FileHandle handle) override
         {
-            OpenFile *file = Get(handle);
+            OpenFile* file = Get(handle);
             const size_t count = std::min(size, file->data.size() - file->position);
             if (count > 0)
                 std::memcpy(buffer, file->data.data() + file->position, count);
@@ -145,7 +140,7 @@ namespace
 
         bool Seek(Rml::FileHandle handle, long offset, int origin) override
         {
-            OpenFile *file = Get(handle);
+            OpenFile* file = Get(handle);
             long long base = 0;
             if (origin == SEEK_CUR)
                 base = static_cast<long long>(file->position);
@@ -161,7 +156,7 @@ namespace
         size_t Tell(Rml::FileHandle handle) override { return Get(handle)->position; }
         size_t Length(Rml::FileHandle handle) override { return Get(handle)->data.size(); }
 
-        bool LoadFile(const Rml::String &path, Rml::String &outData) override
+        bool LoadFile(const Rml::String& path, Rml::String& outData) override
         {
             KES_ZONE(UI, "UI file load");
             KES_ZONE_TEXT(UI, path.c_str(), path.size());
@@ -172,7 +167,7 @@ namespace
                 Rml::Log::Message(Rml::Log::LT_ERROR, "Could not load '%s': %s", path.c_str(), error.c_str());
                 return false;
             }
-            outData.assign(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+            outData.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
             return true;
         }
 
@@ -182,20 +177,13 @@ namespace
             std::vector<uint8_t> data;
             size_t position = 0;
         };
-        static OpenFile *Get(Rml::FileHandle handle) { return reinterpret_cast<OpenFile *>(handle); }
+        static OpenFile* Get(Rml::FileHandle handle) { return reinterpret_cast<OpenFile*>(handle); }
     };
 
-    // Render interface: turns RmlUi geometry into a UiDrawList that the active
-    // renderer backend draws (IRenderer::RenderUi). Translation and transforms
-    // are applied on the CPU, so the backends only need one simple pipeline.
-    // Not implemented (RmlUi skips them): clip masks for transformed overflow,
-    // layers and shaders, i.e. box-shadow, filters, mask-image and the
-    // linear/radial/conic-gradient decorators. horizontal-/vertical-gradient
-    // decorators are plain geometry and work.
     class KesUiRenderInterface final : public Rml::RenderInterface
     {
     public:
-        IRenderer *renderer = nullptr;
+        IRenderer* renderer = nullptr;
         UiDrawList drawList;
 
         void BeginFrame()
@@ -207,7 +195,7 @@ namespace
 
         Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override
         {
-            auto *geometry = new CompiledGeometry();
+            auto* geometry = new CompiledGeometry();
             geometry->vertices.assign(vertices.begin(), vertices.end());
             geometry->indices.assign(indices.begin(), indices.end());
             return reinterpret_cast<Rml::CompiledGeometryHandle>(geometry);
@@ -215,12 +203,12 @@ namespace
 
         void ReleaseGeometry(Rml::CompiledGeometryHandle handle) override
         {
-            delete reinterpret_cast<CompiledGeometry *>(handle);
+            delete reinterpret_cast<CompiledGeometry*>(handle);
         }
 
         void RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector2f translation, Rml::TextureHandle texture) override
         {
-            const auto *geometry = reinterpret_cast<const CompiledGeometry *>(handle);
+            const auto* geometry = reinterpret_cast<const CompiledGeometry*>(handle);
             if (!geometry || geometry->indices.empty())
                 return;
 
@@ -228,7 +216,7 @@ namespace
             const uint32_t firstIndex = static_cast<uint32_t>(drawList.indices.size());
 
             drawList.vertices.reserve(drawList.vertices.size() + geometry->vertices.size());
-            for (const Rml::Vertex &source : geometry->vertices)
+            for (const Rml::Vertex& source : geometry->vertices)
             {
                 UiVertex vertex;
                 Rml::Vector2f position = source.position + translation;
@@ -236,7 +224,7 @@ namespace
                 {
                     const Rml::Vector4f projected = m_transform * Rml::Vector4f(position.x, position.y, 0.0f, 1.0f);
                     const float w = projected.w != 0.0f ? projected.w : 1.0f;
-                    position = {projected.x / w, projected.y / w};
+                    position = { projected.x / w, projected.y / w };
                 }
                 vertex.x = position.x;
                 vertex.y = position.y;
@@ -256,14 +244,13 @@ namespace
             const uint32_t indexCount = static_cast<uint32_t>(geometry->indices.size());
             const UiTextureHandle uiTexture = static_cast<UiTextureHandle>(texture);
 
-            // Merge with the previous draw when nothing but the geometry changed.
             if (!drawList.commands.empty())
             {
-                UiDrawCommand &last = drawList.commands.back();
+                UiDrawCommand& last = drawList.commands.back();
                 const bool sameScissor = last.scissorEnabled == m_scissorEnabled &&
-                                         (!m_scissorEnabled ||
-                                          (last.scissor.x == m_scissor.x && last.scissor.y == m_scissor.y &&
-                                           last.scissor.width == m_scissor.width && last.scissor.height == m_scissor.height));
+                    (!m_scissorEnabled ||
+                        (last.scissor.x == m_scissor.x && last.scissor.y == m_scissor.y &&
+                            last.scissor.width == m_scissor.width && last.scissor.height == m_scissor.height));
                 if (last.texture == uiTexture && sameScissor && last.firstIndex + last.indexCount == firstIndex)
                 {
                     last.indexCount += indexCount;
@@ -280,7 +267,7 @@ namespace
             drawList.commands.push_back(command);
         }
 
-        Rml::TextureHandle LoadTexture(Rml::Vector2i &dimensions, const Rml::String &source) override
+        Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String& source) override
         {
             KES_ZONE(UI, "UI load texture");
             KES_ZONE_TEXT(UI, source.c_str(), source.size());
@@ -295,8 +282,7 @@ namespace
                 return 0;
             }
 
-            // RmlUi expects premultiplied alpha; .ktex/.bmp store straight alpha.
-            uint8_t *pixel = texture.pixels.data();
+            uint8_t* pixel = texture.pixels.data();
             const size_t pixelCount = size_t(texture.width) * texture.height;
             for (size_t i = 0; i < pixelCount; ++i, pixel += 4)
             {
@@ -306,7 +292,7 @@ namespace
                 pixel[2] = static_cast<uint8_t>((pixel[2] * alpha + 127) / 255);
             }
 
-            dimensions = {static_cast<int>(texture.width), static_cast<int>(texture.height)};
+            dimensions = { static_cast<int>(texture.width), static_cast<int>(texture.height) };
             return static_cast<Rml::TextureHandle>(
                 renderer->CreateUiTexture(dimensions.x, dimensions.y, texture.pixels.data()));
         }
@@ -329,10 +315,10 @@ namespace
 
         void SetScissorRegion(Rml::Rectanglei region) override
         {
-            m_scissor = {region.Left(), region.Top(), region.Width(), region.Height()};
+            m_scissor = { region.Left(), region.Top(), region.Width(), region.Height() };
         }
 
-        void SetTransform(const Rml::Matrix4f *transform) override
+        void SetTransform(const Rml::Matrix4f* transform) override
         {
             m_hasTransform = transform != nullptr;
             if (transform)
@@ -353,7 +339,7 @@ namespace
     };
 }
 
-const char *const kUiDefaultActionMap = R"imap(
+const char* const kUiDefaultActionMap = R"imap(
 "UI_Up": { "NativeKeys": [ {"key": "Gamepad_DPad_Up"}, {"key": "Keyboard_Up"} ], "ValueType": "boolean" }
 "UI_Down": { "NativeKeys": [ {"key": "Gamepad_DPad_Down"}, {"key": "Keyboard_Down"} ], "ValueType": "boolean" }
 "UI_Left": { "NativeKeys": [ {"key": "Gamepad_DPad_Left"}, {"key": "Keyboard_Left"} ], "ValueType": "boolean" }
@@ -371,7 +357,7 @@ std::string GetDefaultUiConfigPath()
     return (GetExecutableDirectory() / "config" / "DefaultUi.ini").string();
 }
 
-UiConfig LoadUiConfig(const std::string &path, bool *outFound)
+UiConfig LoadUiConfig(const std::string& path, bool* outFound)
 {
     UiConfig config;
     IniFile ini;
@@ -419,12 +405,12 @@ UiConfig LoadUiConfig(const std::string &path, bool *outFound)
 
 struct UiSystem::Impl
 {
-    SDL_Window *window = nullptr;
-    IRenderer *renderer = nullptr;
+    SDL_Window* window = nullptr;
+    IRenderer* renderer = nullptr;
     std::unique_ptr<KesUiSystemInterface> systemInterface;
     KesUiFileInterface fileInterface;
     KesUiRenderInterface renderInterface;
-    Rml::Context *context = nullptr;
+    Rml::Context* context = nullptr;
     bool initialized = false;
     bool inputEnabled = false;
     bool debuggerInitialized = false;
@@ -436,21 +422,20 @@ struct UiSystem::Impl
         std::string args;
     };
 
-    // onclick="name args; other args" -> one listener per attribute.
     class ActionListener final : public Rml::EventListener
     {
     public:
-        ActionListener(Impl &owner, std::vector<ActionCall> calls) : m_owner(owner), m_calls(std::move(calls)) {}
+        ActionListener(Impl& owner, std::vector<ActionCall> calls) : m_owner(owner), m_calls(std::move(calls)) {}
 
-        void ProcessEvent(Rml::Event &event) override
+        void ProcessEvent(Rml::Event& event) override
         {
-            for (const ActionCall &call : m_calls)
+            for (const ActionCall& call : m_calls)
             {
                 auto it = m_owner.actions.find(call.name);
                 if (it == m_owner.actions.end() || !it->second)
                 {
                     Rml::Log::Message(Rml::Log::LT_WARNING, "No UI action registered for '%s' (%s event).",
-                                      call.name.c_str(), event.GetType().c_str());
+                        call.name.c_str(), event.GetType().c_str());
                     continue;
                 }
                 // Copy: the callback may replace or unregister itself.
@@ -459,19 +444,19 @@ struct UiSystem::Impl
             }
         }
 
-        void OnDetach(Rml::Element *) override { delete this; }
+        void OnDetach(Rml::Element*) override { delete this; }
 
     private:
-        Impl &m_owner;
+        Impl& m_owner;
         std::vector<ActionCall> m_calls;
     };
 
     class ActionInstancer final : public Rml::EventListenerInstancer
     {
     public:
-        explicit ActionInstancer(Impl &owner) : m_owner(owner) {}
+        explicit ActionInstancer(Impl& owner) : m_owner(owner) {}
 
-        Rml::EventListener *InstanceEventListener(const Rml::String &value, Rml::Element *) override
+        Rml::EventListener* InstanceEventListener(const Rml::String& value, Rml::Element*) override
         {
             std::vector<ActionCall> calls;
             size_t start = 0;
@@ -498,20 +483,19 @@ struct UiSystem::Impl
         }
 
     private:
-        Impl &m_owner;
+        Impl& m_owner;
     };
 
-    ActionInstancer actionInstancer{*this};
+    ActionInstancer actionInstancer{ *this };
 
     struct OpenDocument
     {
-        Rml::ElementDocument *document = nullptr;
-        std::string path;   // empty for documents loaded from memory
+        Rml::ElementDocument* document = nullptr;
+        std::string path;
     };
     std::vector<OpenDocument> documents;
 
-    // Navigation with the UI_* input actions
-    InputState *input = nullptr;
+    InputState* input = nullptr;
     UiConfig config;
     bool navigationEnabled = false;
     bool backPressed = false;
@@ -530,19 +514,16 @@ struct UiSystem::Impl
         Nav_Count
     };
     int heldDirection = Nav_None;
-    bool resyncHeld = true;       // next update adopts the held direction without moving
-    bool repeatBlocked = false;   // held since navigation turned on: no repeat until it changes
-    bool stickLatched = false;    // UI_Navigate hysteresis
+    bool resyncHeld = true;
+    bool repeatBlocked = false;
+    bool stickLatched = false;
     Uint64 nextRepeatNs = 0;
     Uint64 lastUpdateNs = 0;
-    // Focus the first control of a tab panel once layout has run (after a tab switch).
-    Rml::ObserverPtr<Rml::Element> pendingPanelFocus;
-    std::unordered_map<Rml::ElementDocument *, Rml::ObserverPtr<Rml::Element>> rememberedFocus;
+    // optional: rmlui.dll doesn't export ObserverPtr's default constructor
+    std::optional<Rml::ObserverPtr<Rml::Element>> pendingPanelFocus;
+    std::unordered_map<Rml::ElementDocument*, Rml::ObserverPtr<Rml::Element>> rememberedFocus;
 
     bool NavigationActive() const { return initialized && inputEnabled && navigationEnabled && input; }
-
-    // Directions, repeats and the stick latch start over, so a button held
-    // while navigation turns on (e.g. Start opening the pause menu) does nothing.
     void ResetNavigationState()
     {
         heldDirection = Nav_None;
@@ -552,32 +533,32 @@ struct UiSystem::Impl
         pendingPanelFocus.reset();
     }
 
-    void PlaySound(const std::string &path) const
+    void PlaySound(const std::string& path) const
     {
         if (!path.empty() && soundCallback)
             soundCallback(path);
     }
 
-    const InputActionState *ActionState(const char *name) const
+    const InputActionState* ActionState(const char* name) const
     {
         if (!input)
             return nullptr;
         const auto found = input->actionStates.find(std::string_view(name));
         return found != input->actionStates.end() ? &found->second : nullptr;
     }
-    bool ActionDown(const char *name) const
+    bool ActionDown(const char* name) const
     {
-        const InputActionState *state = ActionState(name);
+        const InputActionState* state = ActionState(name);
         return state && state->down;
     }
-    bool ActionPressed(const char *name) const
+    bool ActionPressed(const char* name) const
     {
-        const InputActionState *state = ActionState(name);
+        const InputActionState* state = ActionState(name);
         return state && state->pressed;
     }
-    Vector2 ActionValue(const char *name) const
+    Vector2 ActionValue(const char* name) const
     {
-        const InputActionState *state = ActionState(name);
+        const InputActionState* state = ActionState(name);
         return state ? state->value2 : Vector2{};
     }
 
@@ -586,12 +567,11 @@ struct UiSystem::Impl
         if (device == newDevice)
             return;
         device = newDevice;
-        // Hover styles would compete with the focus highlight.
         if (newDevice == UiInputDevice::Gamepad && context && inputEnabled)
             context->ProcessMouseLeave();
     }
 
-    void TrackDevice(const SDL_Event &event)
+    void TrackDevice(const SDL_Event& event)
     {
         switch (event.type)
         {
@@ -606,7 +586,6 @@ struct UiSystem::Impl
             SetDevice(UiInputDevice::Keyboard);
             break;
         case SDL_EVENT_MOUSE_MOTION:
-            // Ignore sensor jitter of a mouse nobody touches.
             if (std::fabs(event.motion.xrel) + std::fabs(event.motion.yrel) >= 2.0f)
                 SetDevice(UiInputDevice::Mouse);
             break;
@@ -620,31 +599,30 @@ struct UiSystem::Impl
         }
     }
 
-    // <body class="input-mouse | input-keyboard | input-gamepad">
     void ApplyDeviceClasses()
     {
         for (int i = 0; i < context->GetNumDocuments(); ++i)
         {
-            Rml::ElementDocument *document = context->GetDocument(i);
+            Rml::ElementDocument* document = context->GetDocument(i);
             document->SetClass("input-mouse", device == UiInputDevice::Mouse);
             document->SetClass("input-keyboard", device == UiInputDevice::Keyboard);
             document->SetClass("input-gamepad", device == UiInputDevice::Gamepad);
         }
     }
 
-    static bool IsDebuggerDocument(const Rml::ElementDocument *document)
+    static bool IsDebuggerDocument(const Rml::ElementDocument* document)
     {
         return document && document->GetId().rfind("rmlui-debug", 0) == 0;
     }
 
-    static bool IsTabFocusable(const Rml::Element *element)
+    static bool IsTabFocusable(const Rml::Element* element)
     {
         return element->GetComputedValues().tab_index() == Rml::Style::TabIndex::Auto;
     }
 
-    static bool IsTextField(const Rml::Element *element)
+    static bool IsTextField(const Rml::Element* element)
     {
-        const Rml::String &tag = element->GetTagName();
+        const Rml::String& tag = element->GetTagName();
         if (tag == "textarea")
             return true;
         if (tag != "input")
@@ -653,7 +631,7 @@ struct UiSystem::Impl
         return type == "text" || type == "password";
     }
 
-    static bool IsDescendantOf(const Rml::Element *element, const Rml::Element *ancestor)
+    static bool IsDescendantOf(const Rml::Element* element, const Rml::Element* ancestor)
     {
         for (; element; element = element->GetParentNode())
         {
@@ -663,14 +641,12 @@ struct UiSystem::Impl
         return false;
     }
 
-    // The focused element when it can be navigated from: visible, focusable
-    // (or inside a focusable element) and not just a document's <body>.
-    Rml::Element *NavigableFocus() const
+    Rml::Element* NavigableFocus() const
     {
-        Rml::Element *focus = context->GetFocusElement();
+        Rml::Element* focus = context->GetFocusElement();
         if (!focus || !focus->IsVisible(true) || IsDebuggerDocument(focus->GetOwnerDocument()))
             return nullptr;
-        for (Rml::Element *element = focus; element; element = element->GetParentNode())
+        for (Rml::Element* element = focus; element; element = element->GetParentNode())
         {
             if (element == element->GetOwnerDocument())
                 return nullptr;
@@ -680,12 +656,9 @@ struct UiSystem::Impl
         return nullptr;
     }
 
-    // First control inside `scope` (a document or an element in it) that may
-    // get focus without being asked for: text fields are skipped, so a menu
-    // never starts in text-entry mode.
-    static Rml::Element *FirstAutoFocusable(Rml::ElementDocument *document, Rml::Element *scope)
+    static Rml::Element* FirstAutoFocusable(Rml::ElementDocument* document, Rml::Element* scope)
     {
-        Rml::Element *element = document->FindNextTabElement(scope, true, false);
+        Rml::Element* element = document->FindNextTabElement(scope, true, false);
         for (int guard = 0; element && guard < 4096; ++guard)
         {
             if (element == document || !IsDescendantOf(element, scope))
@@ -697,26 +670,24 @@ struct UiSystem::Impl
         return nullptr;
     }
 
-    // The document navigation acts on: the one holding focus (ElementDocument::Show
-    // focuses the shown document), else the top-most visible one with a control.
-    Rml::ElementDocument *NavigationDocument() const
+    Rml::ElementDocument* NavigationDocument() const
     {
-        if (Rml::Element *focus = context->GetFocusElement())
+        if (Rml::Element* focus = context->GetFocusElement())
         {
-            Rml::ElementDocument *document = focus->GetOwnerDocument();
+            Rml::ElementDocument* document = focus->GetOwnerDocument();
             if (document && document->IsVisible() && !IsDebuggerDocument(document))
                 return document;
         }
         for (int i = context->GetNumDocuments() - 1; i >= 0; --i)
         {
-            Rml::ElementDocument *document = context->GetDocument(i);
+            Rml::ElementDocument* document = context->GetDocument(i);
             if (document && document->IsVisible() && !IsDebuggerDocument(document) && FirstAutoFocusable(document, document))
                 return document;
         }
         return nullptr;
     }
 
-    static bool FocusVisible(Rml::Element *element)
+    static bool FocusVisible(Rml::Element* element)
     {
         if (!element || !element->Focus(true))
             return false;
@@ -724,24 +695,20 @@ struct UiSystem::Impl
         return true;
     }
 
-    // The remembered control of `document` if it is still usable, else its
-    // first control.
-    bool FocusDefault(Rml::ElementDocument *document)
+    bool FocusDefault(Rml::ElementDocument* document)
     {
         if (!document)
             return false;
         if (config.rememberFocus)
         {
             const auto found = rememberedFocus.find(document);
-            Rml::Element *element = found != rememberedFocus.end() ? found->second.get() : nullptr;
+            Rml::Element* element = found != rememberedFocus.end() ? found->second.get() : nullptr;
             if (element && element->GetOwnerDocument() == document && element->IsVisible(true) && IsTabFocusable(element))
                 return FocusVisible(element);
         }
         return FocusVisible(FirstAutoFocusable(document, document));
     }
 
-    // Sends a key press through the context; returns true when it propagated
-    // (nothing used it).
     bool SendKey(Rml::Input::KeyIdentifier key)
     {
         const bool propagated = context->ProcessKeyDown(key, 0);
@@ -751,7 +718,7 @@ struct UiSystem::Impl
 
     void Navigate(int direction)
     {
-        Rml::Element *focus = NavigableFocus();
+        Rml::Element* focus = NavigableFocus();
         if (!focus)
         {
             if (FocusDefault(NavigationDocument()))
@@ -759,19 +726,17 @@ struct UiSystem::Impl
             return;
         }
 
-        // Up/down in a text field would only move the caret: leave the field
-        // along the tab order instead (keyboard bindings are off while typing,
-        // so this is the gamepad).
         if (IsTextField(focus) && (direction == Nav_Up || direction == Nav_Down))
         {
-            Rml::ElementDocument *document = focus->GetOwnerDocument();
+            Rml::ElementDocument* document = focus->GetOwnerDocument();
             if (FocusVisible(document->FindNextTabElement(focus, direction == Nav_Down, false)))
                 PlaySound(config.focusSound);
             return;
         }
 
         static constexpr Rml::Input::KeyIdentifier kKeys[Nav_Count] = {
-            Rml::Input::KI_UP, Rml::Input::KI_DOWN, Rml::Input::KI_LEFT, Rml::Input::KI_RIGHT};
+            Rml::Input::KI_UP, Rml::Input::KI_DOWN, Rml::Input::KI_LEFT, Rml::Input::KI_RIGHT
+        };
         SendKey(kKeys[direction]);
         if (context->GetFocusElement() != focus)
             PlaySound(config.focusSound);
@@ -790,11 +755,10 @@ struct UiSystem::Impl
             confirmPressed = true;
     }
 
-    // Closes the focused <select>'s drop-down; RmlUi has no Escape handling for it.
     bool CloseOpenSelect()
     {
-        Rml::Element *focus = context->GetFocusElement();
-        auto *select = focus ? rmlui_dynamic_cast<Rml::ElementFormControlSelect *>(focus) : nullptr;
+        Rml::Element* focus = context->GetFocusElement();
+        auto* select = focus ? rmlui_dynamic_cast<Rml::ElementFormControlSelect*>(focus) : nullptr;
         if (!select || !select->IsSelectBoxVisible())
             return false;
         select->HideSelectBox();
@@ -812,14 +776,14 @@ struct UiSystem::Impl
 
     void SwitchTab(int step)
     {
-        Rml::ElementDocument *document = NavigationDocument();
+        Rml::ElementDocument* document = NavigationDocument();
         if (!document)
             return;
         Rml::ElementList tabsets;
         document->GetElementsByTagName(tabsets, "tabset");
-        for (Rml::Element *element : tabsets)
+        for (Rml::Element* element : tabsets)
         {
-            auto *tabset = rmlui_dynamic_cast<Rml::ElementTabSet *>(element);
+            auto* tabset = rmlui_dynamic_cast<Rml::ElementTabSet*>(element);
             if (!tabset || !tabset->IsVisible(true) || tabset->GetNumTabs() <= 1)
                 continue;
             const int count = tabset->GetNumTabs();
@@ -827,13 +791,11 @@ struct UiSystem::Impl
             tabset->SetActiveTab(active);
             PlaySound(config.focusSound);
 
-            // Focus leaves the hidden panel; the new panel's first control
-            // gets it after the next layout pass (ApplyPendingPanelFocus).
             document->Focus();
             pendingPanelFocus.reset();
             for (int i = 0; i < tabset->GetNumChildren(); ++i)
             {
-                Rml::Element *panels = tabset->GetChild(i);
+                Rml::Element* panels = tabset->GetChild(i);
                 if (panels->GetTagName() == "panels" && active < panels->GetNumChildren())
                     pendingPanelFocus = panels->GetChild(active)->GetObserverPtr();
             }
@@ -841,8 +803,7 @@ struct UiSystem::Impl
         }
     }
 
-    // Nearest ancestor of `element` (inclusive) that can scroll vertically.
-    static Rml::Element *ScrollContainerOf(Rml::Element *element)
+    static Rml::Element* ScrollContainerOf(Rml::Element* element)
     {
         for (; element; element = element->GetParentNode())
         {
@@ -854,13 +815,12 @@ struct UiSystem::Impl
         return nullptr;
     }
 
-    // Breadth-first search for the first visible scrollable element under `root`.
-    static Rml::Element *FindScrollContainer(Rml::Element *root)
+    static Rml::Element* FindScrollContainer(Rml::Element* root)
     {
-        std::vector<Rml::Element *> queue = {root};
+        std::vector<Rml::Element*> queue = { root };
         for (size_t i = 0; i < queue.size(); ++i)
         {
-            Rml::Element *element = queue[i];
+            Rml::Element* element = queue[i];
             if (!element->IsVisible())
                 continue;
             if (element != root && ScrollContainerOf(element) == element)
@@ -873,11 +833,11 @@ struct UiSystem::Impl
 
     void Scroll(float amount)
     {
-        Rml::Element *focus = NavigableFocus();
-        Rml::Element *target = focus ? ScrollContainerOf(focus) : nullptr;
+        Rml::Element* focus = NavigableFocus();
+        Rml::Element* target = focus ? ScrollContainerOf(focus) : nullptr;
         if (!target)
         {
-            Rml::ElementDocument *document = focus ? focus->GetOwnerDocument() : NavigationDocument();
+            Rml::ElementDocument* document = focus ? focus->GetOwnerDocument() : NavigationDocument();
             target = document ? FindScrollContainer(document) : nullptr;
         }
         if (target)
@@ -886,7 +846,7 @@ struct UiSystem::Impl
 
     int CurrentDirection()
     {
-        static constexpr const char *kDirectionActions[Nav_Count] = {"UI_Up", "UI_Down", "UI_Left", "UI_Right"};
+        static constexpr const char* kDirectionActions[Nav_Count] = { "UI_Up", "UI_Down", "UI_Left", "UI_Right" };
         for (int direction = 0; direction < Nav_Count; ++direction)
         {
             if (ActionDown(kDirectionActions[direction]))
@@ -899,17 +859,17 @@ struct UiSystem::Impl
             return Nav_None;
         if (std::fabs(stick.x) > std::fabs(stick.y))
             return stick.x < 0.0f ? Nav_Left : Nav_Right;
-        return stick.y < 0.0f ? Nav_Up : Nav_Down;   // SDL: +y is down
+        return stick.y < 0.0f ? Nav_Up : Nav_Down;
     }
 
-    // UI action input, once per frame before layout.
     void UpdateNavigation(Uint64 nowNs, float dt)
     {
         if (!NavigationActive())
             return;
 
         const int direction = CurrentDirection();
-        const auto seconds = [](float value) { return static_cast<Uint64>(std::max(value, 0.0f) * 1e9f); };
+        const auto seconds = [](float value)
+        { return static_cast<Uint64>(std::max(value, 0.0f) * 1e9f); };
         if (resyncHeld)
         {
             resyncHeld = false;
@@ -946,7 +906,6 @@ struct UiSystem::Impl
             Scroll(scroll * config.scrollSpeed * context->GetDensityIndependentPixelRatio() * dt);
     }
 
-    // After layout: keeps a usable focus while navigating and remembers it.
     void UpdateFocus()
     {
         for (auto it = rememberedFocus.begin(); it != rememberedFocus.end();)
@@ -955,22 +914,20 @@ struct UiSystem::Impl
         if (!NavigationActive())
             return;
 
-        if (Rml::Element *panel = pendingPanelFocus.get())
+        if (Rml::Element* panel = pendingPanelFocus ? pendingPanelFocus->get() : nullptr)
         {
             pendingPanelFocus.reset();
-            if (Rml::ElementDocument *document = panel->GetOwnerDocument())
+            if (Rml::ElementDocument* document = panel->GetOwnerDocument())
                 FocusVisible(FirstAutoFocusable(document, panel));
         }
 
-        if (Rml::Element *focus = NavigableFocus())
+        if (Rml::Element* focus = NavigableFocus())
         {
-            rememberedFocus[focus->GetOwnerDocument()] = focus->GetObserverPtr();
+            rememberedFocus.insert_or_assign(focus->GetOwnerDocument(), focus->GetObserverPtr());
             return;
         }
-        // Nothing usable has focus: a document was just shown, or the focused
-        // control was hidden or removed (data-if, data-for...).
         const bool autoFocus = config.autoFocus == UiAutoFocus::Always ||
-                               (config.autoFocus == UiAutoFocus::Gamepad && device == UiInputDevice::Gamepad);
+            (config.autoFocus == UiAutoFocus::Gamepad && device == UiInputDevice::Gamepad);
         if (autoFocus)
             FocusDefault(NavigationDocument());
     }
@@ -978,13 +935,13 @@ struct UiSystem::Impl
     void LoadFonts()
     {
         int index = 0;
-        for (const std::string &font : config.fonts)
+        for (const std::string& font : config.fonts)
         {
             const bool fallback = index++ == 0;
             if (loadedFonts.insert(font).second && !Rml::LoadFontFace(font, fallback))
                 loadedFonts.erase(font);
         }
-        for (const std::string &font : config.fallbackFonts)
+        for (const std::string& font : config.fallbackFonts)
         {
             if (loadedFonts.insert(font).second && !Rml::LoadFontFace(font, true))
                 loadedFonts.erase(font);
@@ -998,7 +955,7 @@ struct UiSystem::Impl
         context->SetDensityIndependentPixelRatio(scale);
     }
 
-    bool IsOpen(Rml::ElementDocument *document) const
+    bool IsOpen(Rml::ElementDocument* document) const
     {
         if (!context || !document)
             return false;
@@ -1010,12 +967,12 @@ struct UiSystem::Impl
         return false;
     }
 
-    // Drops documents that RmlUi already closed (e.g. document->Close()).
     void PruneDocuments()
     {
         documents.erase(std::remove_if(documents.begin(), documents.end(),
-                                       [this](const OpenDocument &open) { return !IsOpen(open.document); }),
-                        documents.end());
+                            [this](const OpenDocument& open)
+                            { return !IsOpen(open.document); }),
+            documents.end());
     }
 };
 
@@ -1026,11 +983,11 @@ UiSystem::~UiSystem()
     Shutdown();
 }
 
-bool UiSystem::Init(SDL_Window *window, IRenderer *renderer, int pixelWidth, int pixelHeight,
-                    InputState *input, const UiConfig &config)
+bool UiSystem::Init(SDL_Window* window, IRenderer* renderer, int pixelWidth, int pixelHeight,
+    InputState* input, const UiConfig& config)
 {
     KES_ZONE(UI, "UI init");
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (impl.initialized)
         return true;
     if (!window || !renderer)
@@ -1054,7 +1011,7 @@ bool UiSystem::Init(SDL_Window *window, IRenderer *renderer, int pixelWidth, int
     }
     Rml::Factory::RegisterEventListenerInstancer(&impl.actionInstancer);
 
-    impl.context = Rml::CreateContext("main", {std::max(pixelWidth, 1), std::max(pixelHeight, 1)});
+    impl.context = Rml::CreateContext("main", { std::max(pixelWidth, 1), std::max(pixelHeight, 1) });
     if (!impl.context)
     {
         EngineLog("[UI] Could not create the RmlUi context.");
@@ -1080,7 +1037,7 @@ bool UiSystem::Init(SDL_Window *window, IRenderer *renderer, int pixelWidth, int
 
 void UiSystem::Shutdown()
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (!impl.initialized)
         return;
 
@@ -1091,8 +1048,6 @@ void UiSystem::Shutdown()
         Rml::Debugger::Shutdown();
         impl.debuggerInitialized = false;
     }
-    // Releases contexts, documents, fonts and textures (through the renderer,
-    // which must still be alive).
     Rml::Shutdown();
     impl.context = nullptr;
     impl.systemInterface.reset();
@@ -1114,9 +1069,9 @@ bool UiSystem::IsInitialized() const
     return m_impl->initialized;
 }
 
-bool UiSystem::ProcessEvent(const SDL_Event &event)
+bool UiSystem::ProcessEvent(const SDL_Event& event)
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (!impl.initialized)
         return false;
 
@@ -1141,10 +1096,6 @@ bool UiSystem::ProcessEvent(const SDL_Event &event)
     case SDL_EVENT_KEY_UP:
         if (!impl.inputEnabled)
             return false;
-        // Keys bound to UI actions (arrows, Enter, Escape by default) are
-        // handled by the actions, with the same repeat timing as the gamepad,
-        // except while typing. They still reach game input, which is what the
-        // UI actions read.
         if (impl.NavigationActive() && !WantsTextInput() &&
             InputIsKeyBound(*impl.input, event.key.scancode, InputActionContext::UI))
             return false;
@@ -1162,7 +1113,6 @@ bool UiSystem::ProcessEvent(const SDL_Event &event)
     case SDL_EVENT_FINGER_MOTION:
         break;
     default:
-        // Gamepads are read through the UI_* input actions.
         return false;
     }
 
@@ -1170,28 +1120,21 @@ bool UiSystem::ProcessEvent(const SDL_Event &event)
         return false;
 
     KES_ZONE(UI, "UI event");
-    // Decided before the event changes hover/focus state.
     const bool pointerOverUi = IsPointerOverUi();
     const bool textInput = WantsTextInput();
     SDL_Event copy = event;
-    // RmlSDL returns false when the context handled the event (key bindings,
-    // stopped propagation). For the mouse, RmlUi counts hovering any document
-    // body as handled, so pointer consumption uses IsPointerOverUi instead.
     const bool propagated = RmlSDL::InputEventHandler(impl.context, impl.window, copy);
 
-    // Escape that RmlUi didn't use while navigation (UI_Back) is off.
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_ESCAPE && !event.key.repeat &&
         propagated && !textInput)
         impl.backPressed = true;
 
-    // Clicks and typing change focus; UI action keyboard bindings must not
-    // fire while a text field has it.
     if (impl.input)
         impl.input->uiTextInput = WantsTextInput();
 
     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && pointerOverUi)
     {
-        for (Rml::Element *element = impl.context->GetHoverElement(); element; element = element->GetParentNode())
+        for (Rml::Element* element = impl.context->GetHoverElement(); element; element = element->GetParentNode())
         {
             if (element == element->GetOwnerDocument())
                 break;
@@ -1213,24 +1156,21 @@ bool UiSystem::ProcessEvent(const SDL_Event &event)
     case SDL_EVENT_TEXT_INPUT:
         return WantsTextInput() || !propagated;
     default:
-        // Motion and releases always reach the game too, so held buttons
-        // and keys can't get stuck.
         return false;
     }
 }
 
 void UiSystem::SetInputEnabled(bool enabled)
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (impl.inputEnabled == enabled)
         return;
     impl.inputEnabled = enabled;
     impl.ResetNavigationState();
     if (!enabled && impl.context)
     {
-        // Clear hover/active state and drop keyboard focus from text fields.
         impl.context->ProcessMouseLeave();
-        if (Rml::Element *focus = impl.context->GetFocusElement())
+        if (Rml::Element* focus = impl.context->GetFocusElement())
             focus->Blur();
     }
 }
@@ -1242,7 +1182,7 @@ bool UiSystem::IsInputEnabled() const
 
 void UiSystem::SetNavigationEnabled(bool enabled)
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (impl.navigationEnabled == enabled)
         return;
     impl.navigationEnabled = enabled;
@@ -1264,9 +1204,9 @@ void UiSystem::SetSoundCallback(UiSoundCallback callback)
     m_impl->soundCallback = std::move(callback);
 }
 
-void UiSystem::SetConfig(const UiConfig &config)
+void UiSystem::SetConfig(const UiConfig& config)
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     const bool densityChanged = config.densityScale != impl.config.densityScale;
     impl.config = config;
     impl.ResetNavigationState();
@@ -1277,7 +1217,7 @@ void UiSystem::SetConfig(const UiConfig &config)
         impl.ApplyDisplayScale();
 }
 
-const UiConfig &UiSystem::GetConfig() const
+const UiConfig& UiSystem::GetConfig() const
 {
     return m_impl->config;
 }
@@ -1301,7 +1241,7 @@ void UiSystem::BeginFrame()
 void UiSystem::SetViewportSize(int pixelWidth, int pixelHeight)
 {
     if (m_impl->context && pixelWidth > 0 && pixelHeight > 0)
-        m_impl->context->SetDimensions({pixelWidth, pixelHeight});
+        m_impl->context->SetDimensions({ pixelWidth, pixelHeight });
 }
 
 void UiSystem::SetDensityScale(float scale)
@@ -1315,7 +1255,7 @@ void UiSystem::Update()
     if (!m_impl->initialized)
         return;
     KES_ZONE(UI, "UI update");
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     const Uint64 now = SDL_GetTicksNS();
     const float dt = impl.lastUpdateNs ? std::min(0.1f, static_cast<float>(now - impl.lastUpdateNs) * 1e-9f) : 0.0f;
     impl.lastUpdateNs = now;
@@ -1329,7 +1269,7 @@ void UiSystem::Update()
 
 void UiSystem::Render()
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (!impl.initialized)
         return;
     {
@@ -1341,14 +1281,14 @@ void UiSystem::Render()
     impl.renderer->RenderUi(impl.renderInterface.drawList);
 }
 
-Rml::ElementDocument *UiSystem::LoadDocument(const std::string &path, bool show)
+Rml::ElementDocument* UiSystem::LoadDocument(const std::string& path, bool show)
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (!impl.initialized)
         return nullptr;
     KES_ZONE(UI, "UI load document");
     KES_ZONE_TEXT(UI, path.c_str(), path.size());
-    Rml::ElementDocument *document = impl.context->LoadDocument(path);
+    Rml::ElementDocument* document = impl.context->LoadDocument(path);
     if (!document)
     {
         EngineLogf("[UI] Failed to load document: %s", path.c_str());
@@ -1357,16 +1297,16 @@ Rml::ElementDocument *UiSystem::LoadDocument(const std::string &path, bool show)
     if (show)
         document->Show();
     impl.PruneDocuments();
-    impl.documents.push_back({document, path});
+    impl.documents.push_back({ document, path });
     return document;
 }
 
-Rml::ElementDocument *UiSystem::LoadDocumentFromMemory(const std::string &rml, const std::string &sourceUrl, bool show)
+Rml::ElementDocument* UiSystem::LoadDocumentFromMemory(const std::string& rml, const std::string& sourceUrl, bool show)
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (!impl.initialized)
         return nullptr;
-    Rml::ElementDocument *document = impl.context->LoadDocumentFromMemory(rml, sourceUrl);
+    Rml::ElementDocument* document = impl.context->LoadDocumentFromMemory(rml, sourceUrl);
     if (!document)
     {
         EngineLogf("[UI] Failed to load document from memory (%s).", sourceUrl.c_str());
@@ -1375,33 +1315,34 @@ Rml::ElementDocument *UiSystem::LoadDocumentFromMemory(const std::string &rml, c
     if (show)
         document->Show();
     impl.PruneDocuments();
-    impl.documents.push_back({document, {}});
+    impl.documents.push_back({ document, {} });
     return document;
 }
 
-void UiSystem::CloseDocument(Rml::ElementDocument *document)
+void UiSystem::CloseDocument(Rml::ElementDocument* document)
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (!impl.IsOpen(document))
         return;
     document->Close();
     impl.documents.erase(std::remove_if(impl.documents.begin(), impl.documents.end(),
-                                        [document](const Impl::OpenDocument &open) { return open.document == document; }),
-                         impl.documents.end());
+                             [document](const Impl::OpenDocument& open)
+                             { return open.document == document; }),
+        impl.documents.end());
 }
 
 void UiSystem::CloseAllDocuments()
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     impl.PruneDocuments();
-    for (const Impl::OpenDocument &open : impl.documents)
+    for (const Impl::OpenDocument& open : impl.documents)
         open.document->Close();
     impl.documents.clear();
 }
 
 void UiSystem::ReloadDocuments()
 {
-    Impl &impl = *m_impl;
+    Impl& impl = *m_impl;
     if (!impl.initialized)
         return;
     KES_ZONE(UI, "UI reload documents");
@@ -1411,11 +1352,10 @@ void UiSystem::ReloadDocuments()
 
     std::vector<Impl::OpenDocument> previous = std::move(impl.documents);
     impl.documents.clear();
-    for (Impl::OpenDocument &open : previous)
+    for (Impl::OpenDocument& open : previous)
     {
         if (open.path.empty())
         {
-            // Loaded from memory: there is no source file to reload from.
             impl.documents.push_back(open);
             continue;
         }
@@ -1426,32 +1366,32 @@ void UiSystem::ReloadDocuments()
     EngineLogf("[UI] Reloaded %zu document(s).", previous.size());
 }
 
-bool UiSystem::LoadFontFace(const std::string &path, bool fallback)
+bool UiSystem::LoadFontFace(const std::string& path, bool fallback)
 {
     if (!m_impl->initialized)
         return false;
     return Rml::LoadFontFace(path, fallback);
 }
 
-void UiSystem::RegisterAction(const std::string &name, UiActionCallback callback)
+void UiSystem::RegisterAction(const std::string& name, UiActionCallback callback)
 {
     m_impl->actions[name] = std::move(callback);
 }
 
-void UiSystem::UnregisterAction(const std::string &name)
+void UiSystem::UnregisterAction(const std::string& name)
 {
     m_impl->actions.erase(name);
 }
 
 bool UiSystem::WantsTextInput() const
 {
-    const Impl &impl = *m_impl;
+    const Impl& impl = *m_impl;
     if (!impl.initialized || !impl.inputEnabled)
         return false;
-    Rml::Element *focus = impl.context->GetFocusElement();
+    Rml::Element* focus = impl.context->GetFocusElement();
     if (!focus)
         return false;
-    const Rml::String &tag = focus->GetTagName();
+    const Rml::String& tag = focus->GetTagName();
     if (tag == "textarea")
         return true;
     if (tag == "input")
@@ -1464,12 +1404,10 @@ bool UiSystem::WantsTextInput() const
 
 bool UiSystem::IsPointerOverUi() const
 {
-    const Impl &impl = *m_impl;
+    const Impl& impl = *m_impl;
     if (!impl.initialized || !impl.inputEnabled)
         return false;
-    // Hovering only the context root or a document's empty <body> background
-    // doesn't count, so full-screen HUD documents don't swallow game clicks.
-    Rml::Element *hover = impl.context->GetHoverElement();
+    Rml::Element* hover = impl.context->GetHoverElement();
     return hover && hover != impl.context->GetRootElement() && hover->GetTagName() != "body";
 }
 
@@ -1484,7 +1422,7 @@ bool UiSystem::IsDebuggerVisible() const
     return m_impl->debuggerInitialized && Rml::Debugger::IsVisible();
 }
 
-Rml::Context *UiSystem::GetContext() const
+Rml::Context* UiSystem::GetContext() const
 {
     return m_impl->context;
 }

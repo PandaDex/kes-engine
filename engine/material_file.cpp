@@ -16,13 +16,13 @@ namespace
     {
         switch (type)
         {
-        case MaterialNodeType::Color: return "Color";
-        case MaterialNodeType::Scalar: return "Scalar";
-        case MaterialNodeType::Texture: return "Texture";
-        case MaterialNodeType::Add: return "Add";
+        case MaterialNodeType::Color:    return "Color";
+        case MaterialNodeType::Scalar:   return "Scalar";
+        case MaterialNodeType::Texture:  return "Texture";
+        case MaterialNodeType::Add:      return "Add";
         case MaterialNodeType::Multiply: return "Multiply";
-        case MaterialNodeType::Output: return "Output";
-        default: return "Color";
+        case MaterialNodeType::Output:   return "Output";
+        default:                         return "Color";
         }
     }
 
@@ -56,7 +56,8 @@ namespace
     static EvalValue Add(const EvalValue& a, const EvalValue& b)
     {
         EvalValue out = {};
-        for (int i = 0; i < 4; ++i) out.v[i] = a.v[i] + b.v[i];
+        for (int i = 0; i < 4; ++i)
+            out.v[i] = a.v[i] + b.v[i];
         if (!a.texturePath.empty())
             out.texturePath = a.texturePath;
         else if (!b.texturePath.empty())
@@ -67,7 +68,8 @@ namespace
     static EvalValue Mul(const EvalValue& a, const EvalValue& b)
     {
         EvalValue out = {};
-        for (int i = 0; i < 4; ++i) out.v[i] = a.v[i] * b.v[i];
+        for (int i = 0; i < 4; ++i)
+            out.v[i] = a.v[i] * b.v[i];
         if (!a.texturePath.empty())
             out.texturePath = a.texturePath;
         else if (!b.texturePath.empty())
@@ -304,7 +306,8 @@ bool EvaluateMaterialGraph(MaterialFileData& materialFile, std::string* outError
 
         if (node.type == MaterialNodeType::Color)
         {
-            for (int i = 0; i < 4; ++i) result.v[i] = node.value[i];
+            for (int i = 0; i < 4; ++i)
+                result.v[i] = node.value[i];
         }
         else if (node.type == MaterialNodeType::Scalar)
         {

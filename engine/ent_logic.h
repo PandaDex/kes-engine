@@ -5,7 +5,8 @@
 // MapScript relay: forwards Trigger to OnTrigger, so one event can drive many links and be
 // switched off as a group.
 // Properties: StartDisabled
-class LogicRelayEntity : public Entity, public IMapScriptable
+class LogicRelayEntity : public Entity
+    , public IMapScriptable
 {
 public:
     bool ApplyProperty(const std::string& name, const std::string& value) override;
@@ -19,7 +20,8 @@ private:
 };
 
 // Fires OnMapSpawn once when the map has started.
-class LogicAutoEntity : public Entity, public IMapScriptable
+class LogicAutoEntity : public Entity
+    , public IMapScriptable
 {
 public:
     void Start() override;

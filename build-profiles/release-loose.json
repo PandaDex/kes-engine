@@ -1,0 +1,58 @@
+{
+    "advanced": {
+        "architecture": "x64",
+        "buildDir": "",
+        "buildToolArgs": [
+        ],
+        "cleanFirst": false,
+        "cmakeArgs": [
+        ],
+        "extraTargets": [
+        ],
+        "freshConfigure": false,
+        "gameTarget": "game",
+        "generator": "",
+        "jobs": 0
+    },
+    "configuration": "Release",
+    "description": "Release package with loose content files, easy to patch and inspect.",
+    "engine": {
+        "buildSamples": false,
+        "buildTests": false,
+        "crashDsn": "",
+        "crashReporter": true,
+        "debugTools": false,
+        "disabledProfilerCategories": [
+        ],
+        "engineShared": true,
+        "profilerOnDemand": false,
+        "profiling": false,
+        "rendererSelection": true,
+        "renderers": [
+        ],
+        "sanitize": false,
+        "warningsAsErrors": false
+    },
+    "formatVersion": 1,
+    "launch": {
+        "arguments": "",
+        "runAfterBuild": false,
+        "workingDir": ""
+    },
+    "name": "Release Loose",
+    "package": {
+        "content": "loose",
+        "enabled": true,
+        "format": "folder",
+        "keyEnv": "KES_PAK_KEY",
+        "keySource": "none",
+        "outputDir": "",
+        "projectName": "",
+        "stripSources": true,
+        "suffix": "-loose",
+        "symbols": "archive",
+        "vcRuntime": false,
+        "version": ""
+    },
+    "platform": "Host"
+}

@@ -9,8 +9,8 @@ using ShaderHandle = uint32_t;
 struct ShaderData
 {
     std::string name;
-    std::string vertexShaderFile;  // .slang with vsMain (empty = engine fallback)
-    std::string pixelShaderFile;   // .slang with psMain (empty = engine fallback)
+    std::string vertexShaderFile; // .slang with vsMain (empty = engine fallback)
+    std::string pixelShaderFile; // .slang with psMain (empty = engine fallback)
 };
 
 bool LoadShaderFile(const char* path, ShaderData& outShader, std::string* outError = nullptr);

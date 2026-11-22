@@ -253,7 +253,7 @@ void DecomposeMatrix(const float m[16], float outTranslation[3], float outRotati
 }
 
 void BuildBoneAttachmentMatrix(const KModelData& model, const std::vector<float>& nodeWorldMatrices, int32_t boneIndex,
-                               const float translation[3], const float rotation[4], const float scale[3], float outMatrix[16])
+    const float translation[3], const float rotation[4], const float scale[3], float outMatrix[16])
 {
     float local[16];
     BuildTransformMatrix(translation, rotation, scale, local);

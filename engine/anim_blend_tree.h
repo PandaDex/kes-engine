@@ -28,9 +28,9 @@ enum class AnimParamKind
     Int,
     Bool,
     Enum,
-    Name,   // graph parameter name
-    Clip,   // .kanim path
-    Bone    // node name in the model
+    Name,
+    Clip,
+    Bone
 };
 
 struct AnimNodePortInfo

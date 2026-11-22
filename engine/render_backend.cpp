@@ -198,7 +198,7 @@ std::vector<RendererBackend> BuildRendererCandidateList(RendererBackend configur
         if (requested != RendererBackend::Auto && !IsRendererBackendAvailable(requested))
         {
             EngineLogf("Renderer \"%s\" requested by %s is not available in this build; using platform default.",
-                       RendererBackendName(requested), source);
+                RendererBackendName(requested), source);
             requested = RendererBackend::Auto;
             source = "platform default";
         }
@@ -206,7 +206,7 @@ std::vector<RendererBackend> BuildRendererCandidateList(RendererBackend configur
     else if (configured != RendererBackend::Auto || ReadCommandLineRequest() != RendererBackend::Auto)
     {
         EngineLogf("Renderer selection is disabled for this platform; forcing \"%s\".",
-                   available.empty() ? "none" : RendererBackendName(available.front()));
+            available.empty() ? "none" : RendererBackendName(available.front()));
     }
 
     if (requested != RendererBackend::Auto)
@@ -230,9 +230,9 @@ std::unique_ptr<IRenderer> CreateRenderer(RendererBackend backend)
     case RendererBackend::Vulkan: return CreateVulkanRenderer();
 #endif
 #if KES_HAS_RENDERER_D3D11
-    case RendererBackend::D3D11:  return CreateD3D11Renderer();
+    case RendererBackend::D3D11: return CreateD3D11Renderer();
 #endif
-    default:                      return nullptr;
+    default: return nullptr;
     }
 }
 

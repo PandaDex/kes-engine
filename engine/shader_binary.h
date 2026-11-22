@@ -29,7 +29,7 @@ inline constexpr const char* kEngineShaderSky = "engine/shaders/sky.slang";
 inline constexpr const char* kEngineShaderShadow = "engine/shaders/shadow.slang";
 inline constexpr const char* kEngineShaderBlit = "engine/shaders/blit.slang";
 inline constexpr const char* kEngineShaderUi = "engine/shaders/ui.slang";
-inline constexpr const char* kEngineShaderPresent = "engine/shaders/present.slang";   // final copy / FXAA
+inline constexpr const char* kEngineShaderPresent = "engine/shaders/present.slang"; // final copy / FXAA
 inline constexpr const char* kEngineShaderCmaa2Edges = "engine/shaders/cmaa2_edges.slang";
 inline constexpr const char* kEngineShaderCmaa2DispatchArgs = "engine/shaders/cmaa2_dispatch_args.slang";
 inline constexpr const char* kEngineShaderCmaa2ProcessCandidates = "engine/shaders/cmaa2_process_candidates.slang";
@@ -40,4 +40,4 @@ std::string BuildCompiledShaderPath(const std::string& sourcePath, ShaderStage s
 
 // Loads the compiled binary for sourcePath from disk or a mounted pak.
 bool LoadCompiledShader(const std::string& sourcePath, ShaderStage stage, RendererBackend backend,
-                        std::vector<uint8_t>& outBytes, std::string* outError = nullptr);
+    std::vector<uint8_t>& outBytes, std::string* outError = nullptr);

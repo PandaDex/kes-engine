@@ -4,8 +4,8 @@
 #include <vector>
 #include "ini_file.h"
 #include "shared.h"
-#include "render_backend.h"   // GraphicsOptions, ShadowQuality
-#include "audio_system.h"     // AudioBus
+#include "render_backend.h" // GraphicsOptions, ShadowQuality
+#include "audio_system.h" // AudioBus
 
 struct AppWindow;
 class IRenderer;
@@ -54,7 +54,7 @@ public:
     virtual ~GameSettings() = default;
 
     // Engine-owned instance, valid between EngineStart and EngineShutdown.
-    static GameSettings *GetGameSettings();
+    static GameSettings* GetGameSettings();
 
     // Screen
     void SetScreenResolution(IntPoint resolution);
@@ -130,7 +130,7 @@ public:
 
     // "auto" follows the OS language. -language=xx overrides it without saving.
     void SetLanguage(std::string_view language);
-    const std::string &GetLanguage() const { return m_language; }
+    const std::string& GetLanguage() const { return m_language; }
     void ApplyLanguageSettings();
 
     // Takes effect on the next launch (the renderer can't be swapped live).
@@ -176,21 +176,21 @@ public:
     bool GetCustomBool(std::string_view key, bool fallback) const;
 
     // Engine wiring (called by the engine, not by game code)
-    void AttachEngine(AppWindow *window, IRenderer *renderer, const AppConfig *defaults);
-    void AttachAudio(AudioSystem *audio);
+    void AttachEngine(AppWindow* window, IRenderer* renderer, const AppConfig* defaults);
+    void AttachAudio(AudioSystem* audio);
     void SetActiveInstance(bool active);
 
 protected:
     // Subclass hooks for game specific settings stored in the same file.
-    virtual void LoadCustomSettings(const IniFile &ini) { (void)ini; }
-    virtual void SaveCustomSettings(IniFile &ini) const { (void)ini; }
+    virtual void LoadCustomSettings(const IniFile& ini) { (void)ini; }
+    virtual void SaveCustomSettings(IniFile& ini) const { (void)ini; }
 
-    static constexpr const char *kSection = "GameSettings";
-    static constexpr const char *kCustomSection = "CustomSettings";
+    static constexpr const char* kSection = "GameSettings";
+    static constexpr const char* kCustomSection = "CustomSettings";
 
-    const AppConfig &Defaults() const;
-    AppWindow *Window() const { return m_window; }
-    IRenderer *Renderer() const { return m_renderer; }
+    const AppConfig& Defaults() const;
+    AppWindow* Window() const { return m_window; }
+    IRenderer* Renderer() const { return m_renderer; }
 
 private:
     struct AppliedState
@@ -202,33 +202,33 @@ private:
         bool valid = false;
     };
 
-    void ReadFromIni(const IniFile &ini);
-    void WriteToIni(IniFile &ini) const;
+    void ReadFromIni(const IniFile& ini);
+    void WriteToIni(IniFile& ini) const;
 
     // Saved values (Unreal key names in comments where they match).
-    IntPoint m_resolution = {1280, 720};                                   // ResolutionSizeX/Y
-    IntPoint m_lastConfirmedResolution = {1280, 720};                      // LastUserConfirmedResolutionSizeX/Y
-    WindowMode m_fullscreenMode = WindowMode::Windowed;                    // FullscreenMode
-    WindowMode m_lastConfirmedFullscreenMode = WindowMode::Windowed;       // LastConfirmedFullscreenMode
+    IntPoint m_resolution = { 1280, 720 }; // ResolutionSizeX/Y
+    IntPoint m_lastConfirmedResolution = { 1280, 720 }; // LastUserConfirmedResolutionSizeX/Y
+    WindowMode m_fullscreenMode = WindowMode::Windowed; // FullscreenMode
+    WindowMode m_lastConfirmedFullscreenMode = WindowMode::Windowed; // LastConfirmedFullscreenMode
     WindowMode m_preferredFullscreenMode = WindowMode::WindowedFullscreen; // PreferredFullscreenMode
     int m_displayIndex = 0;
-    bool m_vsync = true;              // bUseVSync
-    float m_frameRateLimit = 0.0f;    // FrameRateLimit
+    bool m_vsync = true; // bUseVSync
+    float m_frameRateLimit = 0.0f; // FrameRateLimit
     float m_resolutionScale = 100.0f; // ResolutionScale (percent)
     RendererBackend m_preferredRenderer = RendererBackend::Auto;
     ShadowQuality m_shadowQuality = ShadowQuality::High; // ShadowQuality (0-3)
-    int m_msaaSamples = 4;                 // AntiAliasing
+    int m_msaaSamples = 4; // AntiAliasing
     PostAntiAliasing m_postAntiAliasing = PostAntiAliasing::Off; // PostAntiAliasing
-    int m_anisotropy = 8;                  // AnisotropicFiltering
-    float m_shadowDistance = 60.0f;        // ShadowDistance
-    float m_mouseSensitivity = 1.0f;       // MouseSensitivity
+    int m_anisotropy = 8; // AnisotropicFiltering
+    float m_shadowDistance = 60.0f; // ShadowDistance
+    float m_mouseSensitivity = 1.0f; // MouseSensitivity
     float m_gamepadLookSensitivity = 1.0f; // GamepadLookSensitivity
-    bool m_invertLookY = false;            // bInvertLookY
-    bool m_gamepadVibration = true;        // bGamepadVibration
-    bool m_crashReportUpload = false;      // bCrashReportUpload
-    std::string m_language = "auto";       // Language
-    float m_masterVolume = 1.0f;           // MasterVolume
-    float m_busVolumes[static_cast<size_t>(AudioBus::Count)] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f}; // <Bus>Volume
+    bool m_invertLookY = false; // bInvertLookY
+    bool m_gamepadVibration = true; // bGamepadVibration
+    bool m_crashReportUpload = false; // bCrashReportUpload
+    std::string m_language = "auto"; // Language
+    float m_masterVolume = 1.0f; // MasterVolume
+    float m_busVolumes[static_cast<size_t>(AudioBus::Count)] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f }; // <Bus>Volume
 
     std::string m_appliedLanguage;
     bool m_languageApplied = false;
@@ -237,20 +237,20 @@ private:
     bool m_loaded = false;
     AppliedState m_applied;
 
-    AppWindow *m_window = nullptr;
-    IRenderer *m_renderer = nullptr;
-    const AppConfig *m_defaults = nullptr;
-    AudioSystem *m_audio = nullptr;
+    AppWindow* m_window = nullptr;
+    IRenderer* m_renderer = nullptr;
+    const AppConfig* m_defaults = nullptr;
+    AudioSystem* m_audio = nullptr;
 };
 
 // Global accessor (Unreal: UGameUserSettings::GetGameUserSettings()).
-inline GameSettings *GetGameSettings()
+inline GameSettings* GetGameSettings()
 {
     return GameSettings::GetGameSettings();
 }
 
-template <typename T>
-T *GetGameSettings()
+template<typename T>
+T* GetGameSettings()
 {
-    return dynamic_cast<T *>(GameSettings::GetGameSettings());
+    return dynamic_cast<T*>(GameSettings::GetGameSettings());
 }

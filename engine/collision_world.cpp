@@ -11,14 +11,14 @@ namespace
 {
     // A shape only matches a query when its mask has the query's category too,
     // so triggers accept kCategoryQuery and nothing that collides.
-    constexpr uint64_t kCategorySolid = 1u << 0;     // static and kinematic
+    constexpr uint64_t kCategorySolid = 1u << 0; // static and kinematic
     constexpr uint64_t kCategoryDynamic = 1u << 1;
     constexpr uint64_t kCategoryTrigger = 1u << 2;
     constexpr uint64_t kCategoryQuery = 1u << 3;
 
     constexpr int kSubStepCount = 4;
     constexpr float kGravity = -9.81f;
-    constexpr float kMinHalfExtent = 0.005f;   // Box3D rejects degenerate shapes
+    constexpr float kMinHalfExtent = 0.005f; // Box3D rejects degenerate shapes
     constexpr float kDynamicPushLimit = 0.02f; // how far a dynamic body may push the mover per solve
     constexpr int kMaxMoverPlanes = 32;
     constexpr int kMaxMoverIterations = 5;
@@ -29,8 +29,14 @@ namespace
         b3Quat rotation = b3Quat_identity;
     };
 
-    b3Vec3 ToB3(const Vector3& v) { return { v.x, v.y, v.z }; }
-    Vector3 FromB3(b3Vec3 v) { return { v.x, v.y, v.z }; }
+    b3Vec3 ToB3(const Vector3& v)
+    {
+        return { v.x, v.y, v.z };
+    }
+    Vector3 FromB3(b3Vec3 v)
+    {
+        return { v.x, v.y, v.z };
+    }
 
     // Entity rotations are applied X, then Y, then Z (render::TransformToMatrix).
     b3Quat QuatFromEuler(const Vector3& euler)
@@ -149,9 +155,7 @@ namespace
 
                     const b3Vec3 point = { static_cast<float>(x), static_cast<float>(y), static_cast<float>(z) };
                     const bool duplicate = std::any_of(points.begin(), points.end(), [&point](const b3Vec3& other)
-                    {
-                        return std::fabs(other.x - point.x) + std::fabs(other.y - point.y) + std::fabs(other.z - point.z) < 1e-4f;
-                    });
+                        { return std::fabs(other.x - point.x) + std::fabs(other.y - point.y) + std::fabs(other.z - point.z) < 1e-4f; });
                     if (!duplicate)
                         points.push_back(point);
                 }
@@ -229,7 +233,7 @@ struct CollisionWorld::Impl
         ColliderType type = ColliderType::Box;
         ColliderMotion motion = ColliderMotion::Static;
         Vector3 offset = {};
-        Pose previous;   // dynamic bodies: the last two steps, for interpolation
+        Pose previous; // dynamic bodies: the last two steps, for interpolation
         Pose current;
     };
 
@@ -262,8 +266,8 @@ struct CollisionWorld::Impl
         const ColliderHandle handle = nextHandle++;
         b3BodyDef def = b3DefaultBodyDef();
         def.type = desc.motion == ColliderMotion::Dynamic ? b3_dynamicBody
-                   : desc.motion == ColliderMotion::Kinematic ? b3_kinematicBody
-                                                              : b3_staticBody;
+            : desc.motion == ColliderMotion::Kinematic    ? b3_kinematicBody
+                                                          : b3_staticBody;
         def.position = b3ToPos(ToB3(desc.position));
         def.rotation = QuatFromEuler(desc.rotation);
 
@@ -305,7 +309,7 @@ struct CollisionWorld::Impl
     {
         const b3ShapeDef def = MakeShapeDef(handle, desc, isTrigger);
         const b3BoxHull box = b3MakeOffsetBoxHull(std::max(halfExtents.x, kMinHalfExtent), std::max(halfExtents.y, kMinHalfExtent),
-                                                  std::max(halfExtents.z, kMinHalfExtent), ToB3(offset));
+            std::max(halfExtents.z, kMinHalfExtent), ToB3(offset));
         b3CreateHullShape(entries[handle].body, &def, &box.base);
     }
 
@@ -372,7 +376,7 @@ ColliderHandle CollisionWorld::AddSphere(const Vector3& position, float radius, 
 }
 
 ColliderHandle CollisionWorld::AddCapsule(const Vector3& position, float radius, float halfHeight, bool isTrigger, const Vector3& offset,
-                                          ColliderMotion motion)
+    ColliderMotion motion)
 {
     RigidBodyDesc desc;
     desc.motion = motion;
@@ -385,7 +389,7 @@ ColliderHandle CollisionWorld::AddCapsule(const Vector3& position, float radius,
 }
 
 ColliderHandle CollisionWorld::AddConvex(const Vector3& position, const std::vector<CollisionPlane>& planes,
-                                         const Vector3& boundsMin, const Vector3& boundsMax, bool isTrigger)
+    const Vector3& boundsMin, const Vector3& boundsMax, bool isTrigger)
 {
     RigidBodyDesc desc;
     desc.motion = ColliderMotion::Static;
@@ -445,8 +449,8 @@ ColliderHandle CollisionWorld::AddRigidShapes(const std::vector<RigidShape>& sha
         {
             const b3Transform transform = { ToB3(shape.center), q };
             const b3BoxHull box = b3MakeTransformedBoxHull(std::max(shape.halfExtents.x, kMinHalfExtent),
-                                                           std::max(shape.halfExtents.y, kMinHalfExtent),
-                                                           std::max(shape.halfExtents.z, kMinHalfExtent), transform);
+                std::max(shape.halfExtents.y, kMinHalfExtent),
+                std::max(shape.halfExtents.z, kMinHalfExtent), transform);
             b3CreateHullShape(body, &def, &box.base);
         }
     }
@@ -514,7 +518,7 @@ void CollisionWorld::SetTargetPosition(ColliderHandle handle, const Vector3& pos
 }
 
 void CollisionWorld::SetTargetPose(ColliderHandle handle, const Vector3& parentPosition, const Vector3& parentRotation,
-                                   const Vector3& localPosition, const float localRotation[4], float timeStep)
+    const Vector3& localPosition, const float localRotation[4], float timeStep)
 {
     Impl::Entry* entry = impl->Find(handle);
     if (!entry)
@@ -744,14 +748,16 @@ std::size_t CollisionWorld::RaycastAll(const Ray& ray, std::vector<RaycastHit>& 
     const b3ShapeProxy pointProxy = { &point, 1, 0.0f };
     b3World_OverlapShape(impl->world, origin, &pointProxy, filter, overlapCallback, &context);
 
-    std::stable_sort(outHits.begin(), outHits.end(), [](const RaycastHit& a, const RaycastHit& b) { return a.distance < b.distance; });
+    std::stable_sort(outHits.begin(), outHits.end(), [](const RaycastHit& a, const RaycastHit& b)
+        { return a.distance < b.distance; });
 
     // One hit per collider: bodies can have several shapes.
     std::vector<RaycastHit> unique;
     unique.reserve(outHits.size());
     for (const RaycastHit& hit : outHits)
     {
-        const bool seen = std::any_of(unique.begin(), unique.end(), [&hit](const RaycastHit& other) { return other.other == hit.other; });
+        const bool seen = std::any_of(unique.begin(), unique.end(), [&hit](const RaycastHit& other)
+            { return other.other == hit.other; });
         if (!seen)
             unique.push_back(hit);
     }
@@ -798,7 +804,7 @@ Vector3 CollisionWorld::MoveCapsule(const Vector3& position, const Vector3& delt
     const b3Capsule capsule = { { 0.0f, -halfHeight, 0.0f }, { 0.0f, halfHeight, 0.0f }, radius };
     b3QueryFilter collideFilter = MakeQueryFilter(false);
     b3QueryFilter sweepFilter = collideFilter;
-    sweepFilter.maskBits = kCategorySolid;   // dynamic bodies are pushed, not hit
+    sweepFilter.maskBits = kCategorySolid; // dynamic bodies are pushed, not hit
 
     Vector3 current = position;
     const Vector3 target = position + delta;

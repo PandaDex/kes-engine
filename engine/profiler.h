@@ -57,18 +57,18 @@
 #undef KES_PROFILE_AUDIO
 #undef KES_PROFILE_IO
 #undef KES_PROFILE_UI
-#define KES_PROFILE_CORE 0
-#define KES_PROFILE_INPUT 0
-#define KES_PROFILE_WINDOW 0
-#define KES_PROFILE_RENDER 0
-#define KES_PROFILE_GPU 0
-#define KES_PROFILE_WORLD 0
+#define KES_PROFILE_CORE     0
+#define KES_PROFILE_INPUT    0
+#define KES_PROFILE_WINDOW   0
+#define KES_PROFILE_RENDER   0
+#define KES_PROFILE_GPU      0
+#define KES_PROFILE_WORLD    0
 #define KES_PROFILE_ENTITIES 0
-#define KES_PROFILE_PHYSICS 0
-#define KES_PROFILE_ASSETS 0
-#define KES_PROFILE_AUDIO 0
-#define KES_PROFILE_IO 0
-#define KES_PROFILE_UI 0
+#define KES_PROFILE_PHYSICS  0
+#define KES_PROFILE_ASSETS   0
+#define KES_PROFILE_AUDIO    0
+#define KES_PROFILE_IO       0
+#define KES_PROFILE_UI       0
 #endif
 
 #define KES_PROFILE_COLOR_CORE     0x9E9E9E
@@ -85,40 +85,40 @@
 #define KES_PROFILE_COLOR_UI       0xF4511E
 
 #if KES_PROFILING
-#define KES__PROF_ZONE_ON(name, color) ZoneScopedNC(name, color)
-#define KES__PROF_ZONE_FN_ON(color) ZoneScopedC(color)
+#define KES__PROF_ZONE_ON(name, color)   ZoneScopedNC(name, color)
+#define KES__PROF_ZONE_FN_ON(color)      ZoneScopedC(color)
 #define KES__PROF_ZONE_TEXT_ON(txt, len) ZoneText(txt, len)
-#define KES__PROF_ZONE_TEXTF_ON(...) ZoneTextF(__VA_ARGS__)
-#define KES__PROF_ZONE_VALUE_ON(value) ZoneValue(static_cast<uint64_t>(value))
+#define KES__PROF_ZONE_TEXTF_ON(...)     ZoneTextF(__VA_ARGS__)
+#define KES__PROF_ZONE_VALUE_ON(value)   ZoneValue(static_cast<uint64_t>(value))
 #endif
 #define KES__PROF_OFF(...) ((void)0)
 
-#define KES__PROF_SELECT_1(op) KES__PROF_##op##_ON
-#define KES__PROF_SELECT_0(op) KES__PROF_OFF
+#define KES__PROF_SELECT_1(op)          KES__PROF_##op##_ON
+#define KES__PROF_SELECT_0(op)          KES__PROF_OFF
 #define KES__PROF_SELECT_I(enabled, op) KES__PROF_SELECT_##enabled(op)
-#define KES__PROF_SELECT(enabled, op) KES__PROF_SELECT_I(enabled, op)
-#define KES__PROF_CAT(cat, op) KES__PROF_SELECT(KES_PROFILE_##cat, op)
+#define KES__PROF_SELECT(enabled, op)   KES__PROF_SELECT_I(enabled, op)
+#define KES__PROF_CAT(cat, op)          KES__PROF_SELECT(KES_PROFILE_##cat, op)
 
-#define KES_ZONE(cat, name) KES__PROF_CAT(cat, ZONE)(name, KES_PROFILE_COLOR_##cat)
-#define KES_ZONE_FN(cat) KES__PROF_CAT(cat, ZONE_FN)(KES_PROFILE_COLOR_##cat)
+#define KES_ZONE(cat, name)          KES__PROF_CAT(cat, ZONE)(name, KES_PROFILE_COLOR_##cat)
+#define KES_ZONE_FN(cat)             KES__PROF_CAT(cat, ZONE_FN)(KES_PROFILE_COLOR_##cat)
 #define KES_ZONE_TEXT(cat, txt, len) KES__PROF_CAT(cat, ZONE_TEXT)(txt, len)
-#define KES_ZONE_TEXTF(cat, ...) KES__PROF_CAT(cat, ZONE_TEXTF)(__VA_ARGS__)
-#define KES_ZONE_VALUE(cat, value) KES__PROF_CAT(cat, ZONE_VALUE)(value)
+#define KES_ZONE_TEXTF(cat, ...)     KES__PROF_CAT(cat, ZONE_TEXTF)(__VA_ARGS__)
+#define KES_ZONE_VALUE(cat, value)   KES__PROF_CAT(cat, ZONE_VALUE)(value)
 
 #if KES_PROFILING
-#define KES_PROFILE_FRAME() FrameMark
-#define KES_PROFILE_PLOT(name, value) TracyPlot(name, value)
-#define KES_PROFILE_MESSAGE(txt, len) TracyMessage(txt, len)
+#define KES_PROFILE_FRAME()            FrameMark
+#define KES_PROFILE_PLOT(name, value)  TracyPlot(name, value)
+#define KES_PROFILE_MESSAGE(txt, len)  TracyMessage(txt, len)
 #define KES_PROFILE_MESSAGE_L(literal) TracyMessageL(literal)
 #define KES_PROFILE_APP_INFO(txt, len) TracyAppInfo(txt, len)
-#define KES_PROFILE_THREAD_NAME(name) tracy::SetThreadName(name)
-#define KES_PROFILE_IS_CONNECTED() TracyIsConnected
+#define KES_PROFILE_THREAD_NAME(name)  tracy::SetThreadName(name)
+#define KES_PROFILE_IS_CONNECTED()     TracyIsConnected
 #else
-#define KES_PROFILE_FRAME() ((void)0)
-#define KES_PROFILE_PLOT(name, value) ((void)0)
-#define KES_PROFILE_MESSAGE(txt, len) ((void)0)
+#define KES_PROFILE_FRAME()            ((void)0)
+#define KES_PROFILE_PLOT(name, value)  ((void)0)
+#define KES_PROFILE_MESSAGE(txt, len)  ((void)0)
 #define KES_PROFILE_MESSAGE_L(literal) ((void)0)
 #define KES_PROFILE_APP_INFO(txt, len) ((void)0)
-#define KES_PROFILE_THREAD_NAME(name) ((void)0)
-#define KES_PROFILE_IS_CONNECTED() false
+#define KES_PROFILE_THREAD_NAME(name)  ((void)0)
+#define KES_PROFILE_IS_CONNECTED()     false
 #endif

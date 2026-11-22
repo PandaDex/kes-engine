@@ -1,0 +1,58 @@
+{
+    "advanced": {
+        "architecture": "x64",
+        "buildDir": "",
+        "buildToolArgs": [
+        ],
+        "cleanFirst": false,
+        "cmakeArgs": [
+        ],
+        "extraTargets": [
+        ],
+        "freshConfigure": false,
+        "gameTarget": "game",
+        "generator": "",
+        "jobs": 0
+    },
+    "configuration": "RelWithDebInfo",
+    "description": "Development (RelWithDebInfo) package with Tracy, for profiling outside the editor.",
+    "engine": {
+        "buildSamples": false,
+        "buildTests": false,
+        "crashDsn": "",
+        "crashReporter": true,
+        "debugTools": true,
+        "disabledProfilerCategories": [
+        ],
+        "engineShared": true,
+        "profilerOnDemand": false,
+        "profiling": true,
+        "rendererSelection": true,
+        "renderers": [
+        ],
+        "sanitize": false,
+        "warningsAsErrors": false
+    },
+    "formatVersion": 1,
+    "launch": {
+        "arguments": "",
+        "runAfterBuild": false,
+        "workingDir": ""
+    },
+    "name": "Profiling",
+    "package": {
+        "content": "pak",
+        "enabled": true,
+        "format": "folder",
+        "keyEnv": "KES_PAK_KEY",
+        "keySource": "none",
+        "outputDir": "",
+        "projectName": "",
+        "stripSources": true,
+        "suffix": "-profiling",
+        "symbols": "package",
+        "vcRuntime": false,
+        "version": ""
+    },
+    "platform": "Host"
+}

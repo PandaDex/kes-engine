@@ -33,13 +33,15 @@ bool LoadMeshFromFile(const char* path, MeshData& outMesh, std::string* outError
     {
         KModelData model = {};
         std::string error;
-        if (!LoadKModelFile(resolvedPath.c_str(), model, &error)) {
+        if (!LoadKModelFile(resolvedPath.c_str(), model, &error))
+        {
             EngineLogf("Mesh %s failed to load (%s); using the fallback model.", resolvedPath.c_str(), error.c_str());
             LoadKModelFile(ResolveAssetPath("engine/fallback.kmodel").c_str(), model, outError);
         }
         return BuildMeshDataFromKModel(model, outMesh, outError);
     }
-    else {
+    else
+    {
         EngineLogf("Mesh %s is not a .kmodel; using the fallback model.", resolvedPath.c_str());
         KModelData model = {};
         LoadKModelFile(ResolveAssetPath("engine/fallback.kmodel").c_str(), model, outError);

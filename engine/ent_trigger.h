@@ -12,7 +12,8 @@
 //   Filter         tag an entity needs to count (default "Player"); empty = every entity
 //   StartDisabled  ignore entities until the Enable input
 // MapScript: outputs OnStartTouch / OnEndTouch (activator = the entity), inputs Enable / Disable / Toggle
-class TriggerEntity : public Entity, public IMapScriptable
+class TriggerEntity : public Entity
+    , public IMapScriptable
 {
 public:
     TriggerEntity() = default;
@@ -35,6 +36,6 @@ private:
     std::string filterTag = kPlayerTag;
     bool enabled = true;
     std::unordered_set<uint64_t> overlappingEntities;
-    std::unordered_set<uint64_t> currentOverlaps;   // scratch, kept to reuse its storage
-    std::vector<Entity*> enteredEntities;           // scratch
+    std::unordered_set<uint64_t> currentOverlaps; // scratch, kept to reuse its storage
+    std::vector<Entity*> enteredEntities; // scratch
 };

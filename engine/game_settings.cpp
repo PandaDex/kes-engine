@@ -20,13 +20,13 @@
 
 namespace
 {
-    GameSettings *gActiveSettings = nullptr;
+    GameSettings* gActiveSettings = nullptr;
 
     constexpr float kMinResolutionScale = 10.0f;
     constexpr float kMaxResolutionScale = 100.0f;
     constexpr float kMaxFrameRateLimit = 1000.0f;
 
-    const char *WindowModeToString(WindowMode mode)
+    const char* WindowModeToString(WindowMode mode)
     {
         switch (mode)
         {
@@ -39,7 +39,7 @@ namespace
         }
     }
 
-    WindowMode WindowModeFromString(const std::string &text, WindowMode fallback)
+    WindowMode WindowModeFromString(const std::string& text, WindowMode fallback)
     {
         if (text == "Fullscreen" || text == "0")
             return WindowMode::Fullscreen;
@@ -50,7 +50,7 @@ namespace
         return fallback;
     }
 
-    const char *PostAntiAliasingToString(PostAntiAliasing mode)
+    const char* PostAntiAliasingToString(PostAntiAliasing mode)
     {
         switch (mode)
         {
@@ -63,7 +63,7 @@ namespace
         }
     }
 
-    PostAntiAliasing PostAntiAliasingFromString(const std::string &text, PostAntiAliasing fallback)
+    PostAntiAliasing PostAntiAliasingFromString(const std::string& text, PostAntiAliasing fallback)
     {
         if (SDL_strcasecmp(text.c_str(), "Off") == 0 || SDL_strcasecmp(text.c_str(), "None") == 0 || text == "0")
             return PostAntiAliasing::Off;
@@ -82,7 +82,7 @@ namespace
     };
 }
 
-GameSettings *GameSettings::GetGameSettings()
+GameSettings* GameSettings::GetGameSettings()
 {
     return gActiveSettings;
 }
@@ -95,14 +95,14 @@ void GameSettings::SetActiveInstance(bool active)
         gActiveSettings = nullptr;
 }
 
-void GameSettings::AttachEngine(AppWindow *window, IRenderer *renderer, const AppConfig *defaults)
+void GameSettings::AttachEngine(AppWindow* window, IRenderer* renderer, const AppConfig* defaults)
 {
     m_window = window;
     m_renderer = renderer;
     m_defaults = defaults;
 }
 
-void GameSettings::AttachAudio(AudioSystem *audio)
+void GameSettings::AttachAudio(AudioSystem* audio)
 {
     m_audio = audio;
     ApplyAudioSettings();
@@ -129,12 +129,12 @@ float GameSettings::GetAudioBusVolume(AudioBus bus) const
 
 void GameSettings::ApplyAudioSettings()
 {
-    auto fix = [](float &value)
+    auto fix = [](float& value)
     {
         value = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
     };
     fix(m_masterVolume);
-    for (float &volume : m_busVolumes)
+    for (float& volume : m_busVolumes)
         fix(volume);
     if (!m_audio)
         return;
@@ -143,7 +143,7 @@ void GameSettings::ApplyAudioSettings()
         m_audio->SetBusVolume(static_cast<AudioBus>(bus), m_busVolumes[bus]);
 }
 
-const AppConfig &GameSettings::Defaults() const
+const AppConfig& GameSettings::Defaults() const
 {
     static const AppConfig fallback = {};
     return m_defaults ? *m_defaults : fallback;
@@ -200,18 +200,19 @@ void GameSettings::SetResolutionScaleNormalized(float normalized)
 float GameSettings::GetResolutionScaleNormalized() const
 {
     return (std::clamp(m_resolutionScale, kMinResolutionScale, kMaxResolutionScale) - kMinResolutionScale) /
-           (kMaxResolutionScale - kMinResolutionScale);
+        (kMaxResolutionScale - kMinResolutionScale);
 }
 
 IntPoint GameSettings::GetRenderResolution() const
 {
     const float scale = std::clamp(m_resolutionScale, kMinResolutionScale, kMaxResolutionScale) / 100.0f;
-    IntPoint base = {Defaults().renderWidth, Defaults().renderHeight};
+    IntPoint base = { Defaults().renderWidth, Defaults().renderHeight };
     if (m_window && m_window->pixelWidth > 0 && m_window->pixelHeight > 0)
-        base = {m_window->pixelWidth, m_window->pixelHeight};
+        base = { m_window->pixelWidth, m_window->pixelHeight };
     return {
         std::max(1, static_cast<int>(std::lround(base.x * scale))),
-        std::max(1, static_cast<int>(std::lround(base.y * scale)))};
+        std::max(1, static_cast<int>(std::lround(base.y * scale)))
+    };
 }
 
 GraphicsOptions GameSettings::GetGraphicsOptions() const
@@ -273,7 +274,7 @@ void GameSettings::ApplyResolutionSettings(bool checkForCommandLineOverrides)
 {
     ValidateSettings();
 
-    EffectiveVideoMode effective = {m_resolution, m_fullscreenMode};
+    EffectiveVideoMode effective = { m_resolution, m_fullscreenMode };
     if (checkForCommandLineOverrides)
     {
         CommandLineGetInt("ResX", effective.resolution.x);
@@ -362,8 +363,8 @@ void GameSettings::ResetToCurrentSettings()
 
 void GameSettings::SetToDefaults()
 {
-    const AppConfig &defaults = Defaults();
-    m_resolution = {defaults.windowWidth, defaults.windowHeight};
+    const AppConfig& defaults = Defaults();
+    m_resolution = { defaults.windowWidth, defaults.windowHeight };
     m_lastConfirmedResolution = m_resolution;
     m_fullscreenMode = defaults.windowMode;
     m_lastConfirmedFullscreenMode = m_fullscreenMode;
@@ -396,7 +397,7 @@ void GameSettings::ValidateSettings()
 
     // Resolutions: keep windowed sizes inside the desktop; zero means "desktop".
     const IntPoint desktop = ::GetDesktopResolution(m_displayIndex);
-    auto fix = [&](IntPoint &value)
+    auto fix = [&](IntPoint& value)
     {
         if (value.x <= 0 || value.y <= 0)
             value = desktop;
@@ -422,14 +423,16 @@ void GameSettings::ValidateSettings()
         m_resolutionScale = 100.0f;
     m_resolutionScale = std::clamp(m_resolutionScale, kMinResolutionScale, kMaxResolutionScale);
 
-    auto fixSensitivity = [](float &value)
+    auto fixSensitivity = [](float& value)
     {
         if (!std::isfinite(value))
             value = 1.0f;
         value = std::clamp(value, 0.05f, 10.0f);
     };
     m_shadowQuality = static_cast<ShadowQuality>(std::clamp(static_cast<int>(m_shadowQuality), 0, 3));
-    m_msaaSamples = m_msaaSamples >= 8 ? 8 : m_msaaSamples >= 4 ? 4 : m_msaaSamples >= 2 ? 2 : 1;
+    m_msaaSamples = m_msaaSamples >= 8 ? 8 : m_msaaSamples >= 4 ? 4
+        : m_msaaSamples >= 2                                    ? 2
+                                                                : 1;
     m_postAntiAliasing = static_cast<PostAntiAliasing>(std::clamp(static_cast<int>(m_postAntiAliasing), 0, 2));
     m_anisotropy = std::clamp(m_anisotropy, 1, 16);
     if (!std::isfinite(m_shadowDistance))
@@ -459,7 +462,7 @@ std::string GameSettings::GetDefaultSettingsFilePath() const
     return (GetExecutableDirectory() / "config" / "DefaultGameSettings.ini").string();
 }
 
-void GameSettings::ReadFromIni(const IniFile &ini)
+void GameSettings::ReadFromIni(const IniFile& ini)
 {
     m_resolution.x = ini.GetInt(kSection, "ResolutionSizeX", m_resolution.x);
     m_resolution.y = ini.GetInt(kSection, "ResolutionSizeY", m_resolution.y);
@@ -493,7 +496,7 @@ void GameSettings::ReadFromIni(const IniFile &ini)
         m_preferredRenderer = renderer;
 }
 
-void GameSettings::WriteToIni(IniFile &ini) const
+void GameSettings::WriteToIni(IniFile& ini) const
 {
     ini.SetInt(kSection, "Version", kSettingsVersion);
     ini.SetInt(kSection, "ResolutionSizeX", m_resolution.x);
@@ -555,10 +558,10 @@ void GameSettings::LoadSettings(bool forceReload)
     m_loaded = true;
 
     EngineLogf("game settings loaded (%s%s): %dx%d %s, vsync %s, fps limit %.0f, resolution scale %.0f%%.",
-               haveUser ? userPath.c_str() : "no user file",
-               haveDefaults ? ", with project defaults" : "",
-               m_resolution.x, m_resolution.y, WindowModeToString(m_fullscreenMode),
-               m_vsync ? "on" : "off", m_frameRateLimit, m_resolutionScale);
+        haveUser ? userPath.c_str() : "no user file",
+        haveDefaults ? ", with project defaults" : "",
+        m_resolution.x, m_resolution.y, WindowModeToString(m_fullscreenMode),
+        m_vsync ? "on" : "off", m_frameRateLimit, m_resolutionScale);
 }
 
 void GameSettings::SaveSettings()
@@ -574,11 +577,35 @@ void GameSettings::SaveSettings()
 
 // Custom values
 
-void GameSettings::SetCustomString(std::string_view key, std::string_view value) { m_ini.SetString(kCustomSection, key, value); }
-void GameSettings::SetCustomFloat(std::string_view key, float value) { m_ini.SetFloat(kCustomSection, key, value); }
-void GameSettings::SetCustomInt(std::string_view key, int value) { m_ini.SetInt(kCustomSection, key, value); }
-void GameSettings::SetCustomBool(std::string_view key, bool value) { m_ini.SetBool(kCustomSection, key, value); }
-std::string GameSettings::GetCustomString(std::string_view key, std::string_view fallback) const { return m_ini.GetString(kCustomSection, key, fallback); }
-float GameSettings::GetCustomFloat(std::string_view key, float fallback) const { return m_ini.GetFloat(kCustomSection, key, fallback); }
-int GameSettings::GetCustomInt(std::string_view key, int fallback) const { return m_ini.GetInt(kCustomSection, key, fallback); }
-bool GameSettings::GetCustomBool(std::string_view key, bool fallback) const { return m_ini.GetBool(kCustomSection, key, fallback); }
+void GameSettings::SetCustomString(std::string_view key, std::string_view value)
+{
+    m_ini.SetString(kCustomSection, key, value);
+}
+void GameSettings::SetCustomFloat(std::string_view key, float value)
+{
+    m_ini.SetFloat(kCustomSection, key, value);
+}
+void GameSettings::SetCustomInt(std::string_view key, int value)
+{
+    m_ini.SetInt(kCustomSection, key, value);
+}
+void GameSettings::SetCustomBool(std::string_view key, bool value)
+{
+    m_ini.SetBool(kCustomSection, key, value);
+}
+std::string GameSettings::GetCustomString(std::string_view key, std::string_view fallback) const
+{
+    return m_ini.GetString(kCustomSection, key, fallback);
+}
+float GameSettings::GetCustomFloat(std::string_view key, float fallback) const
+{
+    return m_ini.GetFloat(kCustomSection, key, fallback);
+}
+int GameSettings::GetCustomInt(std::string_view key, int fallback) const
+{
+    return m_ini.GetInt(kCustomSection, key, fallback);
+}
+bool GameSettings::GetCustomBool(std::string_view key, bool fallback) const
+{
+    return m_ini.GetBool(kCustomSection, key, fallback);
+}

@@ -9,7 +9,8 @@ namespace
 {
     bool HasPort(const std::vector<MapScriptPort>& ports, std::string_view name)
     {
-        return std::any_of(ports.begin(), ports.end(), [&](const MapScriptPort& port) { return port.name == name; });
+        return std::any_of(ports.begin(), ports.end(), [&](const MapScriptPort& port)
+            { return port.name == name; });
     }
 
     const char* NameOf(const Entity* entity)
@@ -81,8 +82,8 @@ void MapScriptSystem::FireOutput(Entity& source, std::string_view output, Entity
         pending.push_back(std::move(event));
     }
     list.erase(std::remove_if(list.begin(), list.end(), [&](const MapScriptLink& link)
-                              { return link.once && link.output == output; }),
-               list.end());
+                   { return link.once && link.output == output; }),
+        list.end());
 }
 
 bool MapScriptSystem::SendInput(Entity& target, const std::string& input, Entity* caller, Entity* activator, const std::string& value)
@@ -93,7 +94,7 @@ bool MapScriptSystem::SendInput(Entity& target, const std::string& input, Entity
     if (!scriptable)
     {
         EngineLogf("MapScript: %s (%s) takes no inputs; \"%s\" ignored.",
-                   NameOf(&target), target.GetGuid().ToString().c_str(), input.c_str());
+            NameOf(&target), target.GetGuid().ToString().c_str(), input.c_str());
         return false;
     }
     if (input == "Kill")
@@ -105,7 +106,7 @@ bool MapScriptSystem::SendInput(Entity& target, const std::string& input, Entity
     if (scriptable->AcceptInput(input, call))
         return true;
     EngineLogf("MapScript: %s (%s) does not handle input \"%s\".",
-               NameOf(&target), target.GetGuid().ToString().c_str(), input.c_str());
+        NameOf(&target), target.GetGuid().ToString().c_str(), input.c_str());
     return false;
 }
 
@@ -118,21 +119,22 @@ void MapScriptSystem::Update(float dt)
 
     // Due events are taken out first: inputs may fire outputs, which append to `pending`.
     std::vector<Event> due;
-    auto split = std::stable_partition(pending.begin(), pending.end(), [&](const Event& e) { return e.dueTime > time; });
+    auto split = std::stable_partition(pending.begin(), pending.end(), [&](const Event& e)
+        { return e.dueTime > time; });
     due.assign(std::make_move_iterator(split), std::make_move_iterator(pending.end()));
     pending.erase(split, pending.end());
     std::sort(due.begin(), due.end(), [](const Event& a, const Event& b)
-              { return a.dueTime != b.dueTime ? a.dueTime < b.dueTime : a.order < b.order; });
+        { return a.dueTime != b.dueTime ? a.dueTime < b.dueTime : a.order < b.order; });
 
     const uint64_t startGeneration = generation;
     dispatching = true;
     for (const Event& event : due)
     {
         if (generation != startGeneration)
-            break;   // the level was cleared by an input
+            break; // the level was cleared by an input
         Entity* target = Find(event.target);
         if (!target)
-            continue;   // killed, or never spawned (unregistered class)
+            continue; // killed, or never spawned (unregistered class)
         SendInput(*target, event.input, Find(event.caller), Find(event.activator), event.value);
     }
     dispatching = false;

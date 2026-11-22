@@ -36,7 +36,7 @@ struct GameContext;
 struct MapScriptPort
 {
     std::string name;
-    std::string type = "void";   // parameter type, as in the .dec: void, string, float, integer, bool
+    std::string type = "void"; // parameter type, as in the .dec: void, string, float, integer, bool
 };
 
 struct MapScriptPorts
@@ -52,9 +52,9 @@ struct MapScriptPorts
 // time a delayed link arrives.
 struct MapScriptCall
 {
-    Entity* caller = nullptr;      // entity whose output fired
-    Entity* activator = nullptr;   // entity that started the chain (e.g. the player in a trigger)
-    std::string value;             // link parameter, or the value the output fired with
+    Entity* caller = nullptr; // entity whose output fired
+    Entity* activator = nullptr; // entity that started the chain (e.g. the player in a trigger)
+    std::string value; // link parameter, or the value the output fired with
 };
 
 class IMapScriptable
@@ -71,9 +71,9 @@ struct MapScriptLink
     std::string output;
     Guid target;
     std::string input;
-    std::string parameter;   // "" = pass the output's value through
-    float delay = 0.0f;      // seconds
-    bool once = false;       // removed after it fires
+    std::string parameter; // "" = pass the output's value through
+    float delay = 0.0f; // seconds
+    bool once = false; // removed after it fires
 };
 
 // Owns the links of the current map and delivers inputs. Outputs are queued and delivered in
@@ -93,7 +93,7 @@ public:
     // Sends an input now, bypassing links (game code, console). False when the target doesn't
     // take MapScript inputs or rejects this one.
     bool SendInput(Entity& target, const std::string& input, Entity* caller = nullptr,
-                   Entity* activator = nullptr, const std::string& value = {});
+        Entity* activator = nullptr, const std::string& value = {});
 
     void Update(float dt);
     size_t GetPendingEventCount() const { return pending.size(); }
@@ -105,7 +105,7 @@ private:
     struct Event
     {
         double dueTime = 0.0;
-        uint64_t order = 0;   // keeps events due at the same time in firing order
+        uint64_t order = 0; // keeps events due at the same time in firing order
         Guid target;
         Guid caller;
         Guid activator;
@@ -120,6 +120,6 @@ private:
     std::vector<Event> pending;
     double time = 0.0;
     uint64_t nextOrder = 0;
-    uint64_t generation = 0;   // bumped by Clear(), ends a delivery the level was cleared in
+    uint64_t generation = 0; // bumped by Clear(), ends a delivery the level was cleared in
     bool dispatching = false;
 };

@@ -16,8 +16,8 @@ struct SceneState
 {
     // Ambient environment when no sky is active (a uniform environment:
     // diffuse and reflections). With a sky, ambient light comes from the sky.
-    float ambient[3] = {0.25f, 0.25f, 0.25f};
-    float exposure = 1.0f;   // HDR exposure before tonemapping
+    float ambient[3] = { 0.25f, 0.25f, 0.25f };
+    float exposure = 1.0f; // HDR exposure before tonemapping
 
     bool wireframe = false;
     bool animDebug = false;
@@ -26,9 +26,9 @@ struct SceneState
 enum class ShadowQuality
 {
     Off = 0,
-    Low = 1,      // 2 sun cascades at 1024, 6 local shadow slices at 512
-    Medium = 2,   // 3 cascades at 2048, 8 local slices at 512
-    High = 3,     // 4 cascades at 2048, 12 local slices at 1024
+    Low = 1, // 2 sun cascades at 1024, 6 local shadow slices at 512
+    Medium = 2, // 3 cascades at 2048, 8 local slices at 512
+    High = 3, // 4 cascades at 2048, 12 local slices at 1024
 };
 
 // Post-process anti-aliasing on the tonemapped image, independent of MSAA
@@ -36,27 +36,27 @@ enum class ShadowQuality
 enum class PostAntiAliasing
 {
     Off = 0,
-    FXAA = 1,    // FXAA 3.11 quality, single fullscreen pass
-    CMAA2 = 2,   // Intel CMAA2 (compute), sharper and more conservative than FXAA
+    FXAA = 1, // FXAA 3.11 quality, single fullscreen pass
+    CMAA2 = 2, // Intel CMAA2 (compute), sharper and more conservative than FXAA
 };
 
 // Player-facing quality options (GameSettings), applied with
 // IRenderer::SetGraphicsOptions. Unsupported values are clamped by the backend.
 struct GraphicsOptions
 {
-    int msaaSamples = 4;   // 1, 2, 4 or 8
+    int msaaSamples = 4; // 1, 2, 4 or 8
     PostAntiAliasing postAntiAliasing = PostAntiAliasing::Off;
     ShadowQuality shadowQuality = ShadowQuality::High;
-    int anisotropy = 8;    // 1-16
-    float shadowDistance = 60.0f;   // meters covered by the sun cascades
+    int anisotropy = 8; // 1-16
+    float shadowDistance = 60.0f; // meters covered by the sun cascades
 
-    bool operator==(const GraphicsOptions &other) const
+    bool operator==(const GraphicsOptions& other) const
     {
         return msaaSamples == other.msaaSamples && postAntiAliasing == other.postAntiAliasing &&
-               shadowQuality == other.shadowQuality &&
-               anisotropy == other.anisotropy && shadowDistance == other.shadowDistance;
+            shadowQuality == other.shadowQuality &&
+            anisotropy == other.anisotropy && shadowDistance == other.shadowDistance;
     }
-    bool operator!=(const GraphicsOptions &other) const { return !(*this == other); }
+    bool operator!=(const GraphicsOptions& other) const { return !(*this == other); }
 };
 
 // 2D UI geometry for one frame, built by the UI system (ui_system.h) and
@@ -66,7 +66,7 @@ struct UiVertex
 {
     float x = 0.0f;
     float y = 0.0f;
-    uint8_t color[4] = {255, 255, 255, 255};   // RGBA8, premultiplied
+    uint8_t color[4] = { 255, 255, 255, 255 }; // RGBA8, premultiplied
     float u = 0.0f;
     float v = 0.0f;
 };
@@ -89,13 +89,13 @@ struct UiDrawCommand
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
     bool scissorEnabled = false;
-    UiScissorRect scissor = {};   // backbuffer pixels, used when scissorEnabled
+    UiScissorRect scissor = {}; // backbuffer pixels, used when scissorEnabled
 };
 
 struct UiDrawList
 {
     std::vector<UiVertex> vertices;
-    std::vector<uint32_t> indices;    // absolute indices into vertices
+    std::vector<uint32_t> indices; // absolute indices into vertices
     std::vector<UiDrawCommand> commands;
 
     void Clear()
@@ -114,7 +114,7 @@ public:
 
     virtual RendererBackend GetBackend() const = 0;
 
-    virtual bool Init(SDL_Window *window, const AppConfig &config) = 0;
+    virtual bool Init(SDL_Window* window, const AppConfig& config) = 0;
     virtual void Shutdown() = 0;
 
     // Backbuffer size in pixels (window drawable size).
@@ -130,41 +130,41 @@ public:
     virtual bool IsVSyncEnabled() const = 0;
 
     // MSAA, post AA, shadow quality, texture filtering. May recreate render targets.
-    virtual void SetGraphicsOptions(const GraphicsOptions &options) = 0;
+    virtual void SetGraphicsOptions(const GraphicsOptions& options) = 0;
     virtual GraphicsOptions GetGraphicsOptions() const = 0;
 
-    virtual void RenderScene(const SceneState &scene, const Camera &camera, const Scene &sceneObj, const AssetSystem &assets) = 0;
+    virtual void RenderScene(const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets) = 0;
     // Uploads every mesh, texture and pipeline the asset system holds, so the
     // first frames of a level don't stall on uploads. After a level change it
     // also frees textures the new assets don't use (the rest are kept). Call
     // between frames, e.g. right after a map load.
-    virtual void PreloadAssets(const AssetSystem &assets) { (void)assets; }
+    virtual void PreloadAssets(const AssetSystem& assets) { (void)assets; }
     virtual void BeginBackbufferOverlay() = 0;
 
     // UI textures (fonts, images). Pixels are tightly packed RGBA8 with
     // premultiplied alpha. Safe to call at any time; destruction is deferred
     // until the GPU no longer uses the texture.
-    virtual UiTextureHandle CreateUiTexture(int width, int height, const uint8_t *rgbaPixels) = 0;
+    virtual UiTextureHandle CreateUiTexture(int width, int height, const uint8_t* rgbaPixels) = 0;
     virtual void DestroyUiTexture(UiTextureHandle texture) = 0;
 
     // Draws the UI over the full backbuffer (not the letterboxed scene
     // viewport). Call between BeginBackbufferOverlay and Present.
-    virtual void RenderUi(const UiDrawList &drawList) = 0;
+    virtual void RenderUi(const UiDrawList& drawList) = 0;
 
     virtual void Present() = 0;
 
     // Non-empty once the GPU failed for good (device lost, submit failed).
     // Further rendering calls are ignored; the engine reports it and exits.
-    virtual const std::string &GetFatalError() const = 0;
+    virtual const std::string& GetFatalError() const = 0;
 };
 
-const char *RendererBackendName(RendererBackend backend);
+const char* RendererBackendName(RendererBackend backend);
 
 // Parses "vulkan", "vk", "d3d11", "dx11", "auto"
-bool ParseRendererBackend(const char *text, RendererBackend &outBackend);
+bool ParseRendererBackend(const char* text, RendererBackend& outBackend);
 
 // Backends compiled into this build for the current platform, in priority order.
-const std::vector<RendererBackend> &GetAvailableRendererBackends();
+const std::vector<RendererBackend>& GetAvailableRendererBackends();
 bool IsRendererBackendAvailable(RendererBackend backend);
 
 // False when the platform build forces a single backend (only one compiled in,
@@ -177,4 +177,4 @@ SDL_WindowFlags GetRendererWindowFlags(RendererBackend backend);
 std::vector<RendererBackend> BuildRendererCandidateList(RendererBackend configured);
 
 std::unique_ptr<IRenderer> CreateRenderer(RendererBackend backend);
-void RendererUpdateScene(SceneState &scene, const InputState &input);
+void RendererUpdateScene(SceneState& scene, const InputState& input);

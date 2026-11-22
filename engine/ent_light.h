@@ -3,7 +3,8 @@
 #include "map_script.h"
 #include "scene.h"
 
-class LightEntity : public Entity, public IMapScriptable
+class LightEntity : public Entity
+    , public IMapScriptable
 {
 public:
     LightEntity(LightType type = LightType::Point);
@@ -33,5 +34,5 @@ private:
 
     uint32_t lightId = 0;
     Light lightData;
-    bool castShadowsSet = false;   // "CastShadows" given by the map
+    bool castShadowsSet = false; // "CastShadows" given by the map
 };

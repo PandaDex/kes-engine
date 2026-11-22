@@ -86,9 +86,18 @@ namespace
         const float3 yaxis = Cross(zaxis, xaxis);
 
         float4x4 r = {};
-        r.m[0][0] = xaxis.x; r.m[0][1] = yaxis.x; r.m[0][2] = zaxis.x; r.m[0][3] = 0.0f;
-        r.m[1][0] = xaxis.y; r.m[1][1] = yaxis.y; r.m[1][2] = zaxis.y; r.m[1][3] = 0.0f;
-        r.m[2][0] = xaxis.z; r.m[2][1] = yaxis.z; r.m[2][2] = zaxis.z; r.m[2][3] = 0.0f;
+        r.m[0][0] = xaxis.x;
+        r.m[0][1] = yaxis.x;
+        r.m[0][2] = zaxis.x;
+        r.m[0][3] = 0.0f;
+        r.m[1][0] = xaxis.y;
+        r.m[1][1] = yaxis.y;
+        r.m[1][2] = zaxis.y;
+        r.m[1][3] = 0.0f;
+        r.m[2][0] = xaxis.z;
+        r.m[2][1] = yaxis.z;
+        r.m[2][2] = zaxis.z;
+        r.m[2][3] = 0.0f;
         r.m[3][0] = -Dot(xaxis, eye);
         r.m[3][1] = -Dot(yaxis, eye);
         r.m[3][2] = -Dot(zaxis, eye);

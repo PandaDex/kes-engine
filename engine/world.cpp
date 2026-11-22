@@ -30,16 +30,16 @@ namespace
 {
     constexpr const char* kBuiltInPlayerClassName = ENGINE_DEFAULT_PLAYER_CLASS_NAME;
 
-    template <typename T>
+    template<typename T>
     static void RegisterBuiltInEntityClass(EntityFactoryRegistry& registry, const char* className)
     {
         static_assert(std::is_base_of_v<Entity, T>, "Built-in entities must derive from Entity");
         registry.Register(className,
-                          [](EntityManager& manager, GameContext& context) -> Entity*
-                          {
-                              (void)context;
-                              return manager.CreateEntity<T>();
-                          });
+            [](EntityManager& manager, GameContext& context) -> Entity*
+            {
+                (void)context;
+                return manager.CreateEntity<T>();
+            });
     }
 
     std::string FormatVector(const Vector3& v)
@@ -196,7 +196,7 @@ bool World::LoadMap(const char* mapName)
         // The file is read before anything is torn down, so a bad map name
         // (typo in a trigger, missing pak) leaves the current level playable.
         EngineLogf("LoadMap failed for %s: %s%s", mapName ? mapName : "<null>", error.c_str(),
-                   currentMapName.empty() ? "" : " Keeping the current level.");
+            currentMapName.empty() ? "" : " Keeping the current level.");
         return false;
     }
 
@@ -211,7 +211,7 @@ bool World::LoadMap(const char* mapName)
         EngineLogf("No player entity was created for %s (player class \"%s\").", mapName, playerClassName.c_str());
     entities.StartPending();
     EngineLogf("Map loaded successfully: %s (%zu meshes, %zu brushes, %zu entities, %zu materials).",
-               mapName ? mapName : "<null>", map.meshes.size(), map.brushes.size(), map.entities.size(), map.materials.size());
+        mapName ? mapName : "<null>", map.meshes.size(), map.brushes.size(), map.entities.size(), map.materials.size());
     return true;
 }
 
@@ -315,7 +315,7 @@ void World::ClearLevelState()
     mapScript.Clear();
     collision.Clear();
     scene.Clear();
-    gameContext.activeCameraEntityId = 0;   // the camera entity is gone
+    gameContext.activeCameraEntityId = 0; // the camera entity is gone
     SyncContext();
 }
 
@@ -380,12 +380,12 @@ void World::InstantiateMap(const CompiledMap& map)
         spawned[index] = entity;
         if (source.guid.IsValid() && !entities.SetEntityGuid(*entity, source.guid))
             EngineLogf("Map entity \"%s\" (%s) reuses GUID %s; it keeps a runtime GUID and links to it are lost.",
-                       source.name.c_str(), source.className.c_str(), source.guid.ToString().c_str());
+                source.name.c_str(), source.className.c_str(), source.guid.ToString().c_str());
 
         entity->Rotation = ConvertMapAngles(source.angles);
         entity->Teleport(ConvertMapPosition(source.origin));
         if (!source.name.empty())
-            entity->Tags.push_back(source.name);   // map names double as tags (GetEntityOfClassWithTag)
+            entity->Tags.push_back(source.name); // map names double as tags (GetEntityOfClassWithTag)
 
         if (source.solid)
             entity->ApplyProperty("Size", FormatVector(ConvertMapExtents(source.maxs - source.mins)));
@@ -440,7 +440,7 @@ void World::LinkMapScript(const CompiledMap& map, const std::vector<Entity*>& sp
         if (!scriptable)
         {
             EngineLogf("MapScript: %s \"%s\" has %zu link(s) but does not implement IMapScriptable; they never fire.",
-                       source.className.c_str(), source.name.c_str(), source.outputs.size());
+                source.className.c_str(), source.name.c_str(), source.outputs.size());
             continue;
         }
 
@@ -448,20 +448,20 @@ void World::LinkMapScript(const CompiledMap& map, const std::vector<Entity*>& sp
         {
             if (!scriptable->GetMapScriptPorts().HasOutput(connection.output))
                 EngineLogf("MapScript: %s \"%s\" has no output \"%s\".",
-                           source.className.c_str(), source.name.c_str(), connection.output.c_str());
+                    source.className.c_str(), source.name.c_str(), connection.output.c_str());
 
             Entity* target = entities.GetEntityByGuid(connection.target);
             const IMapScriptable* targetScript = dynamic_cast<const IMapScriptable*>(target);
             if (!target)
                 EngineLogf("MapScript: %s \"%s\" output \"%s\" targets %s, which is not in the map.",
-                           source.className.c_str(), source.name.c_str(), connection.output.c_str(),
-                           connection.target.ToString().c_str());
+                    source.className.c_str(), source.name.c_str(), connection.output.c_str(),
+                    connection.target.ToString().c_str());
             else if (!targetScript)
                 EngineLogf("MapScript: the target of %s \"%s\" output \"%s\" takes no inputs.",
-                           source.className.c_str(), source.name.c_str(), connection.output.c_str());
+                    source.className.c_str(), source.name.c_str(), connection.output.c_str());
             else if (!targetScript->GetMapScriptPorts().HasInput(connection.input))
                 EngineLogf("MapScript: the target of %s \"%s\" output \"%s\" has no input \"%s\".",
-                           source.className.c_str(), source.name.c_str(), connection.output.c_str(), connection.input.c_str());
+                    source.className.c_str(), source.name.c_str(), connection.output.c_str(), connection.input.c_str());
 
             MapScriptLink link;
             link.output = connection.output;
@@ -495,12 +495,12 @@ void World::RegisterBuiltInEntityClasses()
     RegisterBuiltInEntityClass<LogicAutoEntity>(entityFactories, "LogicAutoEntity");
 
     entityFactories.Register(kBuiltInPlayerClassName,
-                             [](EntityManager& manager, GameContext& context) -> Entity*
-                             {
-                                 if (!context.input)
-                                     return nullptr;
-                                 return manager.CreateEntity<EnginePlayerEntity>(*context.input);
-                             });
+        [](EntityManager& manager, GameContext& context) -> Entity*
+        {
+            if (!context.input)
+                return nullptr;
+            return manager.CreateEntity<EnginePlayerEntity>(*context.input);
+        });
 }
 
 Entity* World::CreatePlayerEntity()
@@ -533,8 +533,8 @@ Entity* World::CreatePlayerEntity()
     if (!player && playerClassName != kBuiltInPlayerClassName)
     {
         EngineLogf("Player class %s is not registered. Falling back to %s.",
-                   playerClassName.c_str(),
-                   kBuiltInPlayerClassName);
+            playerClassName.c_str(),
+            kBuiltInPlayerClassName);
         player = entityFactories.Create(kBuiltInPlayerClassName, entities, gameContext);
     }
     if (!player)
@@ -550,11 +550,10 @@ CameraEntity* World::FindStartupCameraEntity() const
 {
     CameraEntity* startupCamera = nullptr;
     entities.ForEachActive([&](Entity& entity)
-    {
+        {
         CameraEntity* camera = dynamic_cast<CameraEntity*>(&entity);
         if (camera && camera->WantsToBeActiveOnStart())
-            startupCamera = camera;
-    });
+            startupCamera = camera; });
     return startupCamera;
 }
 

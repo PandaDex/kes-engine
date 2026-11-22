@@ -14,7 +14,7 @@ struct Guid
 
     bool IsValid() const { return high != 0 || low != 0; }
 
-    static Guid Generate();   // random (version 4)
+    static Guid Generate(); // random (version 4)
     // 16 bytes in RFC 4122 (big-endian) order, as written by the map compiler.
     static Guid FromBytes(const uint8_t bytes[16]);
     // "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", optionally in braces. False on bad input.

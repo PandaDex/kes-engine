@@ -18,7 +18,7 @@ endif()
 
 target_link_libraries(model-import-core PRIVATE engine windowscodecs ole32 mfplat mfreadwrite mfuuid)
 target_include_directories(model-import-core PRIVATE
-    "../../../external/cgltf"
+    "../../external/cgltf"
 )
 
 # Command-line front end; the Forge editor runs it to import assets.
@@ -31,3 +31,4 @@ if (CMAKE_VERSION VERSION_GREATER 3.12)
 endif()
 
 target_link_libraries(model-importer PRIVATE model-import-core engine)
+bundle_runtime_libs(model-importer)

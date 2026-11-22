@@ -44,8 +44,7 @@ inline std::filesystem::path GetExecutableDirectory()
     const ssize_t length = readlink(
         "/proc/self/exe",
         modulePath,
-        sizeof(modulePath) - 1
-    );
+        sizeof(modulePath) - 1);
 
     if (length <= 0)
         return {};

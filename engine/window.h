@@ -11,14 +11,14 @@ struct AppWindow
 {
     SDL_Window* handle = nullptr;
 
-    int width = 0;          // logical size (points)
+    int width = 0; // logical size (points)
     int height = 0;
-    int pixelWidth = 0;     // drawable size in pixels (what the renderer presents to)
+    int pixelWidth = 0; // drawable size in pixels (what the renderer presents to)
     int pixelHeight = 0;
 
     WindowMode mode = WindowMode::Windowed;
     int displayIndex = 0;
-    IntPoint windowedSize = { 1280, 720 };   // restored when leaving fullscreen
+    IntPoint windowedSize = { 1280, 720 }; // restored when leaving fullscreen
 
     bool shown = false;
     bool minimized = false;
@@ -28,7 +28,7 @@ struct AppWindow
     // Requested cursor state. Applied only while the window has focus; on
     // focus loss the cursor is always released so alt-tab works.
     bool cursorVisible = true;
-    bool mouseLocked = false;   // relative mode: hidden, confined, raw deltas
+    bool mouseLocked = false; // relative mode: hidden, confined, raw deltas
 };
 
 struct WindowDesc
@@ -38,7 +38,7 @@ struct WindowDesc
     int height = 720;
     WindowMode mode = WindowMode::Windowed;
     int displayIndex = 0;
-    SDL_WindowFlags extraFlags = 0;   // backend flags, see GetRendererWindowFlags()
+    SDL_WindowFlags extraFlags = 0; // backend flags, see GetRendererWindowFlags()
 };
 
 bool CreateAppWindow(AppWindow& outWindow, const WindowDesc& desc);
@@ -68,7 +68,7 @@ uint32_t AppWindowHandleEvent(AppWindow& window, const SDL_Event& event);
 
 // Cursor
 void SetAppWindowCursor(AppWindow& window, bool visible, bool locked);
-void ApplyAppWindowCursor(AppWindow& window);   // re-apply after focus changes
+void ApplyAppWindowCursor(AppWindow& window); // re-apply after focus changes
 
 // Displays (index 0 = primary)
 int GetDisplayCount();

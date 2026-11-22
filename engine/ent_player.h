@@ -5,9 +5,9 @@
 
 enum class PlayerMovementMode
 {
-    Walking,   // gravity, jumping, steps and slopes
-    Flying,    // free flight that still collides
-    Noclip,    // free flight through everything
+    Walking, // gravity, jumping, steps and slopes
+    Flying, // free flight that still collides
+    Noclip, // free flight through everything
 };
 
 // Default first-person player. Position is the center of its collision
@@ -64,7 +64,7 @@ protected:
 
     InputState& input;
     PlayerMovementMode movementMode = PlayerMovementMode::Walking;
-    float moveSpeed = 4.0f;           // walking
+    float moveSpeed = 4.0f; // walking
     float sprintSpeed = 7.0f;
     float flySpeed = 6.0f;
     float groundAcceleration = 50.0f;
@@ -73,13 +73,13 @@ protected:
     float jumpHeight = 1.1f;
     float gravity = 20.0f;
     float stepHeight = 0.4f;
-    float maxSlopeCos = 0.7f;         // ~45 degrees
-    float eyeOffset = 0.7f;           // eye above the capsule center (1.6 m above the feet)
-    float mouseLookScale = 0.0035f;   // radians per mouse count
-    float stickLookSpeed = 3.0f;      // radians per second at full tilt
+    float maxSlopeCos = 0.7f; // ~45 degrees
+    float eyeOffset = 0.7f; // eye above the capsule center (1.6 m above the feet)
+    float mouseLookScale = 0.0035f; // radians per mouse count
+    float stickLookSpeed = 3.0f; // radians per second at full tilt
     float colliderRadius = 0.35f;
     float colliderHalfHeight = 0.55f; // capsule 1.8 m tall
-    float fallRespawnDepth = 200.0f;  // meters below the spawn point that count as fallen out of the map
+    float fallRespawnDepth = 200.0f; // meters below the spawn point that count as fallen out of the map
     ColliderHandle collider = 0;
 
 private:
@@ -89,10 +89,10 @@ private:
     void OnDestroy() override;
 
     Vector3 velocity = {};
-    Vector3 previousPosition = {};   // last fixed step, for interpolation
+    Vector3 previousPosition = {}; // last fixed step, for interpolation
     Vector3 spawnPosition = {};
     bool grounded = false;
-    float jumpBuffer = 0.0f;         // seconds a jump press stays queued
-    float coyoteTime = 0.0f;         // seconds a jump is still allowed after walking off a ledge
+    float jumpBuffer = 0.0f; // seconds a jump press stays queued
+    float coyoteTime = 0.0f; // seconds a jump is still allowed after walking off a ledge
     uint64_t lastBoundCameraEntityId = 0;
 };

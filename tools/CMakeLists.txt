@@ -5,11 +5,18 @@ set(KES_TOOLS_BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bin" CACHE PATH "Where built 
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
 
+set(KES_ENGINE_BUILT_TOOLS pakTool modelImporter)
+
 file(GLOB KES_TOOL_DIRS LIST_DIRECTORIES true "${CMAKE_CURRENT_SOURCE_DIR}/*")
 set(KES_TOOL_EXECUTABLES)
 
 foreach(dir IN LISTS KES_TOOL_DIRS)
     if(NOT IS_DIRECTORY "${dir}" OR NOT EXISTS "${dir}/CMakeLists.txt")
+        continue()
+    endif()
+    # Built by the engine build, they link the engine target
+    get_filename_component(dir_name "${dir}" NAME)
+    if(dir_name IN_LIST KES_ENGINE_BUILT_TOOLS)
         continue()
     endif()
     add_subdirectory("${dir}")

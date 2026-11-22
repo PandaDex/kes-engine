@@ -110,7 +110,7 @@ struct KModelChild
 {
     std::string name;
     std::string modelPath;
-    std::string materialPath;   // empty = use the child model's default material
+    std::string materialPath; // empty = use the child model's default material
     std::string animationPath;
     int32_t boneIndex = -1;
     float translation[3] = { 0.0f, 0.0f, 0.0f };
@@ -121,7 +121,7 @@ struct KModelChild
 struct KModelData
 {
     std::string sourcePath;
-    std::string defaultMaterial;   // entity Material overrides it
+    std::string defaultMaterial; // entity Material overrides it
     std::vector<KModelMaterial> materials;
     std::vector<KModelMesh> meshes;
     std::vector<KModelNode> nodes;

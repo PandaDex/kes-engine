@@ -55,7 +55,11 @@ public:
     // (triggers, fog) usually only need the bounds, which also arrive as "Size".
     virtual void ApplyMapGeometry(const MapEntityGeometry& geometry) { (void)geometry; }
     // Colliders of this entity, skipped by its built-in gravity.
-    virtual bool OwnsCollider(ColliderHandle handle) const { (void)handle; return false; }
+    virtual bool OwnsCollider(ColliderHandle handle) const
+    {
+        (void)handle;
+        return false;
+    }
 
     bool HasTag(const std::string& tag) const
     {
@@ -89,7 +93,7 @@ private:
     }
 
     bool pendingDestroy = false;
-    bool destroyRan = false;   // OnDestroy runs once
+    bool destroyRan = false; // OnDestroy runs once
     uint64_t entityId = 0;
     Guid guid;
     bool gravityEnabled = false;

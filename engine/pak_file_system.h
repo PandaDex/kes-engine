@@ -11,7 +11,7 @@ void ClearMountedPakFiles();
 void SetPakEncryptionKeyOverride(const char* hexKey);
 std::string GetPakEncryptionKeyOverride();
 bool MountPakFile(const char* pakPath, std::string* outError = nullptr);
-bool MountContentPakFiles(std::string* outError = nullptr,String executablePath = "");
+bool MountContentPakFiles(std::string* outError = nullptr, String executablePath = "");
 std::size_t GetMountedPakFileCount();
 std::vector<std::string> GetMountedPakFilePaths();
 // Files directly in a content directory, loose and in paks. Pak entries come

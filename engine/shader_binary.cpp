@@ -7,9 +7,9 @@ namespace
     {
         switch (stage)
         {
-        case ShaderStage::Vertex: return "vs";
+        case ShaderStage::Vertex:  return "vs";
         case ShaderStage::Compute: return "cs";
-        default: return "ps";
+        default:                   return "ps";
         }
     }
 
@@ -40,7 +40,7 @@ std::string BuildCompiledShaderPath(const std::string& sourcePath, ShaderStage s
 }
 
 bool LoadCompiledShader(const std::string& sourcePath, ShaderStage stage, RendererBackend backend,
-                        std::vector<uint8_t>& outBytes, std::string* outError)
+    std::vector<uint8_t>& outBytes, std::string* outError)
 {
     const std::string path = BuildCompiledShaderPath(sourcePath, stage, backend);
     std::string error;
@@ -48,7 +48,7 @@ bool LoadCompiledShader(const std::string& sourcePath, ShaderStage stage, Render
     {
         if (outError)
             *outError = "Compiled shader not found: " + path + (error.empty() ? "" : " (" + error + ")") +
-                        ". Shaders are compiled at build time from .slang sources; rebuild the project.";
+                ". Shaders are compiled at build time from .slang sources; rebuild the project.";
         return false;
     }
     return true;

@@ -18,11 +18,21 @@ function(bundle_runtime_libs target)
         # Use DT_RPATH (applies to transitive deps) instead of DT_RUNPATH
         target_link_options(${target} PRIVATE -Wl,--disable-new-dtags)
         get_property(_sdl3_dir GLOBAL PROPERTY KES_SDL3_LIBRARY_DIR)
+        # Shared libraries built here (engine, RmlUi, Tracy) are found through these.
+        set(_lib_dirs "${_sdl3_dir}")
+        foreach(_lib IN ITEMS engine rmlui_core rmlui_debugger TracyClient)
+            if(TARGET ${_lib})
+                get_target_property(_lib_type ${_lib} TYPE)
+                if(_lib_type STREQUAL "SHARED_LIBRARY")
+                    string(APPEND _lib_dirs "|$<TARGET_FILE_DIR:${_lib}>")
+                endif()
+            endif()
+        endforeach()
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND}
                     -DTARGET_FILE=$<TARGET_FILE:${target}>
                     -DOUT_DIR=$<TARGET_FILE_DIR:${target}>
-                    -DEXTRA_DIRS=${_sdl3_dir}
+                    "-DEXTRA_DIRS=${_lib_dirs}"
                     -P "${CMAKE_SOURCE_DIR}/cmake/BundleRuntimeLibs.cmake")
     endif()
 endfunction()
@@ -45,6 +55,14 @@ if(NOT KES_PROJECT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$")
     message(FATAL_ERROR "KES: KES_PROJECT_VERSION must look like 1.0.0.0")
 endif()
 
+# Engine as a shared library (engine.dll / libengine.so). RmlUi and Tracy follow
+# it, since game code calls them directly and they must exist once per process.
+option(KES_ENGINE_SHARED "Build the engine as a shared library" ON)
+if(KES_ENGINE_SHARED)
+    # Static dependencies (box3d, freetype, sentry) get linked into shared libraries.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(KesBuildChecks) # Compiler warnings and sanitizers
 include(KesCrash)       # KES_CRASH_REPORTER: Crashpad minidumps, Release debug info
@@ -63,6 +81,10 @@ option(KES_DEBUG_TOOLS "Build debug hotkeys and the UI inspector into the engine
 
 # Include sub-projects.
 add_subdirectory ("engine")
+add_subdirectory ("tools/pakTool")
+if(WIN32)
+    add_subdirectory ("tools/modelImporter")
+endif()
 add_subdirectory ("game")
 
 option(KES_BUILD_SAMPLES "Build the sample programs in samples/" ON)

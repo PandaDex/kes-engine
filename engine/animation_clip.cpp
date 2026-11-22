@@ -23,7 +23,8 @@ namespace
     static size_t FindNextKey(const std::vector<Key>& keys, float timeSeconds)
     {
         const auto next = std::lower_bound(keys.begin(), keys.end(), timeSeconds,
-                                           [](const Key& key, float time) { return key.time < time; });
+            [](const Key& key, float time)
+            { return key.time < time; });
         return static_cast<size_t>(next - keys.begin());
     }
 

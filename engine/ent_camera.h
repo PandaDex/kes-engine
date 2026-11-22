@@ -3,7 +3,8 @@
 #include "entity.h"
 #include "map_script.h"
 
-class CameraEntity : public Entity, public IMapScriptable
+class CameraEntity : public Entity
+    , public IMapScriptable
 {
 public:
     CameraEntity() = default;

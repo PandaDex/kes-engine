@@ -17,7 +17,10 @@
 #include "profiler.h"
 
 #if KES_PROFILE_GPU
-namespace tracy { class VkCtx; }
+namespace tracy
+{
+    class VkCtx;
+}
 #endif
 
 // Vulkan renderer backend. Internal to the engine: game code talks to the
@@ -40,344 +43,344 @@ struct SceneObject;
 namespace kes::vk
 {
 
-// GPU-side mesh: one device-local vertex buffer + optional index buffer.
-struct GPUMesh
-{
-    VkBuffer vertexBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
-    VkBuffer indexBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory indexMemory = VK_NULL_HANDLE;
-    uint32_t indexCount = 0;
-    Vector3 boundsCenter = {};   // local-space bounding sphere
-    float boundsRadius = 0.0f;
-};
-
-struct GPUModelMeshKey
-{
-    ModelHandle model = 0;
-    uint32_t meshIndex = 0;
-
-    bool operator==(const GPUModelMeshKey& other) const
+    // GPU-side mesh: one device-local vertex buffer + optional index buffer.
+    struct GPUMesh
     {
-        return model == other.model && meshIndex == other.meshIndex;
-    }
-};
+        VkBuffer vertexBuffer = VK_NULL_HANDLE;
+        VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+        VkBuffer indexBuffer = VK_NULL_HANDLE;
+        VkDeviceMemory indexMemory = VK_NULL_HANDLE;
+        uint32_t indexCount = 0;
+        Vector3 boundsCenter = {}; // local-space bounding sphere
+        float boundsRadius = 0.0f;
+    };
 
-struct GPUModelMeshKeyHasher
-{
-    size_t operator()(const GPUModelMeshKey& key) const
+    struct GPUModelMeshKey
     {
-        return (static_cast<size_t>(key.model) << 32) ^ static_cast<size_t>(key.meshIndex);
-    }
-};
+        ModelHandle model = 0;
+        uint32_t meshIndex = 0;
 
-static constexpr uint32_t kMeshPipelineVariantCount = 16;
+        bool operator==(const GPUModelMeshKey& other) const
+        {
+            return model == other.model && meshIndex == other.meshIndex;
+        }
+    };
 
-struct GPUShaderProgram
-{
-    VkShaderModule vertexShader = VK_NULL_HANDLE;
-    VkShaderModule pixelShader = VK_NULL_HANDLE;
-    VkPipeline pipelines[kMeshPipelineVariantCount] = {};
-    uint32_t failedVariants = 0;   // bit per variant, so a failed pipeline isn't retried on every draw
-};
+    struct GPUModelMeshKeyHasher
+    {
+        size_t operator()(const GPUModelMeshKey& key) const
+        {
+            return (static_cast<size_t>(key.model) << 32) ^ static_cast<size_t>(key.meshIndex);
+        }
+    };
 
-struct GPUTexture
-{
-    VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    VkImageView view = VK_NULL_HANDLE;
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // UI textures only (set 0 of the UI pipeline)
-};
+    static constexpr uint32_t kMeshPipelineVariantCount = 16;
 
-// Per-material texture set (set 1) and the Has*Texture flags it implies.
-struct GPUMaterialSet
-{
-    VkDescriptorSet set = VK_NULL_HANDLE;
-    uint32_t textureFlags = 0;
-    uint64_t usedStamp = 0;                // Renderer::cacheStamp of the last preload or draw that used it
-    std::vector<std::string> textureKeys;  // gpuTextures entries it samples
-};
+    struct GPUShaderProgram
+    {
+        VkShaderModule vertexShader = VK_NULL_HANDLE;
+        VkShaderModule pixelShader = VK_NULL_HANDLE;
+        VkPipeline pipelines[kMeshPipelineVariantCount] = {};
+        uint32_t failedVariants = 0; // bit per variant, so a failed pipeline isn't retried on every draw
+    };
 
-// Depth image array: one framebuffer per layer for rendering, one array view for sampling.
-struct GPUShadowArray
-{
-    VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    VkImageView arrayView = VK_NULL_HANDLE;
-    std::vector<VkImageView> layerViews;
-    std::vector<VkFramebuffer> framebuffers;
-    int resolution = 0;
-    int layers = 0;
-};
+    struct GPUTexture
+    {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // UI textures only (set 0 of the UI pipeline)
+    };
 
-struct GPUDynamicRingBuffer
-{
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    uint8_t* mapped = nullptr;
-    VkDeviceSize size = 0;
-    VkDeviceSize rangeSize = 0;   // descriptor range: the whole struct, even when a draw writes less of it
-    VkDeviceSize alignment = 1;   // minUniformBufferOffsetAlignment
-    VkDeviceSize cursor = 0;      // next free byte this frame
-};
+    // Per-material texture set (set 1) and the Has*Texture flags it implies.
+    struct GPUMaterialSet
+    {
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        uint32_t textureFlags = 0;
+        uint64_t usedStamp = 0; // Renderer::cacheStamp of the last preload or draw that used it
+        std::vector<std::string> textureKeys; // gpuTextures entries it samples
+    };
 
-// Everything the CPU writes or records for one frame. kMaxFramesInFlight
-// copies let the CPU record frame N+1 while the GPU still executes frame N
-// (D3D11 drivers queue frames the same way behind the immediate context).
-static constexpr uint32_t kMaxFramesInFlight = 2;
+    // Depth image array: one framebuffer per layer for rendering, one array view for sampling.
+    struct GPUShadowArray
+    {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView arrayView = VK_NULL_HANDLE;
+        std::vector<VkImageView> layerViews;
+        std::vector<VkFramebuffer> framebuffers;
+        int resolution = 0;
+        int layers = 0;
+    };
 
-// Host-visible buffer rewritten every frame (UI vertices / indices). Grown
-// when a frame needs more room; safe because the frame's fence was waited.
-struct GPUStreamBuffer
-{
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    void* mapped = nullptr;
-    VkDeviceSize size = 0;
-};
+    struct GPUDynamicRingBuffer
+    {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        uint8_t* mapped = nullptr;
+        VkDeviceSize size = 0;
+        VkDeviceSize rangeSize = 0; // descriptor range: the whole struct, even when a draw writes less of it
+        VkDeviceSize alignment = 1; // minUniformBufferOffsetAlignment
+        VkDeviceSize cursor = 0; // next free byte this frame
+    };
 
-// UI texture waiting for the frames that may still sample it to finish.
-struct RetiredUiTexture
-{
-    GPUTexture texture;
-    uint64_t lastUsableFrame = 0;   // frameNumber when it was released
-};
+    // Everything the CPU writes or records for one frame. kMaxFramesInFlight
+    // copies let the CPU record frame N+1 while the GPU still executes frame N
+    // (D3D11 drivers queue frames the same way behind the immediate context).
+    static constexpr uint32_t kMaxFramesInFlight = 2;
 
-struct FrameResources
-{
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-    VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
-    VkFence inFlightFence = VK_NULL_HANDLE;
+    // Host-visible buffer rewritten every frame (UI vertices / indices). Grown
+    // when a frame needs more room; safe because the frame's fence was waited.
+    struct GPUStreamBuffer
+    {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        void* mapped = nullptr;
+        VkDeviceSize size = 0;
+    };
 
-    VkBuffer sceneCB = VK_NULL_HANDLE;
-    VkDeviceMemory sceneCBMemory = VK_NULL_HANDLE;
-    void* sceneCBMapped = nullptr;
+    // UI texture waiting for the frames that may still sample it to finish.
+    struct RetiredUiTexture
+    {
+        GPUTexture texture;
+        uint64_t lastUsableFrame = 0; // frameNumber when it was released
+    };
 
-    VkBuffer skyCB = VK_NULL_HANDLE;
-    VkDeviceMemory skyCBMemory = VK_NULL_HANDLE;
-    void* skyCBMapped = nullptr;
+    struct FrameResources
+    {
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
+        VkFence inFlightFence = VK_NULL_HANDLE;
 
-    GPUDynamicRingBuffer modelCBRing;
-    GPUDynamicRingBuffer materialCBRing;
+        VkBuffer sceneCB = VK_NULL_HANDLE;
+        VkDeviceMemory sceneCBMemory = VK_NULL_HANDLE;
+        void* sceneCBMapped = nullptr;
 
-    VkDescriptorSet uboDescriptorSet = VK_NULL_HANDLE; // points at this frame's sceneCB + rings
-    VkDescriptorSet skyDescriptorSet = VK_NULL_HANDLE; // points at this frame's skyCB
+        VkBuffer skyCB = VK_NULL_HANDLE;
+        VkDeviceMemory skyCBMemory = VK_NULL_HANDLE;
+        void* skyCBMapped = nullptr;
 
-    GPUStreamBuffer uiVertices;
-    GPUStreamBuffer uiIndices;
-};
+        GPUDynamicRingBuffer modelCBRing;
+        GPUDynamicRingBuffer materialCBRing;
 
-// Everything per object that doesn't depend on the view, computed once a frame.
-struct DrawItem
-{
-    const SceneObject* object = nullptr;
-    const MaterialData* material = nullptr;
-    float distanceSq = 0.0f;
-    render::Matrix4 world;
-    bool skinned = false;
-    GPUMesh* mesh = nullptr;     // static objects
-    Vector3 boundsCenter = {};   // static objects, world space
-    float boundsRadius = 0.0f;
-};
+        VkDescriptorSet uboDescriptorSet = VK_NULL_HANDLE; // points at this frame's sceneCB + rings
+        VkDescriptorSet skyDescriptorSet = VK_NULL_HANDLE; // points at this frame's skyCB
 
-struct Renderer
-{
-    // Core objects
-    VkInstance instance = VK_NULL_HANDLE;
-    VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-    VkDevice device = VK_NULL_HANDLE;
-    VkPhysicalDeviceProperties physicalDeviceProperties = {};
-    bool anisotropySupported = false;
+        GPUStreamBuffer uiVertices;
+        GPUStreamBuffer uiIndices;
+    };
 
-    uint32_t graphicsQueueFamily = 0;
-    uint32_t presentQueueFamily = 0;
-    VkQueue graphicsQueue = VK_NULL_HANDLE;
-    VkQueue presentQueue = VK_NULL_HANDLE;
+    // Everything per object that doesn't depend on the view, computed once a frame.
+    struct DrawItem
+    {
+        const SceneObject* object = nullptr;
+        const MaterialData* material = nullptr;
+        float distanceSq = 0.0f;
+        render::Matrix4 world;
+        bool skinned = false;
+        GPUMesh* mesh = nullptr; // static objects
+        Vector3 boundsCenter = {}; // static objects, world space
+        float boundsRadius = 0.0f;
+    };
 
-    // Swap chain / presentation
-    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
-    VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
-    VkExtent2D swapchainExtent = {};
-    std::vector<VkImage> swapchainImages;
-    std::vector<VkImageView> swapchainImageViews;
-    std::vector<VkFramebuffer> backbufferFramebuffers;
+    struct Renderer
+    {
+        // Core objects
+        VkInstance instance = VK_NULL_HANDLE;
+        VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+        VkDevice device = VK_NULL_HANDLE;
+        VkPhysicalDeviceProperties physicalDeviceProperties = {};
+        bool anisotropySupported = false;
 
-    // Render passes
-    VkRenderPass sceneRenderPass = VK_NULL_HANDLE;    // HDR color (+ resolve) + depth, msaaSamples
-    VkRenderPass shadowRenderPass = VK_NULL_HANDLE;   // depth only
-    VkRenderPass backbufferRenderPass = VK_NULL_HANDLE;
-    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;   // of sceneRenderPass
+        uint32_t graphicsQueueFamily = 0;
+        uint32_t presentQueueFamily = 0;
+        VkQueue graphicsQueue = VK_NULL_HANDLE;
+        VkQueue presentQueue = VK_NULL_HANDLE;
 
-    // HDR scene targets (internal render resolution)
-    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
-    VkFormat shadowFormat = VK_FORMAT_UNDEFINED;
-    bool shadowLinearFilter = true;
-    VkImage depthImage = VK_NULL_HANDLE;
-    VkDeviceMemory depthMemory = VK_NULL_HANDLE;
-    VkImageView depthView = VK_NULL_HANDLE;
-    VkImage sceneColorMSImage = VK_NULL_HANDLE;
-    VkDeviceMemory sceneColorMSMemory = VK_NULL_HANDLE;
-    VkImageView sceneColorMSView = VK_NULL_HANDLE;
-    VkImage sceneColorImage = VK_NULL_HANDLE;   // resolved, sampled by the tonemap
-    VkDeviceMemory sceneColorMemory = VK_NULL_HANDLE;
-    VkImageView sceneColorView = VK_NULL_HANDLE;
-    VkFramebuffer sceneFramebuffer = VK_NULL_HANDLE;
-    VkDescriptorSet tonemapDescriptorSet = VK_NULL_HANDLE;
+        // Swap chain / presentation
+        VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+        VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
+        VkExtent2D swapchainExtent = {};
+        std::vector<VkImage> swapchainImages;
+        std::vector<VkImageView> swapchainImageViews;
+        std::vector<VkFramebuffer> backbufferFramebuffers;
 
-    // Shadows and image-based ambient
-    GPUShadowArray cascadeShadows;
-    GPUShadowArray localShadows;
-    GPUShadowArray dummyShadows;   // 1x1, bound when shadows are off
-    GPUTexture environmentMap = {};
-    render::EnvironmentMaps environment;
-    render::FrameSetup frame;
-    VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE;   // set 2
-    bool globalSetDirty = true;
-    float exposure = 1.0f;
-    GraphicsOptions options = {};
-    bool depthBiasClampSupported = false;
-    GraphicsOptions deferredOptions = {};   // set during a frame, applied after Present
-    bool hasDeferredOptions = false;
+        // Render passes
+        VkRenderPass sceneRenderPass = VK_NULL_HANDLE; // HDR color (+ resolve) + depth, msaaSamples
+        VkRenderPass shadowRenderPass = VK_NULL_HANDLE; // depth only
+        VkRenderPass backbufferRenderPass = VK_NULL_HANDLE;
+        VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT; // of sceneRenderPass
 
-    // Descriptor / pipeline layouts
-    VkDescriptorSetLayout uboSetLayout = VK_NULL_HANDLE;       // set 0: SceneCB, ModelCB(dyn), MaterialCB(dyn)
-    VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;  // set 1: 5 combined image samplers
-    VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE;    // set 2: env, shadows, samplers
-    VkDescriptorSetLayout texSetLayout = VK_NULL_HANDLE;       // tonemap set 0: combined image sampler (linear)
-    VkDescriptorSetLayout skySetLayout = VK_NULL_HANDLE;       // sky set 0: SkyCB
-    VkPipelineLayout meshPipelineLayout = VK_NULL_HANDLE;
-    VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
-    VkPipelineLayout tonemapPipelineLayout = VK_NULL_HANDLE;   // + push constant: exposure
-    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+        // HDR scene targets (internal render resolution)
+        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        VkFormat shadowFormat = VK_FORMAT_UNDEFINED;
+        bool shadowLinearFilter = true;
+        VkImage depthImage = VK_NULL_HANDLE;
+        VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+        VkImageView depthView = VK_NULL_HANDLE;
+        VkImage sceneColorMSImage = VK_NULL_HANDLE;
+        VkDeviceMemory sceneColorMSMemory = VK_NULL_HANDLE;
+        VkImageView sceneColorMSView = VK_NULL_HANDLE;
+        VkImage sceneColorImage = VK_NULL_HANDLE; // resolved, sampled by the tonemap
+        VkDeviceMemory sceneColorMemory = VK_NULL_HANDLE;
+        VkImageView sceneColorView = VK_NULL_HANDLE;
+        VkFramebuffer sceneFramebuffer = VK_NULL_HANDLE;
+        VkDescriptorSet tonemapDescriptorSet = VK_NULL_HANDLE;
 
-    GPUShaderProgram meshDefaultProgram;
-    GPUShaderProgram shadowProgram;       // pipelines[0] = the shadow pipeline
+        // Shadows and image-based ambient
+        GPUShadowArray cascadeShadows;
+        GPUShadowArray localShadows;
+        GPUShadowArray dummyShadows; // 1x1, bound when shadows are off
+        GPUTexture environmentMap = {};
+        render::EnvironmentMaps environment;
+        render::FrameSetup frame;
+        VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE; // set 2
+        bool globalSetDirty = true;
+        float exposure = 1.0f;
+        GraphicsOptions options = {};
+        bool depthBiasClampSupported = false;
+        GraphicsOptions deferredOptions = {}; // set during a frame, applied after Present
+        bool hasDeferredOptions = false;
 
-    VkShaderModule skyVS = VK_NULL_HANDLE;
-    VkShaderModule skyPS = VK_NULL_HANDLE;
-    VkPipeline skyPipeline = VK_NULL_HANDLE;
+        // Descriptor / pipeline layouts
+        VkDescriptorSetLayout uboSetLayout = VK_NULL_HANDLE; // set 0: SceneCB, ModelCB(dyn), MaterialCB(dyn)
+        VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE; // set 1: 5 combined image samplers
+        VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE; // set 2: env, shadows, samplers
+        VkDescriptorSetLayout texSetLayout = VK_NULL_HANDLE; // tonemap set 0: combined image sampler (linear)
+        VkDescriptorSetLayout skySetLayout = VK_NULL_HANDLE; // sky set 0: SkyCB
+        VkPipelineLayout meshPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout tonemapPipelineLayout = VK_NULL_HANDLE; // + push constant: exposure
+        VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
 
-    VkShaderModule tonemapVS = VK_NULL_HANDLE;
-    VkShaderModule tonemapPS = VK_NULL_HANDLE;
-    VkPipeline tonemapPipeline = VK_NULL_HANDLE;
+        GPUShaderProgram meshDefaultProgram;
+        GPUShaderProgram shadowProgram; // pipelines[0] = the shadow pipeline
 
-    // Post anti-aliasing (FXAA / CMAA2): tonemap into ldrColor (RGBA8, render
-    // resolution, sRGB encoded), CMAA2 in place, present.slang to the backbuffer.
-    bool postAAAvailable = false;              // pipelines created; otherwise post AA stays off
-    PostAntiAliasing postAA = PostAntiAliasing::Off;   // what the scene targets were created for
-    VkRenderPass ldrRenderPass = VK_NULL_HANDLE;
-    VkPipeline tonemapLdrPipeline = VK_NULL_HANDLE;
-    VkShaderModule presentVS = VK_NULL_HANDLE;
-    VkShaderModule presentPS = VK_NULL_HANDLE;
-    VkPipeline presentPipeline = VK_NULL_HANDLE;   // tonemapPipelineLayout
-    GPUTexture ldrColor = {};
-    VkFramebuffer ldrFramebuffer = VK_NULL_HANDLE;
-    VkDescriptorSet presentDescriptorSet = VK_NULL_HANDLE;
+        VkShaderModule skyVS = VK_NULL_HANDLE;
+        VkShaderModule skyPS = VK_NULL_HANDLE;
+        VkPipeline skyPipeline = VK_NULL_HANDLE;
 
-    // CMAA2 (cmaa2*.slang): edges, ProcessCandidates and DeferredApply with indirect dispatch.
-    static constexpr int kCmaa2PassCount = 4;   // edges, dispatch args, process candidates, deferred apply
-    static constexpr int kCmaa2BufferCount = 5;   // shape candidates, blend locations, blend items, control, indirect args
-    VkDescriptorSetLayout cmaa2SetLayout = VK_NULL_HANDLE;
-    VkPipelineLayout cmaa2PipelineLayout = VK_NULL_HANDLE;
-    VkShaderModule cmaa2Shaders[kCmaa2PassCount] = {};
-    VkPipeline cmaa2Pipelines[kCmaa2PassCount] = {};
-    GPUTexture cmaa2Edges = {};   // R32_UINT, two pixels per texel
-    GPUTexture cmaa2Heads = {};   // R32_UINT, one per 2x2 quad
-    VkBuffer cmaa2Buffers[kCmaa2BufferCount] = {};
-    VkDeviceMemory cmaa2BufferMemory[kCmaa2BufferCount] = {};
-    VkDescriptorSet cmaa2DescriptorSet = VK_NULL_HANDLE;
-    uint32_t cmaa2GroupsX = 0;
-    uint32_t cmaa2GroupsY = 0;
-    bool cmaa2NeedsInit = false;   // clear the counters, move the images to GENERAL
+        VkShaderModule tonemapVS = VK_NULL_HANDLE;
+        VkShaderModule tonemapPS = VK_NULL_HANDLE;
+        VkPipeline tonemapPipeline = VK_NULL_HANDLE;
 
-    // UI pass (ui.slang): premultiplied alpha, scissor per draw, drawn inside
-    // the backbuffer pass after the tonemap.
-    VkSampler linearSampler = VK_NULL_HANDLE;
-    VkDescriptorSetLayout uiTexSetLayout = VK_NULL_HANDLE;   // set 0: combined image sampler (linear)
-    VkPipelineLayout uiPipelineLayout = VK_NULL_HANDLE;      // + push constant: float4 scaleOffset
-    VkShaderModule uiVS = VK_NULL_HANDLE;
-    VkShaderModule uiPS = VK_NULL_HANDLE;
-    VkPipeline uiPipeline = VK_NULL_HANDLE;
-    VkDescriptorSet uiWhiteDescriptorSet = VK_NULL_HANDLE;   // whiteTexture through the UI layout
-    std::unordered_map<UiTextureHandle, GPUTexture> uiTextures;
-    std::vector<RetiredUiTexture> retiredUiTextures;
-    UiTextureHandle nextUiTextureHandle = 1;
-    bool backbufferPassOpen = false;   // BeginBackbufferOverlay leaves it open for the UI
+        // Post anti-aliasing (FXAA / CMAA2): tonemap into ldrColor (RGBA8, render
+        // resolution, sRGB encoded), CMAA2 in place, present.slang to the backbuffer.
+        bool postAAAvailable = false; // pipelines created; otherwise post AA stays off
+        PostAntiAliasing postAA = PostAntiAliasing::Off; // what the scene targets were created for
+        VkRenderPass ldrRenderPass = VK_NULL_HANDLE;
+        VkPipeline tonemapLdrPipeline = VK_NULL_HANDLE;
+        VkShaderModule presentVS = VK_NULL_HANDLE;
+        VkShaderModule presentPS = VK_NULL_HANDLE;
+        VkPipeline presentPipeline = VK_NULL_HANDLE; // tonemapPipelineLayout
+        GPUTexture ldrColor = {};
+        VkFramebuffer ldrFramebuffer = VK_NULL_HANDLE;
+        VkDescriptorSet presentDescriptorSet = VK_NULL_HANDLE;
 
-    // Samplers / default texture
-    VkSampler materialSampler = VK_NULL_HANDLE;   // anisotropic, repeat
-    VkSampler shadowSampler = VK_NULL_HANDLE;     // depth comparison
-    GPUTexture whiteTexture = {};
+        // CMAA2 (cmaa2*.slang): edges, ProcessCandidates and DeferredApply with indirect dispatch.
+        static constexpr int kCmaa2PassCount = 4; // edges, dispatch args, process candidates, deferred apply
+        static constexpr int kCmaa2BufferCount = 5; // shape candidates, blend locations, blend items, control, indirect args
+        VkDescriptorSetLayout cmaa2SetLayout = VK_NULL_HANDLE;
+        VkPipelineLayout cmaa2PipelineLayout = VK_NULL_HANDLE;
+        VkShaderModule cmaa2Shaders[kCmaa2PassCount] = {};
+        VkPipeline cmaa2Pipelines[kCmaa2PassCount] = {};
+        GPUTexture cmaa2Edges = {}; // R32_UINT, two pixels per texel
+        GPUTexture cmaa2Heads = {}; // R32_UINT, one per 2x2 quad
+        VkBuffer cmaa2Buffers[kCmaa2BufferCount] = {};
+        VkDeviceMemory cmaa2BufferMemory[kCmaa2BufferCount] = {};
+        VkDescriptorSet cmaa2DescriptorSet = VK_NULL_HANDLE;
+        uint32_t cmaa2GroupsX = 0;
+        uint32_t cmaa2GroupsY = 0;
+        bool cmaa2NeedsInit = false; // clear the counters, move the images to GENERAL
 
-    // Command submission (kMaxFramesInFlight frames in flight)
-    VkCommandPool commandPool = VK_NULL_HANDLE;
-    VkCommandPool transferCommandPool = VK_NULL_HANDLE;
-    FrameResources frames[kMaxFramesInFlight];
-    uint32_t frameIndex = 0;   // frames[frameIndex] is the frame being recorded
-    uint64_t frameNumber = 0;  // frames submitted so far (deferred UI texture deletion)
+        // UI pass (ui.slang): premultiplied alpha, scissor per draw, drawn inside
+        // the backbuffer pass after the tonemap.
+        VkSampler linearSampler = VK_NULL_HANDLE;
+        VkDescriptorSetLayout uiTexSetLayout = VK_NULL_HANDLE; // set 0: combined image sampler (linear)
+        VkPipelineLayout uiPipelineLayout = VK_NULL_HANDLE; // + push constant: float4 scaleOffset
+        VkShaderModule uiVS = VK_NULL_HANDLE;
+        VkShaderModule uiPS = VK_NULL_HANDLE;
+        VkPipeline uiPipeline = VK_NULL_HANDLE;
+        VkDescriptorSet uiWhiteDescriptorSet = VK_NULL_HANDLE; // whiteTexture through the UI layout
+        std::unordered_map<UiTextureHandle, GPUTexture> uiTextures;
+        std::vector<RetiredUiTexture> retiredUiTextures;
+        UiTextureHandle nextUiTextureHandle = 1;
+        bool backbufferPassOpen = false; // BeginBackbufferOverlay leaves it open for the UI
 
-    // Aliases of frames[frameIndex]'s handles, refreshed when a frame begins,
-    // so recording code doesn't have to look up the current frame everywhere.
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-    VkDescriptorSet uboDescriptorSet = VK_NULL_HANDLE;
-    VkDescriptorSet skyDescriptorSet = VK_NULL_HANDLE;
+        // Samplers / default texture
+        VkSampler materialSampler = VK_NULL_HANDLE; // anisotropic, repeat
+        VkSampler shadowSampler = VK_NULL_HANDLE; // depth comparison
+        GPUTexture whiteTexture = {};
 
-    std::vector<VkSemaphore> renderFinishedSemaphores;   // one per swapchain image
+        // Command submission (kMaxFramesInFlight frames in flight)
+        VkCommandPool commandPool = VK_NULL_HANDLE;
+        VkCommandPool transferCommandPool = VK_NULL_HANDLE;
+        FrameResources frames[kMaxFramesInFlight];
+        uint32_t frameIndex = 0; // frames[frameIndex] is the frame being recorded
+        uint64_t frameNumber = 0; // frames submitted so far (deferred UI texture deletion)
 
-    bool frameActive = false;       // between "start of frame" and RendererPresent
-    std::string fatalError;         // IRenderer::GetFatalError
+        // Aliases of frames[frameIndex]'s handles, refreshed when a frame begins,
+        // so recording code doesn't have to look up the current frame everywhere.
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkDescriptorSet uboDescriptorSet = VK_NULL_HANDLE;
+        VkDescriptorSet skyDescriptorSet = VK_NULL_HANDLE;
+
+        std::vector<VkSemaphore> renderFinishedSemaphores; // one per swapchain image
+
+        bool frameActive = false; // between "start of frame" and RendererPresent
+        std::string fatalError; // IRenderer::GetFatalError
 
 #if KES_PROFILE_GPU
-    tracy::VkCtx* gpuProfiler = nullptr;   // Tracy GPU timestamp context
+        tracy::VkCtx* gpuProfiler = nullptr; // Tracy GPU timestamp context
 #endif
-    bool haveSwapchainImage = false;
-    bool swapchainNeedsRecreate = false;
-    uint32_t currentSwapchainImageIndex = 0;
+        bool haveSwapchainImage = false;
+        bool swapchainNeedsRecreate = false;
+        uint32_t currentSwapchainImageIndex = 0;
 
-    // Asset caches
-    std::unordered_map<MeshHandle, GPUMesh> gpuMeshes;
-    std::unordered_map<GPUModelMeshKey, GPUMesh, GPUModelMeshKeyHasher> gpuModelMeshes;
-    std::unordered_map<ShaderHandle, GPUShaderProgram> gpuShaders;
-    std::unordered_map<std::string, GPUTexture> gpuTextures;   // key: usage + resolved path
-    std::unordered_map<std::string, GPUMaterialSet> gpuMaterialSets;   // key: the five texture paths
-    uint64_t assetGeneration = 0;
-    uint64_t cacheStamp = 1;   // bumped by every preload; material sets not stamped since are evicted
+        // Asset caches
+        std::unordered_map<MeshHandle, GPUMesh> gpuMeshes;
+        std::unordered_map<GPUModelMeshKey, GPUMesh, GPUModelMeshKeyHasher> gpuModelMeshes;
+        std::unordered_map<ShaderHandle, GPUShaderProgram> gpuShaders;
+        std::unordered_map<std::string, GPUTexture> gpuTextures; // key: usage + resolved path
+        std::unordered_map<std::string, GPUMaterialSet> gpuMaterialSets; // key: the five texture paths
+        uint64_t assetGeneration = 0;
+        uint64_t cacheStamp = 1; // bumped by every preload; material sets not stamped since are evicted
 
-    // Upload batch (RendererPreloadAssets): uploads share one command buffer
-    // and one queue wait; staging buffers live until the batch is submitted.
-    VkCommandBuffer uploadBatch = VK_NULL_HANDLE;
-    std::vector<std::pair<VkBuffer, VkDeviceMemory>> uploadStaging;
-    VkDeviceSize uploadStagingBytes = 0;
+        // Upload batch (RendererPreloadAssets): uploads share one command buffer
+        // and one queue wait; staging buffers live until the batch is submitted.
+        VkCommandBuffer uploadBatch = VK_NULL_HANDLE;
+        std::vector<std::pair<VkBuffer, VkDeviceMemory>> uploadStaging;
+        VkDeviceSize uploadStagingBytes = 0;
 
-    int windowWidth = 0;
-    int windowHeight = 0;
-    int renderWidth = 0;
-    int renderHeight = 0;
-    bool preservePresentationAspect = true;
-    bool preferIntegerPresentationScale = true;
-    bool vsync = true;
+        int windowWidth = 0;
+        int windowHeight = 0;
+        int renderWidth = 0;
+        int renderHeight = 0;
+        bool preservePresentationAspect = true;
+        bool preferIntegerPresentationScale = true;
+        bool vsync = true;
 
-    // Per-frame scratch, kept to reuse its storage.
-    std::vector<DrawItem> opaqueDrawItems;
-    std::vector<DrawItem> transparentDrawItems;
-};
+        // Per-frame scratch, kept to reuse its storage.
+        std::vector<DrawItem> opaqueDrawItems;
+        std::vector<DrawItem> transparentDrawItems;
+    };
 
-bool RendererInit(Renderer& renderer, SDL_Window* window, const AppConfig& config);
-void RendererShutdown(Renderer& renderer);
+    bool RendererInit(Renderer& renderer, SDL_Window* window, const AppConfig& config);
+    void RendererShutdown(Renderer& renderer);
 
-bool RendererResize(Renderer& renderer, int width, int height);
-bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
-void RendererSetVSync(Renderer& renderer, bool enabled);
-void RendererSetGraphicsOptions(Renderer& renderer, const GraphicsOptions& options);
-void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
-void RendererPreloadAssets(Renderer& renderer, const AssetSystem& assets);
-void RendererBeginBackbufferOverlay(Renderer& renderer);
-UiTextureHandle RendererCreateUiTexture(Renderer& renderer, int width, int height, const uint8_t* rgbaPixels);
-void RendererDestroyUiTexture(Renderer& renderer, UiTextureHandle texture);
-void RendererRenderUi(Renderer& renderer, const UiDrawList& drawList);
-void RendererPresent(Renderer& renderer);
-void RendererRender(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
+    bool RendererResize(Renderer& renderer, int width, int height);
+    bool RendererSetRenderResolution(Renderer& renderer, int width, int height);
+    void RendererSetVSync(Renderer& renderer, bool enabled);
+    void RendererSetGraphicsOptions(Renderer& renderer, const GraphicsOptions& options);
+    void RendererRenderScene(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
+    void RendererPreloadAssets(Renderer& renderer, const AssetSystem& assets);
+    void RendererBeginBackbufferOverlay(Renderer& renderer);
+    UiTextureHandle RendererCreateUiTexture(Renderer& renderer, int width, int height, const uint8_t* rgbaPixels);
+    void RendererDestroyUiTexture(Renderer& renderer, UiTextureHandle texture);
+    void RendererRenderUi(Renderer& renderer, const UiDrawList& drawList);
+    void RendererPresent(Renderer& renderer);
+    void RendererRender(Renderer& renderer, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets);
 
 } // namespace kes::vk

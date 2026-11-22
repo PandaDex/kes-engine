@@ -7,8 +7,8 @@
 
 struct CrashReporterConfig
 {
-    std::string databaseDirectory;   // writable, UTF-8; minidumps land under it
-    std::string logFilePath;         // attached to uploaded reports, may be empty
+    std::string databaseDirectory; // writable, UTF-8; minidumps land under it
+    std::string logFilePath; // attached to uploaded reports, may be empty
 };
 
 bool CrashReporterInitialize(const CrashReporterConfig& config);

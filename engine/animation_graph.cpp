@@ -11,9 +11,9 @@ namespace
     {
         switch (type)
         {
-        case AnimationGraphParameterType::Float: return "Float";
+        case AnimationGraphParameterType::Float:   return "Float";
         case AnimationGraphParameterType::Trigger: return "Trigger";
-        default: return "Bool";
+        default:                                   return "Bool";
         }
     }
 
@@ -31,11 +31,11 @@ namespace
     {
         switch (type)
         {
-        case AnimationGraphConditionType::BoolFalse: return "BoolFalse";
+        case AnimationGraphConditionType::BoolFalse:    return "BoolFalse";
         case AnimationGraphConditionType::FloatGreater: return "FloatGreater";
-        case AnimationGraphConditionType::FloatLess: return "FloatLess";
-        case AnimationGraphConditionType::Triggered: return "Triggered";
-        default: return "BoolTrue";
+        case AnimationGraphConditionType::FloatLess:    return "FloatLess";
+        case AnimationGraphConditionType::Triggered:    return "Triggered";
+        default:                                        return "BoolTrue";
         }
     }
 

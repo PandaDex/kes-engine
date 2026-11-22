@@ -22,7 +22,7 @@ Guid Guid::Generate()
     {
         std::random_device device;
         std::seed_seq seed{ device(), device(), device(), device(),
-                            static_cast<unsigned>(std::chrono::high_resolution_clock::now().time_since_epoch().count()) };
+            static_cast<unsigned>(std::chrono::high_resolution_clock::now().time_since_epoch().count()) };
         return std::mt19937_64(seed);
     }();
 
@@ -31,8 +31,8 @@ Guid Guid::Generate()
     {
         guid.high = rng();
         guid.low = rng();
-        guid.high = (guid.high & ~0xF000ull) | 0x4000ull;                           // version 4
-        guid.low = (guid.low & 0x3FFFFFFFFFFFFFFFull) | 0x8000000000000000ull;      // RFC 4122 variant
+        guid.high = (guid.high & ~0xF000ull) | 0x4000ull; // version 4
+        guid.low = (guid.low & 0x3FFFFFFFFFFFFFFFull) | 0x8000000000000000ull; // RFC 4122 variant
     } while (!guid.IsValid());
     return guid;
 }

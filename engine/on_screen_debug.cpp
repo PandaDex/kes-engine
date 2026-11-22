@@ -56,13 +56,13 @@ namespace
         DebugMessageType type = DebugMessageType::Info;
         std::string text;
         float remaining = 0.0f;
-        bool shown = false;   // drawn at least once; 0-second messages last one frame
+        bool shown = false; // drawn at least once; 0-second messages last one frame
     };
 
     struct State
     {
         std::mutex mutex;
-        std::vector<Message> messages;   // oldest first
+        std::vector<Message> messages; // oldest first
         bool dirty = false;
         Rml::ElementDocument* document = nullptr;
     };
@@ -81,12 +81,12 @@ namespace
         {
             switch (c)
             {
-            case '&': out += "&amp;"; break;
-            case '<': out += "&lt;"; break;
-            case '>': out += "&gt;"; break;
-            case '"': out += "&quot;"; break;
+            case '&':  out += "&amp;"; break;
+            case '<':  out += "&lt;"; break;
+            case '>':  out += "&gt;"; break;
+            case '"':  out += "&quot;"; break;
             case '\n': out += "<br/>"; break;
-            default: out += c; break;
+            default:   out += c; break;
             }
         }
         return out;
@@ -97,8 +97,8 @@ namespace
         switch (type)
         {
         case DebugMessageType::Warning: return "warning";
-        case DebugMessageType::Error: return "error";
-        default: return "info";
+        case DebugMessageType::Error:   return "error";
+        default:                        return "info";
         }
     }
 }
@@ -167,7 +167,8 @@ void RemoveOnScreenDebugMessage(int64_t key)
     State& state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);
     const size_t before = state.messages.size();
-    std::erase_if(state.messages, [key](const Message& message) { return message.key == key; });
+    std::erase_if(state.messages, [key](const Message& message)
+        { return message.key == key; });
     state.dirty = state.dirty || state.messages.size() != before;
 }
 
@@ -192,7 +193,8 @@ void OnScreenDebugUpdate(UiSystem& ui, float dt)
         if (message.shown)
             message.remaining -= dt;
     }
-    std::erase_if(state.messages, [](const Message& message) { return message.shown && message.remaining <= 0.0f; });
+    std::erase_if(state.messages, [](const Message& message)
+        { return message.shown && message.remaining <= 0.0f; });
     if (state.messages.size() != before)
         state.dirty = true;
 
@@ -224,7 +226,7 @@ void OnScreenDebugUpdate(UiSystem& ui, float dt)
         message.shown = true;
 
     if (!state.messages.empty())
-        state.document->PullToFront();   // over documents shown later
+        state.document->PullToFront(); // over documents shown later
 #else
     (void)ui;
     (void)dt;

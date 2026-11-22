@@ -89,7 +89,8 @@ struct String
     {
         String result = *this;
         std::transform(result.value.begin(), result.value.end(), result.value.begin(),
-            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            [](unsigned char ch)
+            { return static_cast<char>(std::tolower(ch)); });
         return result;
     }
 
@@ -97,7 +98,8 @@ struct String
     {
         String result = *this;
         std::transform(result.value.begin(), result.value.end(), result.value.begin(),
-            [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+            [](unsigned char ch)
+            { return static_cast<char>(std::toupper(ch)); });
         return result;
     }
 
@@ -430,8 +432,7 @@ struct Vector3
 
     static Vector3 Cross(const Vector3& a, const Vector3& b)
     {
-        return
-        {
+        return {
             a.y * b.z - a.z * b.y,
             a.z * b.x - a.x * b.z,
             a.x * b.y - a.y * b.x
@@ -527,6 +528,6 @@ inline int ClampInt(int v, int minV, int maxV)
 struct Transform
 {
     Vector3 position = {};
-    Vector3 rotation = {0.0f, 0.0f, 0.0f};
+    Vector3 rotation = { 0.0f, 0.0f, 0.0f };
     Vector3 scale = { 1.0f, 1.0f, 1.0f };
 };

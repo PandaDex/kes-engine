@@ -12,7 +12,7 @@
 namespace
 {
     constexpr float kPi = 3.14159265358979f;
-    constexpr float kMaxPitch = 1.4f;   // just under straight up / down
+    constexpr float kMaxPitch = 1.4f; // just under straight up / down
     constexpr float kJumpBufferTime = 0.15f;
     constexpr float kCoyoteTime = 0.1f;
     constexpr float kTerminalVelocity = 50.0f;
@@ -54,8 +54,8 @@ namespace
         switch (mode)
         {
         case PlayerMovementMode::Walking: return "walking";
-        case PlayerMovementMode::Flying: return "flying";
-        case PlayerMovementMode::Noclip: return "noclip";
+        case PlayerMovementMode::Flying:  return "flying";
+        case PlayerMovementMode::Noclip:  return "noclip";
         }
         return "?";
     }
@@ -168,7 +168,7 @@ void EnginePlayerEntity::Update(float dt)
         SetMovementMode(static_cast<PlayerMovementMode>((static_cast<int>(movementMode) + 1) % 3));
         EngineLogf("Player movement: %s.", MovementModeName(movementMode));
         AddOnScreenDebugMessagef(reinterpret_cast<intptr_t>(this), 2.0f, DebugMessageType::Info, "Player movement: %s (F3)",
-                                 MovementModeName(movementMode));
+            MovementModeName(movementMode));
     }
 #endif
 
@@ -226,7 +226,7 @@ bool EnginePlayerEntity::ProbeGround(const Vector3& center, float distance, floa
     if (!game || !game->collision)
         return false;
 
-    const float lift = 0.02f;   // starts slightly up so resting contact still registers
+    const float lift = 0.02f; // starts slightly up so resting contact still registers
     // A thinner capsule with the same bottom point: walls and step edges the
     // player is touching from the side don't count as ground.
     const float skin = 0.03f;
@@ -241,7 +241,7 @@ bool EnginePlayerEntity::ProbeGround(const Vector3& center, float distance, floa
     if (!noNormal && hit.normal.y < maxSlopeCos)
     {
         if (hit.normal.y <= 0.05f)
-            return false;   // a wall or ceiling
+            return false; // a wall or ceiling
         // The rounded bottom on an edge (a step) gives a slanted normal. It
         // counts when the surface just past the contact is walkable.
         const float radius = colliderRadius - skin;

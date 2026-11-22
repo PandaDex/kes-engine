@@ -107,8 +107,8 @@ namespace
     bool StartsWithOption(std::string_view argument, std::string_view option)
     {
         return argument.size() > option.size() &&
-               argument.compare(0, option.size(), option) == 0 &&
-               argument[option.size()] == '=';
+            argument.compare(0, option.size(), option) == 0 &&
+            argument[option.size()] == '=';
     }
 }
 
@@ -126,7 +126,7 @@ void SetAssetRootOverride(const char* path)
         overridePath = fs::absolute(overridePath);
     gAssetRootOverride = overridePath.lexically_normal();
     if (!gAssetRootOverride.has_filename())
-        gAssetRootOverride = gAssetRootOverride.parent_path();   // no empty last element from a trailing separator
+        gAssetRootOverride = gAssetRootOverride.parent_path(); // no empty last element from a trailing separator
 }
 
 std::string GetAssetRootOverride()
@@ -230,5 +230,3 @@ std::vector<std::string> CollectPositionalCommandLineArguments(int argc, const c
 
     return positionals;
 }
-
-

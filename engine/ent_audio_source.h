@@ -4,7 +4,8 @@
 #include "map_script.h"
 #include "audio_system.h"
 
-class AudioSourceEntity : public Entity, public IMapScriptable
+class AudioSourceEntity : public Entity
+    , public IMapScriptable
 {
 public:
     AudioSourceEntity(const char* soundFile = nullptr, bool spatial = true);
@@ -38,7 +39,7 @@ private:
     float volume = 1.0f;
     float pitch = 1.0f;
     bool loop = false;
-    bool autoPlay = false;   // looping sounds always start with the map
+    bool autoPlay = false; // looping sounds always start with the map
     bool spatial = true;
     AudioBus bus = AudioBus::Effects;
     AudioVoiceId voiceId = 0;

@@ -159,7 +159,7 @@ const MapScriptPorts& BrushEntity::GetMapScriptPorts() const
 {
     static const MapScriptPorts ports = {
         { { "Enable" }, { "Disable" }, { "Toggle" }, { "Show" }, { "Hide" },
-          { "EnableCollision" }, { "DisableCollision" } },
+            { "EnableCollision" }, { "DisableCollision" } },
         {},
     };
     return ports;

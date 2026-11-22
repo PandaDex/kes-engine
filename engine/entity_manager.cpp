@@ -153,7 +153,7 @@ void EntityManager::DestroyAll()
 
     entities.clear();
     byGuid.clear();
-    pendingStart.clear();   // entities created by OnDestroy are dropped too
+    pendingStart.clear(); // entities created by OnDestroy are dropped too
     // Ids are not reset: they stay unique for the whole session, so an id kept
     // across a map change can never name a different entity.
 }

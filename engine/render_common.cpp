@@ -17,7 +17,7 @@ namespace render
         Vector3 Normalize(const Vector3& v)
         {
             const float length = Vector3Length(v);
-            return length > 1e-8f ? v / length : Vector3{0.0f, 0.0f, 1.0f};
+            return length > 1e-8f ? v / length : Vector3{ 0.0f, 0.0f, 1.0f };
         }
 
         void CopyMatrix(const Matrix4& source, float out[16])
@@ -61,7 +61,7 @@ namespace render
         // Up vector that isn't parallel to `forward`.
         Vector3 PickUp(const Vector3& forward)
         {
-            return std::fabs(forward.y) > 0.99f ? Vector3{0.0f, 0.0f, 1.0f} : Vector3{0.0f, 1.0f, 0.0f};
+            return std::fabs(forward.y) > 0.99f ? Vector3{ 0.0f, 0.0f, 1.0f } : Vector3{ 0.0f, 1.0f, 0.0f };
         }
 
         Vector3 LightDirection(const Light& light)
@@ -92,7 +92,7 @@ namespace render
             for (int col = 0; col < 4; ++col)
             {
                 r.m[row * 4 + col] = a.m[row * 4 + 0] * b.m[0 * 4 + col] + a.m[row * 4 + 1] * b.m[1 * 4 + col] +
-                                     a.m[row * 4 + 2] * b.m[2 * 4 + col] + a.m[row * 4 + 3] * b.m[3 * 4 + col];
+                    a.m[row * 4 + 2] * b.m[2 * 4 + col] + a.m[row * 4 + 3] * b.m[3 * 4 + col];
             }
         }
         return r;
@@ -104,9 +104,15 @@ namespace render
         const Vector3 x = Normalize(Vector3Cross(up, z));
         const Vector3 y = Vector3Cross(z, x);
         Matrix4 r;
-        r.m[0] = x.x; r.m[1] = y.x; r.m[2] = z.x;
-        r.m[4] = x.y; r.m[5] = y.y; r.m[6] = z.y;
-        r.m[8] = x.z; r.m[9] = y.z; r.m[10] = z.z;
+        r.m[0] = x.x;
+        r.m[1] = y.x;
+        r.m[2] = z.x;
+        r.m[4] = x.y;
+        r.m[5] = y.y;
+        r.m[6] = z.y;
+        r.m[8] = x.z;
+        r.m[9] = y.z;
+        r.m[10] = z.z;
         r.m[12] = -Vector3Dot(x, eye);
         r.m[13] = -Vector3Dot(y, eye);
         r.m[14] = -Vector3Dot(z, eye);
@@ -147,7 +153,7 @@ namespace render
         const float w = p.x * m.m[3] + p.y * m.m[7] + p.z * m.m[11] + m.m[15];
         if (outW)
             *outW = w;
-        return {x, y, z};
+        return { x, y, z };
     }
 
     Matrix4 TransformToMatrix(const Transform& t)
@@ -196,7 +202,7 @@ namespace render
             return static_cast<uint16_t>(sign | ((mantissa + (1u << (shift - 1))) >> shift));
         }
         if (exponent >= 31)
-            return static_cast<uint16_t>(sign | 0x7BFFu);   // clamp to the largest finite half
+            return static_cast<uint16_t>(sign | 0x7BFFu); // clamp to the largest finite half
         const uint32_t half = sign | (static_cast<uint32_t>(exponent) << 10) | ((mantissa + 0x1000u) >> 13);
         return static_cast<uint16_t>(half);
     }
@@ -216,9 +222,8 @@ namespace render
         cb.pbr[1] = std::clamp(m.roughness, 0.02f, 1.0f);
         cb.pbr[2] = m.normalScale;
         cb.pbr[3] = std::clamp(m.occlusionStrength, 0.0f, 1.0f);
-        cb.flags[0] = (m.flags & ~(MaterialFlag_HasBaseTexture | MaterialFlag_HasNormalTexture | MaterialFlag_HasMetallicRoughnessTexture |
-                                   MaterialFlag_HasOcclusionTexture | MaterialFlag_HasEmissiveTexture)) |
-                      textureFlags;
+        cb.flags[0] = (m.flags & ~(MaterialFlag_HasBaseTexture | MaterialFlag_HasNormalTexture | MaterialFlag_HasMetallicRoughnessTexture | MaterialFlag_HasOcclusionTexture | MaterialFlag_HasEmissiveTexture)) |
+            textureFlags;
         return cb;
     }
 
@@ -269,26 +274,27 @@ namespace render
     {
         switch (quality)
         {
-        case ShadowQuality::Low: return {2, 1024, 6, 512};
-        case ShadowQuality::Medium: return {3, 2048, 8, 512};
-        case ShadowQuality::High: return {4, 2048, 12, 1024};
-        default: return {};
+        case ShadowQuality::Low:    return { 2, 1024, 6, 512 };
+        case ShadowQuality::Medium: return { 3, 2048, 8, 512 };
+        case ShadowQuality::High:   return { 4, 2048, 12, 1024 };
+        default:                    return {};
         }
     }
 
     Frustum ExtractFrustum(const Matrix4& vp)
     {
         // clip = v * M: column j of M gives clip component j.
-        auto col = [&vp](int j, int i) { return vp.m[i * 4 + j]; };
+        auto col = [&vp](int j, int i)
+        { return vp.m[i * 4 + j]; };
         Frustum f;
         for (int i = 0; i < 4; ++i)
         {
-            f.planes[0][i] = col(3, i) + col(0, i);   // left
-            f.planes[1][i] = col(3, i) - col(0, i);   // right
-            f.planes[2][i] = col(3, i) + col(1, i);   // bottom
-            f.planes[3][i] = col(3, i) - col(1, i);   // top
-            f.planes[4][i] = col(2, i);               // near (D3D depth 0..1)
-            f.planes[5][i] = col(3, i) - col(2, i);   // far
+            f.planes[0][i] = col(3, i) + col(0, i); // left
+            f.planes[1][i] = col(3, i) - col(0, i); // right
+            f.planes[2][i] = col(3, i) + col(1, i); // bottom
+            f.planes[3][i] = col(3, i) - col(1, i); // top
+            f.planes[4][i] = col(2, i); // near (D3D depth 0..1)
+            f.planes[5][i] = col(3, i) - col(2, i); // far
         }
         for (auto& plane : f.planes)
         {
@@ -315,7 +321,7 @@ namespace render
         struct LightCandidate
         {
             const Light* light = nullptr;
-            float score = 0.0f;   // lower first
+            float score = 0.0f; // lower first
         };
 
         void PackLight(const Light& light, GPULight& out)
@@ -342,7 +348,7 @@ namespace render
         // Stable cascade: a bounding sphere of the camera frustum slice, the
         // projection snapped to whole shadow texels so edges don't shimmer.
         Matrix4 BuildCascade(const Camera& camera, float aspect, float nearDepth, float farDepth, const Vector3& lightDir,
-                             int resolution, float& outTexelSize)
+            int resolution, float& outTexelSize)
         {
             const Vector3 eye = CameraGetPosition(camera);
             const Vector3 forward = CameraGetForward(camera);
@@ -352,13 +358,13 @@ namespace render
 
             Vector3 corners[8];
             int index = 0;
-            for (float depth : {nearDepth, farDepth})
+            for (float depth : { nearDepth, farDepth })
             {
                 const Vector3 center = eye + forward * depth;
                 const float h = depth * tanHalf;
                 const float w = h * aspect;
-                for (float sy : {-1.0f, 1.0f})
-                    for (float sx : {-1.0f, 1.0f})
+                for (float sy : { -1.0f, 1.0f })
+                    for (float sx : { -1.0f, 1.0f })
                         corners[index++] = center + right * (w * sx) + up * (h * sy);
             }
             Vector3 center = {};
@@ -368,9 +374,9 @@ namespace render
             float radius = 0.0f;
             for (const Vector3& corner : corners)
                 radius = std::max(radius, Vector3Length(corner - center));
-            radius = std::ceil(radius * 16.0f) / 16.0f;   // stable size as the camera turns
+            radius = std::ceil(radius * 16.0f) / 16.0f; // stable size as the camera turns
 
-            constexpr float kCasterExtend = 150.0f;   // casters behind the slice (towers, terrain)
+            constexpr float kCasterExtend = 150.0f; // casters behind the slice (towers, terrain)
             const Vector3 shadowEye = center - lightDir * (radius + kCasterExtend);
             const Matrix4 view = MatrixLookToLH(shadowEye, lightDir, PickUp(lightDir));
             const Matrix4 proj = MatrixOrthoOffCenterLH(-radius, radius, -radius, radius, 0.0f, radius * 2.0f + kCasterExtend);
@@ -379,7 +385,7 @@ namespace render
             // Snap the world origin to a texel; moving the camera then shifts
             // the projection by whole texels only.
             const float halfRes = static_cast<float>(resolution) * 0.5f;
-            const Vector3 origin = TransformPoint(viewProj, {0.0f, 0.0f, 0.0f});
+            const Vector3 origin = TransformPoint(viewProj, { 0.0f, 0.0f, 0.0f });
             const float x = origin.x * halfRes;
             const float y = origin.y * halfRes;
             viewProj.m[12] += (std::round(x) - x) / halfRes;
@@ -391,7 +397,7 @@ namespace render
     }
 
     void BuildFrameSetup(FrameSetup& out, const SceneState& state, const Camera& camera, const Scene& scene,
-                         float aspect, const GraphicsOptions& options)
+        float aspect, const GraphicsOptions& options)
     {
         KES_ZONE_FN(RENDER);
         out.shadowViews.clear();
@@ -400,7 +406,7 @@ namespace render
         // Keep the SH (written by ApplyEnvironment), reset the rest.
         float sh[9][4];
         std::memcpy(sh, cb.ambientSH, sizeof(sh));
-        const float environmentParams[4] = {cb.environmentParams[0], cb.environmentParams[1], cb.environmentParams[2], cb.environmentParams[3]};
+        const float environmentParams[4] = { cb.environmentParams[0], cb.environmentParams[1], cb.environmentParams[2], cb.environmentParams[3] };
         cb = {};
         std::memcpy(cb.ambientSH, sh, sizeof(sh));
         std::memcpy(cb.environmentParams, environmentParams, sizeof(environmentParams));
@@ -431,16 +437,17 @@ namespace render
                 continue;
             if (light.type == LightType::Directional)
             {
-                candidates.push_back({&light, -1e30f});
+                candidates.push_back({ &light, -1e30f });
                 continue;
             }
             const Vector3 position = light.transform.position;
             if (!SphereInFrustum(out.frustum, position, light.range))
                 continue;
-            candidates.push_back({&light, Vector3Length(position - eye) - light.range});
+            candidates.push_back({ &light, Vector3Length(position - eye) - light.range });
         }
         std::stable_sort(candidates.begin(), candidates.end(),
-                         [](const LightCandidate& a, const LightCandidate& b) { return a.score < b.score; });
+            [](const LightCandidate& a, const LightCandidate& b)
+            { return a.score < b.score; });
         if (candidates.size() > static_cast<size_t>(kMaxLights))
             candidates.resize(kMaxLights);
 
@@ -466,7 +473,7 @@ namespace render
                 const float nearPlane = kCameraNearPlane;
                 const float farPlane = std::clamp(options.shadowDistance, 5.0f, kCameraFarPlane);
                 const int count = out.shadows.cascadeCount;
-                float splits[kMaxCascades + 1] = {nearPlane};
+                float splits[kMaxCascades + 1] = { nearPlane };
                 for (int i = 1; i <= count; ++i)
                 {
                     const float t = static_cast<float>(i) / static_cast<float>(count);
@@ -514,8 +521,8 @@ namespace render
             {
                 // Faces +X -X +Y -Y +Z -Z; the shader picks one by the major axis.
                 // 92 degrees so filtering near face edges stays inside the slice.
-                static const Vector3 kDirs[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-                static const Vector3 kUps[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
+                static const Vector3 kDirs[6] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+                static const Vector3 kUps[6] = { { 0, 1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 } };
                 const Matrix4 proj = MatrixPerspectiveFovLH(92.0f * kPi / 180.0f, 1.0f, zn, range);
                 for (int face = 0; face < 6; ++face)
                 {
@@ -600,12 +607,12 @@ namespace render
         {
             switch (face)
             {
-            case 0: return Normalize({1.0f, -v, -u});
-            case 1: return Normalize({-1.0f, -v, u});
-            case 2: return Normalize({u, 1.0f, v});
-            case 3: return Normalize({u, -1.0f, -v});
-            case 4: return Normalize({u, -v, 1.0f});
-            default: return Normalize({-u, -v, -1.0f});
+            case 0:  return Normalize({ 1.0f, -v, -u });
+            case 1:  return Normalize({ -1.0f, -v, u });
+            case 2:  return Normalize({ u, 1.0f, v });
+            case 3:  return Normalize({ u, -1.0f, -v });
+            case 4:  return Normalize({ u, -v, 1.0f });
+            default: return Normalize({ -u, -v, -1.0f });
             }
         }
 
@@ -615,8 +622,8 @@ namespace render
             const float phi = 2.0f * kPi * xi0;
             const float cosTheta = std::sqrt((1.0f - xi1) / (1.0f + (a * a - 1.0f) * xi1));
             const float sinTheta = std::sqrt(std::max(0.0f, 1.0f - cosTheta * cosTheta));
-            const Vector3 h = {sinTheta * std::cos(phi), sinTheta * std::sin(phi), cosTheta};
-            const Vector3 up = std::fabs(n.z) < 0.999f ? Vector3{0, 0, 1} : Vector3{1, 0, 0};
+            const Vector3 h = { sinTheta * std::cos(phi), sinTheta * std::sin(phi), cosTheta };
+            const Vector3 up = std::fabs(n.z) < 0.999f ? Vector3{ 0, 0, 1 } : Vector3{ 1, 0, 0 };
             const Vector3 tx = Normalize(Vector3Cross(up, n));
             const Vector3 ty = Vector3Cross(n, tx);
             return Normalize(tx * h.x + ty * h.y + n * h.z);
@@ -658,7 +665,7 @@ namespace render
         {
             hash = Hash(hash, source.flat, sizeof(source.flat));
         }
-        return hash | 1u;   // never 0 ("not built")
+        return hash | 1u; // never 0 ("not built")
     }
 
     void BuildEnvironment(const SceneState& state, const Scene& scene, EnvironmentMaps& out)
@@ -681,7 +688,7 @@ namespace render
             for (int k = 0; k < kTableSize; ++k)
             {
                 const float y = -1.0f + 2.0f * static_cast<float>(k) / static_cast<float>(kTableSize - 1);
-                const Vector3 n = Normalize({std::sqrt(std::max(0.0f, 1.0f - y * y)), y, 0.0f});
+                const Vector3 n = Normalize({ std::sqrt(std::max(0.0f, 1.0f - y * y)), y, 0.0f });
                 float sum[3] = {};
                 if (mip == 0 || !source.sky)
                 {
@@ -706,7 +713,7 @@ namespace render
                     for (float& value : sum)
                         value /= std::max(weight, 1e-6f);
                 }
-                table[k] = {sum[0], sum[1], sum[2]};
+                table[k] = { sum[0], sum[1], sum[2] };
             }
 
             const int size = std::max(kEnvironmentFaceSize >> mip, 1);
@@ -754,7 +761,8 @@ namespace render
                         0.282095,
                         0.488603 * d.y, 0.488603 * d.z, 0.488603 * d.x,
                         1.092548 * d.x * d.y, 1.092548 * d.y * d.z, 0.315392 * (3.0 * d.z * d.z - 1.0),
-                        1.092548 * d.x * d.z, 0.546274 * (d.x * d.x - d.y * d.y)};
+                        1.092548 * d.x * d.z, 0.546274 * (d.x * d.x - d.y * d.y)
+                    };
                     for (int i = 0; i < 9; ++i)
                         for (int c = 0; c < 3; ++c)
                             coefficients[i][c] += radiance[c] * basis[i] * weight;
@@ -763,7 +771,7 @@ namespace render
             }
         }
         const double normalize = 4.0 * kPi / totalWeight;
-        const double band[9] = {1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.25, 0.25, 0.25, 0.25, 0.25};   // A_l / pi
+        const double band[9] = { 1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.25, 0.25, 0.25, 0.25, 0.25 }; // A_l / pi
         for (int i = 0; i < 9; ++i)
         {
             for (int c = 0; c < 3; ++c)
@@ -859,7 +867,7 @@ namespace render
                     uint8_t* out = &dst.pixels[(static_cast<size_t>(y) * dst.width + x) * 4];
                     if (usage == TextureUsage::Normal)
                     {
-                        Vector3 n = Normalize({sum[0], sum[1], sum[2]});
+                        Vector3 n = Normalize({ sum[0], sum[1], sum[2] });
                         out[0] = ToByte(n.x * 0.5f + 0.5f);
                         out[1] = ToByte(n.y * 0.5f + 0.5f);
                         out[2] = ToByte(n.z * 0.5f + 0.5f);
@@ -889,14 +897,14 @@ namespace render
         {
             float p[3];
             std::memcpy(p, bytes + i * stride, sizeof(p));
-            return Vector3{p[0], p[1], p[2]};
+            return Vector3{ p[0], p[1], p[2] };
         };
         Vector3 minV = position(0), maxV = minV;
         for (size_t i = 1; i < count; ++i)
         {
             const Vector3 p = position(i);
-            minV = {std::min(minV.x, p.x), std::min(minV.y, p.y), std::min(minV.z, p.z)};
-            maxV = {std::max(maxV.x, p.x), std::max(maxV.y, p.y), std::max(maxV.z, p.z)};
+            minV = { std::min(minV.x, p.x), std::min(minV.y, p.y), std::min(minV.z, p.z) };
+            maxV = { std::max(maxV.x, p.x), std::max(maxV.y, p.y), std::max(maxV.z, p.z) };
         }
         outCenter = (minV + maxV) * 0.5f;
         float radiusSq = 0.0f;
@@ -908,6 +916,6 @@ namespace render
     void TransformSphere(const Matrix4& world, const Vector3& scale, const Vector3& localCenter, float localRadius, Vector3& outCenter, float& outRadius)
     {
         outCenter = TransformPoint(world, localCenter);
-        outRadius = localRadius * std::max({std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z)});
+        outRadius = localRadius * std::max({ std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z) });
     }
 }

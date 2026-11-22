@@ -191,7 +191,7 @@ bool SetAppWindowMode(AppWindow& window, WindowMode mode, IntPoint resolution, i
         EngineLogf("Window mode change to %s reported an error: %s", WindowModeName(mode), SDL_GetError());
     else
         EngineLogf("Window mode: %s %dx%d (pixels %dx%d) on display %d.", WindowModeName(mode),
-                   window.width, window.height, window.pixelWidth, window.pixelHeight, displayIndex);
+            window.width, window.height, window.pixelWidth, window.pixelHeight, displayIndex);
     return ok;
 }
 
@@ -323,8 +323,6 @@ std::vector<IntPoint> GetSupportedFullscreenResolutions(int displayIndex)
 
     // Largest first, like the display mode list.
     std::sort(result.begin(), result.end(), [](const IntPoint& a, const IntPoint& b)
-    {
-        return a.x != b.x ? a.x > b.x : a.y > b.y;
-    });
+        { return a.x != b.x ? a.x > b.x : a.y > b.y; });
     return result;
 }

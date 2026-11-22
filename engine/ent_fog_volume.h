@@ -3,7 +3,8 @@
 #include "map_script.h"
 #include "scene.h"
 
-class FogVolumeEntity : public Entity, public IMapScriptable
+class FogVolumeEntity : public Entity
+    , public IMapScriptable
 {
 public:
     FogVolumeEntity();

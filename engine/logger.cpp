@@ -235,7 +235,7 @@ namespace
             {
                 if (a.lastWriteTime == b.lastWriteTime)
                     return a.path.filename().string() <
-                           b.path.filename().string();
+                        b.path.filename().string();
 
                 return a.lastWriteTime < b.lastWriteTime;
             });
@@ -257,8 +257,8 @@ namespace
 
             result.remainingBytes =
                 result.remainingBytes >= file.size
-                    ? result.remainingBytes - file.size
-                    : 0;
+                ? result.remainingBytes - file.size
+                : 0;
 
             result.removedBytes += file.size;
             ++result.removedCount;
@@ -347,27 +347,27 @@ bool LoggerInitialize(String executablePath)
     WriteMessageNoLock(
         LogSource::Engine,
         "Active log file: " +
-        g_logger.currentFile.string());
+            g_logger.currentFile.string());
 
     if (cleanup.removedCount > 0)
     {
         WriteMessageNoLock(
             LogSource::Engine,
             "Log retention removed " +
-            std::to_string(cleanup.removedCount) +
-            " old file(s), freed " +
-            std::to_string(cleanup.removedBytes) +
-            " bytes. Remaining log size: " +
-            std::to_string(cleanup.remainingBytes) +
-            " bytes.");
+                std::to_string(cleanup.removedCount) +
+                " old file(s), freed " +
+                std::to_string(cleanup.removedBytes) +
+                " bytes. Remaining log size: " +
+                std::to_string(cleanup.remainingBytes) +
+                " bytes.");
     }
     else
     {
         WriteMessageNoLock(
             LogSource::Engine,
             "Log retention check complete. Current log directory size: " +
-            std::to_string(cleanup.remainingBytes) +
-            " bytes.");
+                std::to_string(cleanup.remainingBytes) +
+                " bytes.");
     }
 
     return true;

@@ -15,7 +15,7 @@ enum class ColliderType
     Box,
     Sphere,
     Capsule,
-    Convex   // convex hull from planes (map brushes)
+    Convex // convex hull from planes (map brushes)
 };
 
 // Static never moves on its own, Kinematic moves where it is told and pushes
@@ -37,7 +37,7 @@ struct CollisionPlane
 struct ConvexCollider
 {
     std::vector<CollisionPlane> planes;
-    Vector3 boundsMin = {};   // local AABB of the hull, used if the planes don't form a valid hull
+    Vector3 boundsMin = {}; // local AABB of the hull, used if the planes don't form a valid hull
     Vector3 boundsMax = {};
 };
 
@@ -47,7 +47,7 @@ struct RigidShape
 {
     ColliderType type = ColliderType::Box;
     Vector3 center = {};
-    float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f };   // quaternion x, y, z, w
+    float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f }; // quaternion x, y, z, w
     Vector3 halfExtents = { 0.5f, 0.5f, 0.5f };
     float radius = 0.5f;
     float halfHeight = 0.5f;
@@ -57,19 +57,19 @@ struct RigidBodyDesc
 {
     ColliderMotion motion = ColliderMotion::Dynamic;
     Vector3 position = {};
-    Vector3 rotation = {};      // radians, same convention as Entity::Rotation
-    float density = 500.0f;     // kg per cubic meter
+    Vector3 rotation = {}; // radians, same convention as Entity::Rotation
+    float density = 500.0f; // kg per cubic meter
     float friction = 0.6f;
     float restitution = 0.0f;
-    float rollingResistance = 0.1f;   // spheres: without it they roll forever on a flat floor
+    float rollingResistance = 0.1f; // spheres: without it they roll forever on a flat floor
 };
 
 struct CollisionHit
 {
     bool hit = false;
     ColliderHandle other = 0;
-    Vector3 normal = {};      // surface normal at the contact, facing the moving shape
-    float fraction = 1.0f;    // part of the sweep that was free of contact
+    Vector3 normal = {}; // surface normal at the contact, facing the moving shape
+    float fraction = 1.0f; // part of the sweep that was free of contact
 };
 
 struct Ray
@@ -107,10 +107,10 @@ public:
     ColliderHandle AddSphere(const Vector3& position, float radius, bool isTrigger = false, const Vector3& offset = {});
     // Vertical capsule. A character's capsule is Kinematic so it pushes dynamic bodies.
     ColliderHandle AddCapsule(const Vector3& position, float radius, float halfHeight, bool isTrigger = false,
-                              const Vector3& offset = {}, ColliderMotion motion = ColliderMotion::Static);
+        const Vector3& offset = {}, ColliderMotion motion = ColliderMotion::Static);
     // Convex hull: the intersection of the half-spaces behind `planes` (local to `position`).
     ColliderHandle AddConvex(const Vector3& position, const std::vector<CollisionPlane>& planes,
-                             const Vector3& boundsMin, const Vector3& boundsMax, bool isTrigger = false);
+        const Vector3& boundsMin, const Vector3& boundsMax, bool isTrigger = false);
 
     // One body made of `hulls`, local to desc.position.
     ColliderHandle AddRigidHulls(const std::vector<ConvexCollider>& hulls, const RigidBodyDesc& desc);
@@ -130,7 +130,7 @@ public:
     // entities) and local a position and quaternion (x, y, z, w) in the parent's space.
     // Kinematic bodies move there over timeStep (> 0) so they push what they meet; otherwise it teleports.
     void SetTargetPose(ColliderHandle handle, const Vector3& parentPosition, const Vector3& parentRotation,
-                       const Vector3& localPosition, const float localRotation[4], float timeStep);
+        const Vector3& localPosition, const float localRotation[4], float timeStep);
     Vector3 GetWorldPosition(ColliderHandle handle) const;
 
     void Step(float timeStep);

@@ -6,8 +6,8 @@
 
 enum class SoundEncoding : uint32_t
 {
-    PcmFloat = 0,   // interleaved float32
-    Qoa = 1,        // QOA ("Quite OK Audio"), ~3.2 bits per sample, lossy
+    PcmFloat = 0, // interleaved float32
+    Qoa = 1, // QOA ("Quite OK Audio"), ~3.2 bits per sample, lossy
 };
 
 struct SoundFileData
@@ -17,15 +17,18 @@ struct SoundFileData
     uint32_t channels = 0;
     uint32_t frameCount = 0;
     SoundEncoding encoding = SoundEncoding::PcmFloat;
-    std::vector<float> samples;     // PcmFloat, or after DecodeSoundSamples
-    std::vector<uint8_t> encoded;   // Qoa: a complete QOA stream (header + frames)
+    std::vector<float> samples; // PcmFloat, or after DecodeSoundSamples
+    std::vector<uint8_t> encoded; // Qoa: a complete QOA stream (header + frames)
 };
 
 // QOA frames are self-contained: frame i starts at kQoaFileHeaderSize + i * QoaFrameBytes(channels)
 // and decodes kQoaFrameLength frames of audio (the last one fewer).
 inline constexpr uint32_t kQoaFileHeaderSize = 8;
 inline constexpr uint32_t kQoaFrameLength = 256 * 20;
-inline constexpr uint32_t QoaFrameBytes(uint32_t channels) { return 8 + 16 * channels + 8 * 256 * channels; }
+inline constexpr uint32_t QoaFrameBytes(uint32_t channels)
+{
+    return 8 + 16 * channels + 8 * 256 * channels;
+}
 
 // Qoa files stay encoded; DecodeSoundSamples turns them into float samples.
 bool LoadSoundFile(const char* path, SoundFileData& outSound, std::string* outError = nullptr);

@@ -34,7 +34,12 @@ if(KES_PROFILING)
     # Tracy's options are plain option() calls; normal variables set here win (CMP0077).
     set(TRACY_ENABLE ON)
     set(TRACY_ON_DEMAND ${KES_PROFILER_ON_DEMAND})
-    set(TRACY_STATIC ON)
+    # Shared with a shared engine: game code zones and the engine's must share one client.
+    if(KES_ENGINE_SHARED)
+        set(TRACY_STATIC OFF)
+    else()
+        set(TRACY_STATIC ON)
+    endif()
     set(TRACY_ONLY_LOCALHOST ON)   # don't listen on the LAN by default
     add_subdirectory("${_kes_tracy_dir}" "${CMAKE_BINARY_DIR}/external/tracy" EXCLUDE_FROM_ALL)
 

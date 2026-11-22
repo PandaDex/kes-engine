@@ -19,7 +19,12 @@ if(KES_RENDERER_VULKAN)
     find_package(Vulkan REQUIRED)
 endif()
 
-add_library(engine STATIC
+if(KES_ENGINE_SHARED)
+    set(_kes_engine_type SHARED)
+else()
+    set(_kes_engine_type STATIC)
+endif()
+add_library(engine ${_kes_engine_type}
     "engine.h"
     "engine.cpp"
     "on_screen_debug.h"
@@ -146,6 +151,18 @@ add_library(engine STATIC
 target_include_directories(engine PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
 )
+if(KES_ENGINE_SHARED)
+    # No per-symbol export macros: every non-inline function is exported. Data
+    # (globals, static members) still needs __declspec(dllimport) on Windows, so
+    # engine headers must not expose mutable globals to game code.
+    set_target_properties(engine PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    if(UNIX AND NOT APPLE)
+        # Packaged next to the exe with SDL3; RUNPATH here would hide the exe's RPATH.
+        set_target_properties(engine PROPERTIES
+            BUILD_WITH_INSTALL_RPATH ON
+            INSTALL_RPATH "\$ORIGIN")
+    endif()
+endif()
 # QOA audio codec (single header, sound_file.cpp); SYSTEM keeps its warnings out of warnings-as-errors.
 target_include_directories(engine SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/external/qoa")
 target_link_libraries(engine PUBLIC SDL3::SDL3)
@@ -267,8 +284,3 @@ target_compile_definitions(engine PRIVATE
         "ENGINE_PAK_ENCRYPTION_KEY_HEX=\"${KES_PAK_ENCRYPTION_KEY}\""
 )
 
-# Tools 
-add_subdirectory ("tools/pak-tool")
-if(WIN32)
-add_subdirectory ("tools/model-importer")
-endif()

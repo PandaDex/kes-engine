@@ -22,23 +22,14 @@ public:
     void Shutdown();
     void Update(float dt);
     void FixedUpdate(float fixedDt);
-    // Loads synchronously. If the map can't be loaded, the current level stays.
-    // Called from an entity, the load is queued for the end of the frame and
-    // the result is always true.
     bool LoadMap(const char* mapName);
     const std::string& GetCurrentMapName() const { return currentMapName; }
-
-    // Paused: entities don't update and audio output is paused. Rendering and
-    // queued map loads continue.
     void SetPaused(bool paused);
     bool IsPaused() const { return paused; }
     void QueueMapLoad(const std::string& mapName);
-    // Deferred: Update leaves queued loads to the owner (the engine draws a
-    // loading frame first), which takes them with TakePendingMapLoad.
     void SetDeferMapLoads(bool defer) { deferMapLoads = defer; }
     bool HasPendingMapLoad() const { return !pendingMapLoad.empty(); }
     std::string TakePendingMapLoad();
-    // Counts successful map loads.
     uint64_t GetLevelGeneration() const { return levelGeneration; }
     void RegisterEntityClass(const std::string& className, EntityFactoryFunction factory);
     void SetPlayerClassName(const std::string& className);

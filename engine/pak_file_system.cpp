@@ -165,10 +165,10 @@ namespace
         while (generic.size() >= 2 && generic[0] == '.' && generic[1] == '/')
             generic.erase(0, 2);
         std::transform(generic.begin(), generic.end(), generic.begin(),
-                       [](unsigned char ch)
-                       {
-                           return static_cast<char>(std::tolower(ch));
-                       });
+            [](unsigned char ch)
+            {
+                return static_cast<char>(std::tolower(ch));
+            });
         return generic;
     }
 
@@ -266,8 +266,7 @@ namespace
 
     uint32_t LoadU32LE(const uint8_t* data)
     {
-        return
-            static_cast<uint32_t>(data[0]) |
+        return static_cast<uint32_t>(data[0]) |
             (static_cast<uint32_t>(data[1]) << 8u) |
             (static_cast<uint32_t>(data[2]) << 16u) |
             (static_cast<uint32_t>(data[3]) << 24u);
@@ -280,10 +279,18 @@ namespace
 
     void QuarterRound(uint32_t& a, uint32_t& b, uint32_t& c, uint32_t& d)
     {
-        a += b; d ^= a; d = RotateLeft(d, 16);
-        c += d; b ^= c; b = RotateLeft(b, 12);
-        a += b; d ^= a; d = RotateLeft(d, 8);
-        c += d; b ^= c; b = RotateLeft(b, 7);
+        a += b;
+        d ^= a;
+        d = RotateLeft(d, 16);
+        c += d;
+        b ^= c;
+        b = RotateLeft(b, 12);
+        a += b;
+        d ^= a;
+        d = RotateLeft(d, 8);
+        c += d;
+        b ^= c;
+        b = RotateLeft(b, 7);
     }
 
     void GenerateChaCha20Block(const PakEncryptionKey& key, const PakNonce& nonce, uint32_t counter, uint8_t outBlock[64])
@@ -430,7 +437,7 @@ namespace
 
     // Reads, decrypts and validates the index the header points at.
     bool ReadPakIndex(std::ifstream& file, bool encrypted, const PakEncryptionKey& key, const PakNonce& nonce, uint32_t fileCount,
-                      uint64_t indexOffset, uint64_t indexSize, std::vector<MountedPakEntry>& outEntries, std::string* outError)
+        uint64_t indexOffset, uint64_t indexSize, std::vector<MountedPakEntry>& outEntries, std::string* outError)
     {
         const auto fail = [outError](const std::string& message)
         {
@@ -486,13 +493,13 @@ namespace
     {
         const uint32_t reserved = 0;
         return WriteValue(stream, kPakMagic) &&
-               WriteValue(stream, kPakVersion) &&
-               WriteValue(stream, flags) &&
-               WriteValue(stream, fileCount) &&
-               WriteValue(stream, indexOffset) &&
-               WriteValue(stream, indexSize) &&
-               static_cast<bool>(stream.write(reinterpret_cast<const char*>(nonce.data()), nonce.size())) &&
-               WriteValue(stream, reserved);
+            WriteValue(stream, kPakVersion) &&
+            WriteValue(stream, flags) &&
+            WriteValue(stream, fileCount) &&
+            WriteValue(stream, indexOffset) &&
+            WriteValue(stream, indexSize) &&
+            static_cast<bool>(stream.write(reinterpret_cast<const char*>(nonce.data()), nonce.size())) &&
+            WriteValue(stream, reserved);
     }
 
     void AppendBytes(std::vector<uint8_t>& buffer, const void* data, size_t size)
@@ -587,7 +594,7 @@ std::vector<std::string> ListAssetFiles(const char* directory, const char* exten
             (lower.size() <= wantedExtension.size() || lower.compare(lower.size() - wantedExtension.size(), wantedExtension.size(), wantedExtension) != 0))
             return;
         const bool seen = std::any_of(names.begin(), names.end(), [&](const std::string& existing)
-                                      { return NormalizePakEntryPath(fs::path(existing)) == lower; });
+            { return NormalizePakEntryPath(fs::path(existing)) == lower; });
         if (!seen)
             names.push_back(name);
     };
@@ -740,10 +747,10 @@ bool MountContentPakFiles(std::string* outError, String executablePath)
 
         std::string extension = entry.path().extension().string();
         std::transform(extension.begin(), extension.end(), extension.begin(),
-                       [](unsigned char ch)
-                       {
-                           return static_cast<char>(std::tolower(ch));
-                       });
+            [](unsigned char ch)
+            {
+                return static_cast<char>(std::tolower(ch));
+            });
         if (extension == ".pak")
             pakFiles.push_back(entry.path());
     }
@@ -856,10 +863,10 @@ bool CreatePakFile(const char* sourceDirectory, const char* outputPath, const ch
     }
 
     std::sort(filesToPack.begin(), filesToPack.end(),
-              [](const auto& left, const auto& right)
-              {
-                  return left.second < right.second;
-              });
+        [](const auto& left, const auto& right)
+        {
+            return left.second < right.second;
+        });
 
     std::ofstream file(pakOutputPath, std::ios::binary | std::ios::trunc);
     if (!file.is_open())
@@ -952,7 +959,6 @@ bool CreatePakFile(const char* sourceDirectory, const char* outputPath, const ch
 
     return true;
 }
-
 
 bool ExtractPakFile(const char* pakPath, const char* outputDirectory, std::string* outError, const char* encryptionKeyHex)
 {

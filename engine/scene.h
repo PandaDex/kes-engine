@@ -26,7 +26,7 @@ struct SceneObject
     ModelHandle model = 0;
     MaterialHandle material = 0;
     uint32_t skinMatrixCount = 0;
-    std::vector<float> skinMatrices;   // skinMatrixCount * 16, empty for static objects
+    std::vector<float> skinMatrices; // skinMatrixCount * 16, empty for static objects
     // Used instead of transform when set. transform.position is still used for sorting, so keep it in sync.
     bool useWorldMatrix = false;
     float worldMatrix[16] = {};
@@ -40,7 +40,7 @@ struct Light
     float color[3] = { 1.0f, 1.0f, 1.0f };
     float intensity = 1.0f;
     float range = 10.0f;
-    float spotAngle = 45.0f;   // full cone angle, degrees
+    float spotAngle = 45.0f; // full cone angle, degrees
     Transform transform;
     bool active = true;
     // The first shadowed directional light gets the sun cascades; spot and
@@ -58,7 +58,7 @@ struct SkySettings
     float sunSize = 2.5f;
     float sunIntensity = 1.15f;
     float horizonExponent = 1.6f;
-    float ambientIntensity = 1.0f;   // scales the sky's ambient light and reflections
+    float ambientIntensity = 1.0f; // scales the sky's ambient light and reflections
     bool active = false;
     uint64_t ownerEntityId = 0;
 };
@@ -131,7 +131,7 @@ public:
 
 private:
     std::vector<SceneObject> objects;
-    std::unordered_map<uint32_t, size_t> objectIndices;   // id -> index in objects
+    std::unordered_map<uint32_t, size_t> objectIndices; // id -> index in objects
     std::vector<Light> lights;
     SkySettings sky;
     FogSettings fog;

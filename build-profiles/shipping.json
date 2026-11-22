@@ -1,0 +1,59 @@
+{
+    "advanced": {
+        "architecture": "x64",
+        "buildDir": "",
+        "buildToolArgs": [
+        ],
+        "cleanFirst": false,
+        "cmakeArgs": [
+        ],
+        "extraTargets": [
+        ],
+        "freshConfigure": false,
+        "gameTarget": "game",
+        "generator": "",
+        "jobs": 0
+    },
+    "configuration": "MinSizeRel",
+    "description": "What package.ps1 / package.sh make: Release, paks, crash reporter, no debug tools.",
+    "engine": {
+        "buildSamples": false,
+        "buildTests": false,
+        "crashDsn": "",
+        "crashReporter": false,
+        "debugTools": false,
+        "disabledProfilerCategories": [
+        ],
+        "engineShared": true,
+        "profilerOnDemand": false,
+        "profiling": false,
+        "rendererSelection": false,
+        "renderers": [
+            "d3d11"
+        ],
+        "sanitize": false,
+        "warningsAsErrors": false
+    },
+    "formatVersion": 1,
+    "launch": {
+        "arguments": "",
+        "runAfterBuild": false,
+        "workingDir": ""
+    },
+    "name": "Shipping",
+    "package": {
+        "content": "pak",
+        "enabled": true,
+        "format": "folder",
+        "keyEnv": "KES_PAK_KEY",
+        "keySource": "none",
+        "outputDir": "",
+        "projectName": "",
+        "stripSources": true,
+        "suffix": "",
+        "symbols": "none",
+        "vcRuntime": false,
+        "version": ""
+    },
+    "platform": "Windows"
+}

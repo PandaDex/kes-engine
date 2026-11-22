@@ -570,6 +570,12 @@ Important macros:
 
 These act as engine defaults and can be overridden at compile time.
 
+## Linking
+
+The engine is a shared library by default (`engine.dll` / `libengine.so`, CMake option `KES_ENGINE_SHARED`). RmlUi and Tracy are shared alongside it so game code and the engine use one instance of each. `bundle_runtime_libs()` copies them next to the executable and packages ship them. `-DKES_ENGINE_SHARED=OFF` builds the old static library.
+
+On Windows all engine functions are exported automatically (`WINDOWS_EXPORT_ALL_SYMBOLS`), but data is not: a global variable or static data member declared in an engine header can't be used from game code. Expose a function instead.
+
 ## Current API Shape
 
 The runtime API is intentionally small and practical. It is not a stable SDK yet. Expect signatures and responsibilities to move as the engine grows.

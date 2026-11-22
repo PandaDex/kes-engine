@@ -13,3 +13,4 @@ endif()
 
 target_link_libraries(pak-tool PRIVATE engine)
 kes_target_warnings(pak-tool)
+bundle_runtime_libs(pak-tool)

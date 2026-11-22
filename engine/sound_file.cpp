@@ -12,12 +12,12 @@
 #include "pak_file_system.h"
 #include "profiler.h"
 
-#include <qoa.h>   // implementation in qoa_codec.c
+#include <qoa.h> // implementation in qoa_codec.c
 
 namespace
 {
     constexpr uint32_t kKSoundMagic = 0x444E534Bu; // KSND
-    constexpr uint32_t kKSoundVersion = 2u;   // 1: float PCM only
+    constexpr uint32_t kKSoundVersion = 2u; // 1: float PCM only
 
     template<typename T>
     bool WriteValue(std::ofstream& file, const T& value)
@@ -99,7 +99,7 @@ bool LoadKSoundFile(const char* path, SoundFileData& outSound, std::string* outE
     outSound.frameCount = file.u32();
     if (version >= 2)
         outSound.encoding = static_cast<SoundEncoding>(file.u32());
-    const uint32_t payloadCount = file.u32();   // PcmFloat: samples, Qoa: bytes
+    const uint32_t payloadCount = file.u32(); // PcmFloat: samples, Qoa: bytes
     if (!file.ok())
         return fail("Failed to read sound header");
 
@@ -161,7 +161,7 @@ bool EncodeSoundQoa(SoundFileData& sound, std::string* outError)
     if (!bytes)
         return fail("QOA encoding failed");
     sound.encoded.assign(static_cast<uint8_t*>(bytes), static_cast<uint8_t*>(bytes) + length);
-    std::free(bytes);   // qoa_encode allocates with malloc
+    std::free(bytes); // qoa_encode allocates with malloc
     sound.frameCount = desc.samples;
     sound.encoding = SoundEncoding::Qoa;
     return true;
@@ -205,7 +205,7 @@ bool DecodeSoundSamples(SoundFileData& sound, std::string* outError)
         }
         const uint32_t take = (std::min)(decoded, sound.frameCount - written);
         std::copy(block.begin(), block.begin() + static_cast<std::ptrdiff_t>(take) * sound.channels,
-                  sound.samples.begin() + static_cast<std::ptrdiff_t>(written) * sound.channels);
+            sound.samples.begin() + static_cast<std::ptrdiff_t>(written) * sound.channels);
         written += take;
     }
     sound.encoding = SoundEncoding::PcmFloat;

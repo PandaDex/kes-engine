@@ -1,4 +1,6 @@
-# Usage: cmake -DTARGET_FILE=<exe> -DOUT_DIR=<dir> [-DEXTRA_DIRS=<dirs>] -P BundleRuntimeLibs.cmake
+# Usage: cmake -DTARGET_FILE=<exe> -DOUT_DIR=<dir> [-DEXTRA_DIRS=<dir|dir|...>] -P BundleRuntimeLibs.cmake
+string(REPLACE "|" ";" EXTRA_DIRS "${EXTRA_DIRS}")
+
 file(GET_RUNTIME_DEPENDENCIES
     EXECUTABLES "${TARGET_FILE}"
     RESOLVED_DEPENDENCIES_VAR deps

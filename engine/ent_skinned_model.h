@@ -97,7 +97,7 @@ private:
     AnimationClipHandle animationClipHandle = 0;
     AnimationGraphHandle animationGraphHandle = 0;
     AnimationClipHandle playbackClipHandle = 0;
-    bool assetsDirty = true;          // model or material path changed; each path is loaded once
+    bool assetsDirty = true; // model or material path changed; each path is loaded once
     bool graphLoadAttempted = false;
     float clipTime = 0.0f;
     float currentAnimationTime = 0.0f;
@@ -124,7 +124,7 @@ private:
     {
         uint32_t objectId = 0;
         ModelHandle model = 0;
-        int parentPart = -1;          // -1 = attached to the entity's own model
+        int parentPart = -1; // -1 = attached to the entity's own model
         size_t childIndex = 0;
         std::string name;
         std::vector<float> nodeWorld;
@@ -141,7 +141,8 @@ private:
     void LoadChildAnimation(ChildPart& part);
     bool EvaluateChildAnimation(ChildPart& part, const KModelData& model, float dt);
     void ResetChildAnimation(ChildPart& part, const std::string& path);
-    template<typename Fn> bool ForEachChildNamed(const std::string& name, Fn&& fn);
+    template<typename Fn>
+    bool ForEachChildNamed(const std::string& name, Fn&& fn);
     std::vector<ChildPart> childParts;
     ModelHandle childPartsModel = 0;
     std::vector<float> rootWorldScratch;

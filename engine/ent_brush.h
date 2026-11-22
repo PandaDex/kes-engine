@@ -12,7 +12,8 @@
 //   Visible  true/false  render the brushes (default true)
 //   Dynamic  true/false  simulate it as one rigid body (default false)
 //   Density, Friction, Restitution  for dynamic brushes
-class BrushEntity : public Entity, public IMapScriptable
+class BrushEntity : public Entity
+    , public IMapScriptable
 {
 public:
     void Start() override;

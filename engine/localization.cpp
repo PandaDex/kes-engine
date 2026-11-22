@@ -23,9 +23,8 @@ namespace
     bool EqualsIgnoreCase(std::string_view a, std::string_view b)
     {
         return a.size() == b.size() &&
-               std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-                   return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-               });
+            std::equal(a.begin(), a.end(), b.begin(), [](char x, char y)
+                { return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y)); });
     }
 }
 
@@ -38,18 +37,18 @@ namespace
         std::string active = "en";
         std::string activeFile;
         PoCatalog catalog;
-        PoCatalog sourceCatalog;  // only loaded when the active language isn't the source
+        PoCatalog sourceCatalog; // only loaded when the active language isn't the source
         std::unordered_set<std::string> reportedMissing;
         uint64_t generation = 0;
     };
 
-    LocalizationState &State()
+    LocalizationState& State()
     {
         static LocalizationState state;
         return state;
     }
 
-    std::string BaseLanguage(const std::string &code)
+    std::string BaseLanguage(const std::string& code)
     {
         const size_t underscore = code.find('_');
         return underscore == std::string::npos ? code : code.substr(0, underscore);
@@ -58,7 +57,7 @@ namespace
     std::vector<std::pair<std::string, std::string>> ScanLanguageFiles()
     {
         std::vector<std::pair<std::string, std::string>> files;
-        for (const std::string &file : ListAssetFiles(kLocalizationDirectory, ".po"))
+        for (const std::string& file : ListAssetFiles(kLocalizationDirectory, ".po"))
         {
             const std::string code = LocalizationNormalizeLanguageCode(std::string_view(file).substr(0, file.size() - 3));
             if (!code.empty())
@@ -68,14 +67,15 @@ namespace
         return files;
     }
 
-    const std::string *FindFile(const std::vector<std::pair<std::string, std::string>> &files, const std::string &code)
+    const std::string* FindFile(const std::vector<std::pair<std::string, std::string>>& files, const std::string& code)
     {
-        auto found = std::find_if(files.begin(), files.end(), [&](const auto &file) { return file.first == code; });
+        auto found = std::find_if(files.begin(), files.end(), [&](const auto& file)
+            { return file.first == code; });
         return found != files.end() ? &found->second : nullptr;
     }
 
     // Candidates for a requested code: "pt_BR" -> "pt_BR", "pt".
-    void AddCandidates(std::vector<std::string> &candidates, const std::string &code)
+    void AddCandidates(std::vector<std::string>& candidates, const std::string& code)
     {
         if (code.empty())
             return;
@@ -90,7 +90,7 @@ namespace
     {
         std::vector<std::string> languages;
         int count = 0;
-        if (SDL_Locale **locales = SDL_GetPreferredLocales(&count))
+        if (SDL_Locale** locales = SDL_GetPreferredLocales(&count))
         {
             for (int index = 0; index < count; ++index)
             {
@@ -106,7 +106,7 @@ namespace
         return languages;
     }
 
-    bool LoadCatalogFile(const std::string &file, PoCatalog &catalog)
+    bool LoadCatalogFile(const std::string& file, PoCatalog& catalog)
     {
         const std::string path = std::string(kLocalizationDirectory) + "/" + file;
         std::string text;
@@ -126,15 +126,15 @@ namespace
         return true;
     }
 
-    void ReportMissing(LocalizationState &state, std::string_view key)
+    void ReportMissing(LocalizationState& state, std::string_view key)
     {
         if (state.reportedMissing.emplace(key).second)
             EngineLogf("[Localization] Missing key #%.*s (%s).", static_cast<int>(key.size()), key.data(), state.active.c_str());
     }
 
-    const PoCatalog::Entry *FindSourceEntry(const LocalizationState &state, std::string_view key)
+    const PoCatalog::Entry* FindSourceEntry(const LocalizationState& state, std::string_view key)
     {
-        if (const PoCatalog::Entry *entry = state.sourceCatalog.FindEntry(key))
+        if (const PoCatalog::Entry* entry = state.sourceCatalog.FindEntry(key))
             return entry;
         return state.catalog.FindEntry(key);
     }
@@ -173,7 +173,7 @@ std::string LocalizationNormalizeLanguageCode(std::string_view code)
 bool LocalizationSetLanguage(std::string_view language)
 {
     KES_ZONE_FN(IO);
-    LocalizationState &state = State();
+    LocalizationState& state = State();
     const std::string trimmed(TrimView(language));
     const bool automatic = trimmed.empty() || EqualsIgnoreCase(trimmed, "auto");
     state.requested = automatic ? "auto" : LocalizationNormalizeLanguageCode(trimmed);
@@ -181,7 +181,7 @@ bool LocalizationSetLanguage(std::string_view language)
     std::vector<std::string> candidates;
     if (automatic)
     {
-        for (const std::string &system : SystemLanguages())
+        for (const std::string& system : SystemLanguages())
             AddCandidates(candidates, system);
     }
     else
@@ -191,7 +191,7 @@ bool LocalizationSetLanguage(std::string_view language)
 
     const std::vector<std::pair<std::string, std::string>> files = ScanLanguageFiles();
     std::string chosenCode = state.sourceLanguage;
-    for (const std::string &candidate : candidates)
+    for (const std::string& candidate : candidates)
     {
         if (candidate == state.sourceLanguage || FindFile(files, candidate))
         {
@@ -209,7 +209,7 @@ bool LocalizationSetLanguage(std::string_view language)
 
     PoCatalog catalog;
     std::string chosenFile;
-    if (const std::string *file = FindFile(files, chosenCode))
+    if (const std::string* file = FindFile(files, chosenCode))
     {
         if (LoadCatalogFile(*file, catalog))
             chosenFile = *file;
@@ -219,7 +219,7 @@ bool LocalizationSetLanguage(std::string_view language)
     if (chosenFile.empty() && chosenCode != state.sourceLanguage)
     {
         chosenCode = state.sourceLanguage;
-        if (const std::string *file = FindFile(files, chosenCode); file && LoadCatalogFile(*file, catalog))
+        if (const std::string* file = FindFile(files, chosenCode); file && LoadCatalogFile(*file, catalog))
             chosenFile = *file;
     }
 
@@ -227,11 +227,11 @@ bool LocalizationSetLanguage(std::string_view language)
     PoCatalog sourceCatalog;
     if (chosenCode != state.sourceLanguage)
     {
-        if (const std::string *file = FindFile(files, state.sourceLanguage))
+        if (const std::string* file = FindFile(files, state.sourceLanguage))
             LoadCatalogFile(*file, sourceCatalog);
         else
             EngineLogf("[Localization] No %s/%s.po for the source language; untranslated keys show as #Key.",
-                       kLocalizationDirectory, state.sourceLanguage.c_str());
+                kLocalizationDirectory, state.sourceLanguage.c_str());
     }
 
     state.active = chosenCode;
@@ -241,29 +241,29 @@ bool LocalizationSetLanguage(std::string_view language)
     state.reportedMissing.clear();
     ++state.generation;
     EngineLogf("[Localization] Language: %s (%s, %zu keys).", state.active.c_str(),
-               chosenFile.empty() ? "no .po file" : chosenFile.c_str(), state.catalog.GetEntryCount());
+        chosenFile.empty() ? "no .po file" : chosenFile.c_str(), state.catalog.GetEntryCount());
     return ok;
 }
 
-const std::string &LocalizationGetRequestedLanguage()
+const std::string& LocalizationGetRequestedLanguage()
 {
     return State().requested;
 }
 
-const std::string &LocalizationGetLanguage()
+const std::string& LocalizationGetLanguage()
 {
     return State().active;
 }
 
 void LocalizationReload()
 {
-    LocalizationState &state = State();
+    LocalizationState& state = State();
     LocalizationSetLanguage(state.requested);
 }
 
 void LocalizationShutdown()
 {
-    LocalizationState &state = State();
+    LocalizationState& state = State();
     state.catalog.Clear();
     state.sourceCatalog.Clear();
     state.reportedMissing.clear();
@@ -278,21 +278,21 @@ void LocalizationSetSourceLanguage(std::string_view language)
     const std::string code = LocalizationNormalizeLanguageCode(language);
     if (code.empty())
         return;
-    LocalizationState &state = State();
+    LocalizationState& state = State();
     if (state.activeFile.empty())
         state.active = code;
     state.sourceLanguage = code;
 }
 
-const std::string &LocalizationGetSourceLanguage()
+const std::string& LocalizationGetSourceLanguage()
 {
     return State().sourceLanguage;
 }
 
 std::vector<std::string> LocalizationGetAvailableLanguages()
 {
-    std::vector<std::string> languages{State().sourceLanguage};
-    for (const auto &file : ScanLanguageFiles())
+    std::vector<std::string> languages{ State().sourceLanguage };
+    for (const auto& file : ScanLanguageFiles())
     {
         if (std::find(languages.begin(), languages.end(), file.first) == languages.end())
             languages.push_back(file.first);
@@ -312,11 +312,11 @@ bool LocalizationHasKey(std::string_view key)
 
 std::string Tr(std::string_view key)
 {
-    LocalizationState &state = State();
+    LocalizationState& state = State();
     const std::string_view stripped = LocalizationStripKey(key);
-    if (const std::string *text = state.catalog.Find(stripped))
+    if (const std::string* text = state.catalog.Find(stripped))
         return *text;
-    if (const std::string *text = state.sourceCatalog.Find(stripped))
+    if (const std::string* text = state.sourceCatalog.Find(stripped))
         return *text;
     ReportMissing(state, stripped);
     return "#" + std::string(stripped);
@@ -324,11 +324,11 @@ std::string Tr(std::string_view key)
 
 std::string TrPlural(std::string_view key, uint64_t n)
 {
-    LocalizationState &state = State();
+    LocalizationState& state = State();
     const std::string_view stripped = LocalizationStripKey(key);
-    if (const std::string *text = state.catalog.FindPlural(stripped, n))
+    if (const std::string* text = state.catalog.FindPlural(stripped, n))
         return *text;
-    if (const std::string *text = state.sourceCatalog.FindPlural(stripped, n))
+    if (const std::string* text = state.sourceCatalog.FindPlural(stripped, n))
         return *text;
     ReportMissing(state, stripped);
     return "#" + std::string(stripped);

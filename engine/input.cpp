@@ -207,43 +207,42 @@ namespace
     constexpr SDL_GamepadButton kNoButton = SDL_GAMEPAD_BUTTON_INVALID;
     constexpr SDL_GamepadAxis kNoAxis = SDL_GAMEPAD_AXIS_INVALID;
 
-    constexpr GamepadKeyDef kGamepadKeys[] =
-    {
+    constexpr GamepadKeyDef kGamepadKeys[] = {
         // Thumbsticks
-        { "Gamepad_LeftAxis_2D",    InputNativeKeyKind::GamepadLeftAxis2D,  kNoButton, kNoAxis },
-        { "Gamepad_RightAxis_2D",   InputNativeKeyKind::GamepadRightAxis2D, kNoButton, kNoAxis },
-        { "Gamepad_LeftAxis_X",     InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_LEFTX },
-        { "Gamepad_LeftAxis_Y",     InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_LEFTY },
-        { "Gamepad_RightAxis_X",    InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_RIGHTX },
-        { "Gamepad_RightAxis_Y",    InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_RIGHTY },
+        { "Gamepad_LeftAxis_2D", InputNativeKeyKind::GamepadLeftAxis2D, kNoButton, kNoAxis },
+        { "Gamepad_RightAxis_2D", InputNativeKeyKind::GamepadRightAxis2D, kNoButton, kNoAxis },
+        { "Gamepad_LeftAxis_X", InputNativeKeyKind::GamepadAxis, kNoButton, SDL_GAMEPAD_AXIS_LEFTX },
+        { "Gamepad_LeftAxis_Y", InputNativeKeyKind::GamepadAxis, kNoButton, SDL_GAMEPAD_AXIS_LEFTY },
+        { "Gamepad_RightAxis_X", InputNativeKeyKind::GamepadAxis, kNoButton, SDL_GAMEPAD_AXIS_RIGHTX },
+        { "Gamepad_RightAxis_Y", InputNativeKeyKind::GamepadAxis, kNoButton, SDL_GAMEPAD_AXIS_RIGHTY },
 
         // Triggers
-        { "Gamepad_LeftTrigger",    InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_LEFT_TRIGGER },
-        { "Gamepad_RightTrigger",   InputNativeKeyKind::GamepadAxis,        kNoButton, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER },
+        { "Gamepad_LeftTrigger", InputNativeKeyKind::GamepadAxis, kNoButton, SDL_GAMEPAD_AXIS_LEFT_TRIGGER },
+        { "Gamepad_RightTrigger", InputNativeKeyKind::GamepadAxis, kNoButton, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER },
 
         // Face buttons
-        { "Gamepad_Face_Top",       InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_NORTH, kNoAxis },
-        { "Gamepad_Face_Left",      InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_WEST,  kNoAxis },
-        { "Gamepad_Face_Bottom",    InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_SOUTH, kNoAxis },
-        { "Gamepad_Face_Right",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_EAST,  kNoAxis },
+        { "Gamepad_Face_Top", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_NORTH, kNoAxis },
+        { "Gamepad_Face_Left", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_WEST, kNoAxis },
+        { "Gamepad_Face_Bottom", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_SOUTH, kNoAxis },
+        { "Gamepad_Face_Right", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_EAST, kNoAxis },
 
         // Special buttons
-        { "Gamepad_Special_Left",   InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_BACK,  kNoAxis },
-        { "Gamepad_Special_Right",  InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_START, kNoAxis },
+        { "Gamepad_Special_Left", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_BACK, kNoAxis },
+        { "Gamepad_Special_Right", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_START, kNoAxis },
 
         // Stick buttons
-        { "Gamepad_LeftStick",      InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_LEFT_STICK,  kNoAxis },
-        { "Gamepad_RightStick",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_RIGHT_STICK, kNoAxis },
+        { "Gamepad_LeftStick", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_LEFT_STICK, kNoAxis },
+        { "Gamepad_RightStick", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_RIGHT_STICK, kNoAxis },
 
         // Bumpers
-        { "Gamepad_LeftBumper",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,  kNoAxis },
-        { "Gamepad_RightBumper",    InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, kNoAxis },
+        { "Gamepad_LeftBumper", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, kNoAxis },
+        { "Gamepad_RightBumper", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, kNoAxis },
 
         // D-Pad
-        { "Gamepad_DPad_Up",        InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_UP,    kNoAxis },
-        { "Gamepad_DPad_Down",      InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_DOWN,  kNoAxis },
-        { "Gamepad_DPad_Left",      InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_LEFT,  kNoAxis },
-        { "Gamepad_DPad_Right",     InputNativeKeyKind::GamepadButton,      SDL_GAMEPAD_BUTTON_DPAD_RIGHT, kNoAxis },
+        { "Gamepad_DPad_Up", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_DPAD_UP, kNoAxis },
+        { "Gamepad_DPad_Down", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_DPAD_DOWN, kNoAxis },
+        { "Gamepad_DPad_Left", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_DPAD_LEFT, kNoAxis },
+        { "Gamepad_DPad_Right", InputNativeKeyKind::GamepadButton, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, kNoAxis },
     };
 
     struct MouseKeyDef
@@ -254,15 +253,14 @@ namespace
         const char* displayName;
     };
 
-    constexpr MouseKeyDef kMouseKeys[] =
-    {
-        { "Mouse_Left",      InputNativeKeyKind::MouseButton,    SDL_BUTTON_LEFT,   "Left Mouse" },
-        { "Mouse_Right",     InputNativeKeyKind::MouseButton,    SDL_BUTTON_RIGHT,  "Right Mouse" },
-        { "Mouse_Middle",    InputNativeKeyKind::MouseButton,    SDL_BUTTON_MIDDLE, "Middle Mouse" },
-        { "Mouse_Button4",   InputNativeKeyKind::MouseButton,    SDL_BUTTON_X1,     "Mouse 4" },
-        { "Mouse_Button5",   InputNativeKeyKind::MouseButton,    SDL_BUTTON_X2,     "Mouse 5" },
-        { "Mouse_WheelUp",   InputNativeKeyKind::MouseWheelUp,   0,                 "Wheel Up" },
-        { "Mouse_WheelDown", InputNativeKeyKind::MouseWheelDown, 0,                 "Wheel Down" },
+    constexpr MouseKeyDef kMouseKeys[] = {
+        { "Mouse_Left", InputNativeKeyKind::MouseButton, SDL_BUTTON_LEFT, "Left Mouse" },
+        { "Mouse_Right", InputNativeKeyKind::MouseButton, SDL_BUTTON_RIGHT, "Right Mouse" },
+        { "Mouse_Middle", InputNativeKeyKind::MouseButton, SDL_BUTTON_MIDDLE, "Middle Mouse" },
+        { "Mouse_Button4", InputNativeKeyKind::MouseButton, SDL_BUTTON_X1, "Mouse 4" },
+        { "Mouse_Button5", InputNativeKeyKind::MouseButton, SDL_BUTTON_X2, "Mouse 5" },
+        { "Mouse_WheelUp", InputNativeKeyKind::MouseWheelUp, 0, "Wheel Up" },
+        { "Mouse_WheelDown", InputNativeKeyKind::MouseWheelDown, 0, "Wheel Down" },
     };
 
     bool NativeKeyFromName(const std::string& key, InputBinding& binding)
@@ -562,7 +560,7 @@ namespace
         case InputNativeKeyKind::Mouse_Y_Axis:
             return KeyShape::Axis;
         default:
-            return KeyShape::Button;   // gamepad axes too: triggers and half sticks read like buttons
+            return KeyShape::Button; // gamepad axes too: triggers and half sticks read like buttons
         }
     }
 
@@ -832,7 +830,7 @@ namespace
 
 namespace
 {
-    constexpr Sint16 kGamepadActivateAxis = 16000;   // about half tilt
+    constexpr Sint16 kGamepadActivateAxis = 16000; // about half tilt
 
     void OpenGamepad(InputState& input, SDL_JoystickID id)
     {
@@ -1015,7 +1013,7 @@ void InputProcessEvent(InputState& input, const SDL_Event& e)
     case SDL_EVENT_MOUSE_MOTION:
         input.mouseDeltaX += static_cast<float>(e.motion.xrel);
         input.mouseDeltaY += static_cast<float>(e.motion.yrel);
-        if (std::fabs(e.motion.xrel) + std::fabs(e.motion.yrel) > 2.0f)   // not sensor jitter
+        if (std::fabs(e.motion.xrel) + std::fabs(e.motion.yrel) > 2.0f) // not sensor jitter
             input.activeDevice = InputDevice::KeyboardMouse;
         break;
 
@@ -1162,7 +1160,7 @@ bool InputAddDefaultActions(InputState& input, std::string_view mapText, std::st
     for (InputAction& action : actions)
     {
         if (input.actionStates.find(std::string_view(action.name)) != input.actionStates.end())
-            continue;   // the project's map defines it
+            continue; // the project's map defines it
         input.actionStates[action.name] = {};
         input.actions.push_back(std::move(action));
     }
@@ -1365,7 +1363,8 @@ std::vector<std::string> InputFindActionsUsingKey(const InputState& input, const
         if (action.context != context)
             continue;
         const bool uses = std::any_of(action.bindings.begin(), action.bindings.end(),
-                                      [&](const InputBinding& binding) { return keyName && binding.key == keyName; });
+            [&](const InputBinding& binding)
+            { return keyName && binding.key == keyName; });
         if (uses)
             result.push_back(action.name);
     }
@@ -1400,7 +1399,7 @@ bool InputLoadBindingOverrides(InputState& input, const char* path, std::string*
     const std::string file = OverridePath(path);
     std::error_code existsError;
     if (!std::filesystem::exists(file, existsError))
-        return true;   // nothing rebound yet
+        return true; // nothing rebound yet
     IniFile ini;
     if (!ini.LoadFromFile(file))
     {
@@ -1484,50 +1483,51 @@ std::string InputGetKeyDisplayName(const InputState& input, const std::string& k
     const SDL_GamepadType type = InputGetGamepadType(input);
     const bool playstation = type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5;
     const bool nintendo = type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO || type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR ||
-                          type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT || type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT;
+        type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT || type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT;
     const auto pick = [&](const char* xbox, const char* ps, const char* switchName) -> std::string
     {
-        return playstation ? ps : nintendo ? switchName : xbox;
+        return playstation ? ps : nintendo ? switchName
+                                           : xbox;
     };
 
     if (binding.keyKind == InputNativeKeyKind::GamepadButton)
     {
         switch (SDL_GetGamepadButtonLabelForType(type == SDL_GAMEPAD_TYPE_UNKNOWN ? SDL_GAMEPAD_TYPE_XBOXONE : type, binding.gamepadButton))
         {
-        case SDL_GAMEPAD_BUTTON_LABEL_A: return "A";
-        case SDL_GAMEPAD_BUTTON_LABEL_B: return "B";
-        case SDL_GAMEPAD_BUTTON_LABEL_X: return "X";
-        case SDL_GAMEPAD_BUTTON_LABEL_Y: return "Y";
-        case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return "Cross";
-        case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return "Circle";
-        case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return "Square";
+        case SDL_GAMEPAD_BUTTON_LABEL_A:        return "A";
+        case SDL_GAMEPAD_BUTTON_LABEL_B:        return "B";
+        case SDL_GAMEPAD_BUTTON_LABEL_X:        return "X";
+        case SDL_GAMEPAD_BUTTON_LABEL_Y:        return "Y";
+        case SDL_GAMEPAD_BUTTON_LABEL_CROSS:    return "Cross";
+        case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE:   return "Circle";
+        case SDL_GAMEPAD_BUTTON_LABEL_SQUARE:   return "Square";
         case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return "Triangle";
-        default: break;
+        default:                                break;
         }
         switch (binding.gamepadButton)
         {
-        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return pick("LB", "L1", "L");
+        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  return pick("LB", "L1", "L");
         case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return pick("RB", "R1", "R");
-        case SDL_GAMEPAD_BUTTON_LEFT_STICK: return pick("LS", "L3", "Left Stick");
-        case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return pick("RS", "R3", "Right Stick");
-        case SDL_GAMEPAD_BUTTON_BACK: return pick("View", "Create", "-");
-        case SDL_GAMEPAD_BUTTON_START: return pick("Menu", "Options", "+");
-        case SDL_GAMEPAD_BUTTON_DPAD_UP: return "D-Pad Up";
-        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "D-Pad Down";
-        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "D-Pad Left";
-        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "D-Pad Right";
-        default: return keyName;
+        case SDL_GAMEPAD_BUTTON_LEFT_STICK:     return pick("LS", "L3", "Left Stick");
+        case SDL_GAMEPAD_BUTTON_RIGHT_STICK:    return pick("RS", "R3", "Right Stick");
+        case SDL_GAMEPAD_BUTTON_BACK:           return pick("View", "Create", "-");
+        case SDL_GAMEPAD_BUTTON_START:          return pick("Menu", "Options", "+");
+        case SDL_GAMEPAD_BUTTON_DPAD_UP:        return "D-Pad Up";
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN:      return "D-Pad Down";
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT:      return "D-Pad Left";
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:     return "D-Pad Right";
+        default:                                return keyName;
         }
     }
     if (binding.keyKind == InputNativeKeyKind::GamepadAxis)
     {
         switch (binding.gamepadAxis)
         {
-        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: return pick("LT", "L2", "ZL");
+        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:  return pick("LT", "L2", "ZL");
         case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: return pick("RT", "R2", "ZR");
         case SDL_GAMEPAD_AXIS_LEFTX:
-        case SDL_GAMEPAD_AXIS_LEFTY: return "Left Stick";
-        default: return "Right Stick";
+        case SDL_GAMEPAD_AXIS_LEFTY:         return "Left Stick";
+        default:                             return "Right Stick";
         }
     }
     return binding.keyKind == InputNativeKeyKind::GamepadLeftAxis2D ? "Left Stick" : "Right Stick";

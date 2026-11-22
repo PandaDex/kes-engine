@@ -56,14 +56,14 @@ namespace
         const float sizeScale = std::max({ std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z) });
 
         RigidShape shape;
-        shape.type = source.shape == KModelColliderShape::Sphere    ? ColliderType::Sphere
-                     : source.shape == KModelColliderShape::Capsule ? ColliderType::Capsule
-                                                                    : ColliderType::Box;
+        shape.type = source.shape == KModelColliderShape::Sphere ? ColliderType::Sphere
+            : source.shape == KModelColliderShape::Capsule       ? ColliderType::Capsule
+                                                                 : ColliderType::Box;
         shape.center = { position[0] * scale.x, position[1] * scale.y, position[2] * scale.z };
         std::copy(rotation, rotation + 4, shape.rotation);
         shape.halfExtents = { source.halfExtents[0] * boneScale[0] * std::fabs(scale.x),
-                              source.halfExtents[1] * boneScale[1] * std::fabs(scale.y),
-                              source.halfExtents[2] * boneScale[2] * std::fabs(scale.z) };
+            source.halfExtents[1] * boneScale[1] * std::fabs(scale.y),
+            source.halfExtents[2] * boneScale[2] * std::fabs(scale.z) };
         shape.radius = source.radius * boneSize * sizeScale;
         shape.halfHeight = source.halfHeight * boneSize * sizeScale;
         return shape;
@@ -76,7 +76,8 @@ bool SkinnedModelEntity::OwnsCollider(ColliderHandle handle) const
         return false;
     if (handle == collider)
         return true;
-    return std::any_of(boneColliders.begin(), boneColliders.end(), [handle](const BoneCollider& b) { return b.handle == handle; });
+    return std::any_of(boneColliders.begin(), boneColliders.end(), [handle](const BoneCollider& b)
+        { return b.handle == handle; });
 }
 
 void SkinnedModelEntity::CreateModelColliders(const KModelData& model)
@@ -174,7 +175,7 @@ void SkinnedModelEntity::CreateCollider()
     const Vector3 center = (minV + maxV) * 0.5f;
     const Vector3 offset = { center.x * scale.x, center.y * scale.y, center.z * scale.z };
     const Vector3 half = { (maxV.x - minV.x) * 0.5f * std::fabs(scale.x), (maxV.y - minV.y) * 0.5f * std::fabs(scale.y),
-                           (maxV.z - minV.z) * 0.5f * std::fabs(scale.z) };
+        (maxV.z - minV.z) * 0.5f * std::fabs(scale.z) };
 
     body.position = Position;
     body.rotation = Rotation;
@@ -198,7 +199,7 @@ void SkinnedModelEntity::Teleport(const Vector3& newPosition)
     Entity::Teleport(newPosition);
     if (collider != 0 && game && game->collision)
         game->collision->SetPosition(collider, newPosition);
-    SyncSceneObject(0.0f);   // a zero step teleports the bone colliders
+    SyncSceneObject(0.0f); // a zero step teleports the bone colliders
 }
 
 bool SkinnedModelEntity::ApplyProperty(const std::string& name, const std::string& value)
@@ -305,7 +306,7 @@ void SkinnedModelEntity::RefreshAssetHandles()
         const KModelData* loaded = game->assets->GetModel(modelHandle);
         if (loaded && loaded->bones.size() > SceneObject::MaxSkinMatrices)
             EngineLogf("Model %s has %zu bones; only the first %u are animated.", modelPath.c_str(), loaded->bones.size(),
-                       SceneObject::MaxSkinMatrices);
+                SceneObject::MaxSkinMatrices);
     }
 
     const KModelData* model = game->assets->GetModel(modelHandle);
@@ -515,7 +516,7 @@ void SkinnedModelEntity::SyncSceneObject(float dt)
 // LoadModel can reallocate the model storage, so don't keep KModelData refs across it.
 void SkinnedModelEntity::CreateChildParts(ModelHandle parentModel, int parentPart, int depth)
 {
-    constexpr int kMaxChildDepth = 4;   // also catches a model that includes itself
+    constexpr int kMaxChildDepth = 4; // also catches a model that includes itself
     const KModelData* model = game->assets->GetModel(parentModel);
     if (!model || model->children.empty())
         return;
@@ -659,7 +660,8 @@ void SkinnedModelEntity::ResetChildAnimation(ChildPart& part, const std::string&
         BuildBindPoseWorldMatrices(*childModel, part.nodeWorld);
 }
 
-template<typename Fn> bool SkinnedModelEntity::ForEachChildNamed(const std::string& name, Fn&& fn)
+template<typename Fn>
+bool SkinnedModelEntity::ForEachChildNamed(const std::string& name, Fn&& fn)
 {
     bool found = false;
     for (ChildPart& part : childParts)
@@ -674,34 +676,32 @@ template<typename Fn> bool SkinnedModelEntity::ForEachChildNamed(const std::stri
 
 bool SkinnedModelEntity::SetChildAnimation(const std::string& child, const std::string& path)
 {
-    return ForEachChildNamed(child, [&](ChildPart& part) { ResetChildAnimation(part, path); });
+    return ForEachChildNamed(child, [&](ChildPart& part)
+        { ResetChildAnimation(part, path); });
 }
 
 bool SkinnedModelEntity::SetChildAnimFloat(const std::string& child, const std::string& name, float value)
 {
     return ForEachChildNamed(child, [&](ChildPart& part)
-                             {
+        {
                                  LoadChildAnimation(part);
-                                 part.blendTree.SetFloat(name, value);
-                             });
+                                 part.blendTree.SetFloat(name, value); });
 }
 
 bool SkinnedModelEntity::SetChildAnimBool(const std::string& child, const std::string& name, bool value)
 {
     return ForEachChildNamed(child, [&](ChildPart& part)
-                             {
+        {
                                  LoadChildAnimation(part);
-                                 part.blendTree.SetBool(name, value);
-                             });
+                                 part.blendTree.SetBool(name, value); });
 }
 
 bool SkinnedModelEntity::SetChildAnimInt(const std::string& child, const std::string& name, int value)
 {
     return ForEachChildNamed(child, [&](ChildPart& part)
-                             {
+        {
                                  LoadChildAnimation(part);
-                                 part.blendTree.SetInt(name, value);
-                             });
+                                 part.blendTree.SetInt(name, value); });
 }
 
 void SkinnedModelEntity::OnDestroy()
