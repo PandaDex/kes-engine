@@ -33,7 +33,8 @@ function(bundle_runtime_libs target)
                     -DTARGET_FILE=$<TARGET_FILE:${target}>
                     -DOUT_DIR=$<TARGET_FILE_DIR:${target}>
                     "-DEXTRA_DIRS=${_lib_dirs}"
-                    -P "${CMAKE_SOURCE_DIR}/cmake/BundleRuntimeLibs.cmake")
+                    -P "${CMAKE_SOURCE_DIR}/cmake/BundleRuntimeLibs.cmake"
+            VERBATIM)
     endif()
 endfunction()
 
