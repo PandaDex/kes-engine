@@ -26,6 +26,8 @@ struct SceneObject
     MeshHandle mesh = 0;
     ModelHandle model = 0;
     MaterialHandle material = 0;
+    // Per material slot of the mesh sections; a missing or 0 entry draws with `material`.
+    std::vector<MaterialHandle> slotMaterials;
     uint32_t skinMatrixCount = 0;
     std::vector<float> skinMatrices; // skinMatrixCount * 16, empty for static objects
     // Used instead of transform when set. transform.position is still used for sorting, so keep it in sync.

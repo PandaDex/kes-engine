@@ -9,6 +9,7 @@
 #include "input.h"
 #include "animation_clip.h"
 #include "kmodel.h"
+#include "render_common.h"
 #include "world.h"
 
 // Runs the real startup map without a window or renderer. The map is edited
@@ -321,6 +322,80 @@ TEST_CASE("world: child models follow their bone and keep their own material")
     entity->Destroy();
     loaded.Run(1);
     CHECK(loaded.world.GetScene().GetObjects().size() == objectsBefore - 2);
+}
+
+TEST_CASE("world: material slots resolve per section, entity Material.<slot> wins")
+{
+    LoadedWorld loaded;
+    kestest::TempDir dir;
+
+    // Two triangles: "body" has a material in the .kmodel, "glass" has none.
+    KModelData model;
+    model.materials.push_back({ "body", "materials/trim.mat" });
+    model.materials.push_back({ "glass", "" });
+    KModelMesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[1].px = 0.1f;
+    mesh.vertices[2].py = 0.1f;
+    mesh.indices = { 0, 1, 2, 0, 2, 1 };
+    mesh.primitives.push_back({ 0, 3, 0 });
+    mesh.primitives.push_back({ 3, 3, 1 });
+    model.meshes.push_back(mesh);
+    KModelNode node;
+    node.meshIndex = 0;
+    model.nodes.push_back(node);
+    model.defaultMaterial = "materials/brick.mat";
+    const std::string modelPath = dir.File("car.kmodel");
+    REQUIRE(SaveKModelFile(modelPath.c_str(), model));
+
+    KModelData holder = model;
+    KModelChild child;
+    child.modelPath = modelPath;
+    child.materialPath = "materials/floor.mat";
+    holder.children.push_back(child);
+    const std::string holderPath = dir.File("holder.kmodel");
+    REQUIRE(SaveKModelFile(holderPath.c_str(), holder));
+
+    auto* entity = loaded.world.GetEntities().CreateEntity<SkinnedModelEntity>();
+    entity->ApplyProperty("Model", holderPath);
+    entity->Teleport({ 500.0f, 500.0f, 500.0f });
+    loaded.Run(1);
+
+    AssetSystem& assets = loaded.world.GetAssets();
+    const MaterialHandle brick = assets.LoadMaterial("materials/brick.mat");
+    const MaterialHandle trim = assets.LoadMaterial("materials/trim.mat");
+    const MaterialHandle floor = assets.LoadMaterial("materials/floor.mat");
+    const auto find = [&](bool attached) -> const SceneObject&
+    {
+        for (const SceneObject& object : loaded.world.GetScene().GetObjects())
+        {
+            if (attached ? object.useWorldMatrix : object.model == entity->GetModelHandle())
+                return object;
+        }
+        REQUIRE(false);
+        return loaded.world.GetScene().GetObjects().front();
+    };
+
+    const MeshData* sections = assets.GetMesh(find(false).mesh);
+    REQUIRE(sections != nullptr);
+    REQUIRE(sections->sections.size() == 2);
+    CHECK(render::SectionMaterial(find(false), sections->sections[0].materialSlot) == trim);
+    CHECK(render::SectionMaterial(find(false), sections->sections[1].materialSlot) == brick); // model default
+    CHECK(render::SectionMaterial(find(true), 0) == trim);
+    CHECK(render::SectionMaterial(find(true), 1) == floor); // the child's own Material
+
+    entity->ApplyProperty("Material", "materials/floor.mat");
+    entity->ApplyProperty("Material.body", "materials/brick.mat");
+    loaded.Run(1);
+    CHECK(render::SectionMaterial(find(false), 0) == brick);
+    CHECK(render::SectionMaterial(find(false), 1) == floor);
+    CHECK(render::SectionMaterial(find(true), 0) == trim); // overrides stay on the parent
+    CHECK(entity->GetSlotMaterialPath("body") == "materials/brick.mat");
+
+    entity->SetSlotMaterialPath("body", "");
+    loaded.Run(1);
+    CHECK(render::SectionMaterial(find(false), 0) == trim);
+    CHECK(entity->GetSlotMaterialPath("body").empty());
 }
 
 TEST_CASE("world: a child model plays its own animation and carries its children")

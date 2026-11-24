@@ -1,4 +1,5 @@
 #include "kmodel.h"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -166,13 +167,15 @@ void ConvertMeshDataToKModelMesh(const MeshData& mesh, KModelMesh& outMesh, cons
     }
 
     outMesh.indices = mesh.indices;
-    if (!outMesh.indices.empty())
+    if (outMesh.indices.empty())
+        return;
+    if (mesh.sections.empty())
     {
-        KModelPrimitive primitive = {};
-        primitive.firstIndex = 0;
-        primitive.indexCount = (uint32_t)outMesh.indices.size();
-        outMesh.primitives.push_back(primitive);
+        outMesh.primitives.push_back({ 0, (uint32_t)outMesh.indices.size(), -1 });
+        return;
     }
+    for (const MeshSection& section : mesh.sections)
+        outMesh.primitives.push_back({ section.firstIndex, section.indexCount, section.materialSlot });
 }
 
 bool SaveKModelFile(const char* path, const KModelData& model, std::string* outError)
@@ -631,6 +634,31 @@ bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outErro
     return true;
 }
 
+void AppendKModelMeshSections(const KModelMesh& mesh, uint32_t baseIndex, std::vector<MeshSection>& sections)
+{
+    const auto add = [&](uint32_t first, uint32_t count, int32_t slot)
+    {
+        if (count == 0)
+            return;
+        MeshSection* last = sections.empty() ? nullptr : &sections.back();
+        if (last && last->materialSlot == slot && last->firstIndex + last->indexCount == first)
+            last->indexCount += count;
+        else
+            sections.push_back({ first, count, slot });
+    };
+    // Indices no primitive covers still draw, with no slot.
+    uint32_t covered = 0;
+    for (const KModelPrimitive& primitive : mesh.primitives)
+    {
+        if (primitive.firstIndex > covered)
+            add(baseIndex + covered, primitive.firstIndex - covered, -1);
+        add(baseIndex + primitive.firstIndex, primitive.indexCount, primitive.materialIndex);
+        covered = std::max(covered, primitive.firstIndex + primitive.indexCount);
+    }
+    if (covered < mesh.indices.size())
+        add(baseIndex + covered, (uint32_t)mesh.indices.size() - covered, -1);
+}
+
 bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::string* outError, uint32_t meshIndex)
 {
     KES_ZONE_FN(ASSETS);
@@ -693,8 +721,11 @@ bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::st
             outMesh.vertices.push_back(converted);
         }
 
+        const uint32_t baseIndex = (uint32_t)outMesh.indices.size();
         for (uint32_t index : source.indices)
             outMesh.indices.push_back(baseVertex + index);
+
+        AppendKModelMeshSections(source, baseIndex, outMesh.sections);
     }
 
     if (outMesh.vertices.empty() || outMesh.indices.empty())
@@ -717,6 +748,18 @@ const KModelSocket* FindKModelSocket(const KModelData& model, const char* name)
             return &socket;
     }
     return nullptr;
+}
+
+int32_t FindKModelMaterialSlot(const KModelData& model, const char* name)
+{
+    if (!name)
+        return -1;
+    for (size_t index = 0; index < model.materials.size(); ++index)
+    {
+        if (model.materials[index].name == name)
+            return (int32_t)index;
+    }
+    return -1;
 }
 
 size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model)
@@ -774,5 +817,35 @@ size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model)
     }
     if (model.defaultMaterial.empty())
         model.defaultMaterial = existing.defaultMaterial;
+
+    const auto findSlot = [&](const std::string& name) { return FindKModelMaterialSlot(model, name.c_str()); };
+    for (const KModelMaterial& slot : existing.materials)
+    {
+        const int32_t index = findSlot(slot.name);
+        if (index >= 0 && model.materials[(size_t)index].materialPath.empty())
+            model.materials[(size_t)index].materialPath = slot.materialPath;
+    }
+    // Slots picked in the model editor for parts the source left without a material.
+    for (KModelMesh& mesh : model.meshes)
+    {
+        const auto old = std::find_if(existing.meshes.begin(), existing.meshes.end(),
+            [&](const KModelMesh& candidate) { return candidate.name == mesh.name; });
+        if (old == existing.meshes.end() || old->primitives.size() != mesh.primitives.size())
+            continue;
+        for (size_t index = 0; index < mesh.primitives.size(); ++index)
+        {
+            const int32_t oldSlot = old->primitives[index].materialIndex;
+            if (mesh.primitives[index].materialIndex >= 0 || oldSlot < 0)
+                continue;
+            const KModelMaterial& slot = existing.materials[(size_t)oldSlot];
+            int32_t newSlot = findSlot(slot.name);
+            if (newSlot < 0)
+            {
+                model.materials.push_back(slot);
+                newSlot = (int32_t)model.materials.size() - 1;
+            }
+            mesh.primitives[index].materialIndex = newSlot;
+        }
+    }
     return kept;
 }

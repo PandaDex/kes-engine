@@ -3153,7 +3153,10 @@ namespace kes::vk
         GPUMesh gpu = {};
         if (!UploadMeshBuffers(r, vertices, data->indices, gpu))
             return nullptr;
-        return &(r.gpuMeshes[handle] = gpu);
+        gpu.sections = data->sections;
+        if (gpu.sections.empty())
+            gpu.sections.push_back({ 0, gpu.indexCount, -1 });
+        return &(r.gpuMeshes[handle] = std::move(gpu));
     }
 
     static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t meshIndex, const AssetSystem& assets)
@@ -3200,7 +3203,10 @@ namespace kes::vk
         GPUMesh gpu = {};
         if (!UploadMeshBuffers(r, vertices, source.indices, gpu))
             return nullptr;
-        return &(r.gpuModelMeshes[key] = gpu);
+        AppendKModelMeshSections(source, 0, gpu.sections);
+        if (gpu.sections.empty())
+            gpu.sections.push_back({ 0, gpu.indexCount, -1 });
+        return &(r.gpuModelMeshes[key] = std::move(gpu));
     }
 
     static bool IsTransparentMaterial(const MaterialData* material)
@@ -3780,7 +3786,8 @@ namespace kes::vk
         VkDescriptorSet materialSet = VK_NULL_HANDLE;
     };
 
-    static void DrawGPUMesh(Renderer& r, DrawState& state, const GPUMesh& gpuMesh, VkDeviceSize modelOffset)
+    static void DrawGPUMesh(Renderer& r, DrawState& state, const GPUMesh& gpuMesh, uint32_t firstIndex, uint32_t indexCount,
+        VkDeviceSize modelOffset)
     {
         const uint32_t dynamicOffsets[2] = { static_cast<uint32_t>(modelOffset), static_cast<uint32_t>(state.materialOffset) };
         VkDescriptorSet sets[2] = { r.uboDescriptorSet, state.materialSet };
@@ -3799,11 +3806,11 @@ namespace kes::vk
                 vkCmdBindIndexBuffer(r.commandBuffer, gpuMesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
                 state.indexBuffer = gpuMesh.indexBuffer;
             }
-            vkCmdDrawIndexed(r.commandBuffer, gpuMesh.indexCount, 1, 0, 0, 0);
+            vkCmdDrawIndexed(r.commandBuffer, indexCount, 1, firstIndex, 0, 0);
         }
         else
         {
-            vkCmdDraw(r.commandBuffer, gpuMesh.indexCount, 1, 0, 0);
+            vkCmdDraw(r.commandBuffer, indexCount, 1, firstIndex, 0);
         }
     }
 
@@ -3846,32 +3853,18 @@ namespace kes::vk
         if (!state.materialSet)
             return;
 
+        // Skinned: glTF semantics, the skin matrices already place the mesh, so the mesh node's
+        // own transform doesn't apply. Not culled (the bind-pose bounds don't cover the animation).
         const Matrix4 worldViewProj = render::MatrixMultiply(item.world, viewProj);
-        if (item.skinned)
-        {
-            // glTF semantics: the skin matrices already place the mesh, so the mesh node's
-            // own transform doesn't apply. Animated: no culling (the bind-pose bounds don't
-            // cover the animation).
-            const KModelData* model = assets.GetModel(obj.model);
-            const uint32_t matrixCount = std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices);
-            for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
-            {
-                GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
-                if (!gpuMesh)
-                    continue;
-                const VkDeviceSize modelOffset = WriteModelConstants(r, worldViewProj, item.world, obj.skinMatrices.data(), matrixCount);
-                DrawGPUMesh(r, state, *gpuMesh, modelOffset);
-            }
-            return;
-        }
-
-        const VkDeviceSize modelOffset = WriteModelConstants(r, worldViewProj, item.world, nullptr, 0);
-        DrawGPUMesh(r, state, *item.mesh, modelOffset);
+        const uint32_t matrixCount = item.skinned ? std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices) : 0u;
+        const VkDeviceSize modelOffset = WriteModelConstants(r, worldViewProj, item.world,
+            item.skinned ? obj.skinMatrices.data() : nullptr, matrixCount);
+        DrawGPUMesh(r, state, *item.mesh, item.firstIndex, item.indexCount, modelOffset);
     }
 
     // Makes room for every draw of this frame before the first one is recorded,
     // counting each object as if no view culled it.
-    static bool ReserveDynamicConstants(Renderer& r, const AssetSystem& assets)
+    static bool ReserveDynamicConstants(Renderer& r)
     {
         FrameResources& frame = r.frames[r.frameIndex];
         VkDeviceSize modelBytes = 0;
@@ -3879,9 +3872,8 @@ namespace kes::vk
         const auto add = [&](const DrawItem& item, VkDeviceSize views)
         {
             const SceneObject& obj = *item.object;
-            const VkDeviceSize drawsPerView = item.skinned ? assets.GetModel(obj.model)->meshes.size() : 1u;
             const uint32_t skinCount = item.skinned ? std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices) : 0u;
-            modelBytes += views * drawsPerView * AlignUp(ModelConstantsSize(skinCount), frame.modelCBRing.alignment);
+            modelBytes += views * AlignUp(ModelConstantsSize(skinCount), frame.modelCBRing.alignment);
             materialBytes += views * AlignUp(sizeof(render::MaterialCBData), frame.materialCBRing.alignment);
         };
         const VkDeviceSize shadowViews = r.frame.shadowViews.size();
@@ -4014,21 +4006,38 @@ namespace kes::vk
                     continue;
                 DrawItem item = {};
                 item.object = &obj;
-                item.material = assets.GetMaterial(obj.material);
                 item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
                 Vector3 worldScale;
                 item.world = render::SceneObjectMatrix(obj, worldScale);
                 const KModelData* model = assets.GetModel(obj.model);
                 item.skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
-                if (!item.skinned)
+                // One draw item per mesh section, each with its slot's material.
+                const auto addSections = [&](GPUMesh* mesh)
                 {
-                    item.mesh = GetOrUploadMesh(r, obj.mesh, assets);
-                    if (!item.mesh)
-                        continue;
-                    render::TransformSphere(item.world, worldScale, item.mesh->boundsCenter, item.mesh->boundsRadius,
-                        item.boundsCenter, item.boundsRadius);
+                    item.mesh = mesh;
+                    for (const MeshSection& section : mesh->sections)
+                    {
+                        item.firstIndex = section.firstIndex;
+                        item.indexCount = section.indexCount;
+                        item.material = assets.GetMaterial(render::SectionMaterial(obj, section.materialSlot));
+                        (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);
+                    }
+                };
+                if (item.skinned)
+                {
+                    for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
+                    {
+                        if (GPUMesh* mesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets))
+                            addSections(mesh);
+                    }
+                    continue;
                 }
-                (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);
+                GPUMesh* mesh = GetOrUploadMesh(r, obj.mesh, assets);
+                if (!mesh)
+                    continue;
+                render::TransformSphere(item.world, worldScale, mesh->boundsCenter, mesh->boundsRadius,
+                    item.boundsCenter, item.boundsRadius);
+                addSections(mesh);
             }
             // Opaque: group by material, near-to-far inside a group (early depth reject).
             std::sort(opaqueItems.begin(), opaqueItems.end(), [](const DrawItem& a, const DrawItem& b)
@@ -4040,7 +4049,7 @@ namespace kes::vk
             KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
         }
 
-        if (!ReserveDynamicConstants(r, assets))
+        if (!ReserveDynamicConstants(r))
             return;
 
         RenderShadowMaps(r, assets);

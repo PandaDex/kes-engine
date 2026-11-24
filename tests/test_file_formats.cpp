@@ -364,6 +364,92 @@ TEST_CASE("kmodel: re-import keeps sockets, colliders, children and the default 
     CHECK(CarryOverKModelAttachments(dir.File("missing.kmodel").c_str(), reimported) == 0);
 }
 
+namespace
+{
+    KModelMesh MakeQuadStrip(const char* name, uint32_t triangles)
+    {
+        KModelMesh mesh;
+        mesh.name = name;
+        mesh.vertices.resize(3);
+        mesh.vertices[1].px = 1.0f;
+        mesh.vertices[2].py = 1.0f;
+        for (uint32_t i = 0; i < triangles; ++i)
+            mesh.indices.insert(mesh.indices.end(), { 0, 1, 2 });
+        return mesh;
+    }
+}
+
+TEST_CASE("kmodel: primitives become mesh sections with their material slots")
+{
+    KModelData model;
+    model.materials.push_back({ "body", "materials/brick.mat" });
+    model.materials.push_back({ "glass", "" });
+    KModelMesh first = MakeQuadStrip("hull", 4);
+    first.primitives.push_back({ 0, 3, 0 });
+    first.primitives.push_back({ 3, 3, 0 }); // same slot right after: merged
+    first.primitives.push_back({ 9, 3, 1 }); // indices 6..8 belong to no primitive
+    model.meshes.push_back(first);
+    model.meshes.push_back(MakeQuadStrip("window", 1)); // no primitives at all
+    model.nodes.resize(2);
+    model.nodes[0].meshIndex = 0;
+    model.nodes[1].meshIndex = 1;
+
+    MeshData mesh;
+    REQUIRE(BuildMeshDataFromKModel(model, mesh));
+    struct Expected { uint32_t first, count; int32_t slot; };
+    const Expected expected[] = { { 0, 6, 0 }, { 6, 3, -1 }, { 9, 3, 1 }, { 12, 3, -1 } };
+    REQUIRE(mesh.sections.size() == 4);
+    for (size_t i = 0; i < 4; ++i)
+    {
+        CHECK(mesh.sections[i].firstIndex == expected[i].first);
+        CHECK(mesh.sections[i].indexCount == expected[i].count);
+        CHECK(mesh.sections[i].materialSlot == expected[i].slot);
+    }
+}
+
+TEST_CASE("kmodel: re-import keeps slot materials and slots picked for parts without one")
+{
+    kestest::TempDir dir;
+    const std::string path = dir.File("model.kmodel");
+
+    KModelData existing;
+    existing.materials.push_back({ "body", "materials/brick.mat" });
+    existing.materials.push_back({ "trim", "materials/trim.mat" });
+    KModelMesh hull = MakeQuadStrip("hull", 2);
+    hull.primitives.push_back({ 0, 3, 0 });
+    hull.primitives.push_back({ 3, 3, 1 }); // picked in the model editor
+    existing.meshes.push_back(hull);
+    existing.nodes.resize(1);
+    existing.nodes[0].meshIndex = 0;
+    REQUIRE(SaveKModelFile(path.c_str(), existing));
+
+    KModelData reimported;
+    reimported.materials.push_back({ "body", "" });
+    KModelMesh newHull = MakeQuadStrip("hull", 2);
+    newHull.primitives.push_back({ 0, 3, 0 });
+    newHull.primitives.push_back({ 3, 3, -1 }); // the source has no material here
+    reimported.meshes.push_back(newHull);
+    reimported.nodes = existing.nodes;
+
+    CarryOverKModelAttachments(path.c_str(), reimported);
+    REQUIRE(reimported.materials.size() == 2);
+    CHECK(reimported.materials[0].materialPath == "materials/brick.mat");
+    CHECK(reimported.materials[1].name == "trim");
+    CHECK(reimported.materials[1].materialPath == "materials/trim.mat");
+    CHECK(reimported.meshes[0].primitives[0].materialIndex == 0);
+    CHECK(reimported.meshes[0].primitives[1].materialIndex == 1);
+    CHECK(FindKModelMaterialSlot(reimported, "trim") == 1);
+    CHECK(FindKModelMaterialSlot(reimported, "missing") == -1);
+
+    MeshData flat;
+    REQUIRE(BuildMeshDataFromKModel(reimported, flat));
+    KModelMesh converted;
+    ConvertMeshDataToKModelMesh(flat, converted);
+    REQUIRE(converted.primitives.size() == 2);
+    CHECK(converted.primitives[1].firstIndex == 3);
+    CHECK(converted.primitives[1].materialIndex == 1);
+}
+
 TEST_CASE("kmodel: rejects truncated and foreign files")
 {
     kestest::TempDir dir;

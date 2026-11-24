@@ -20,7 +20,8 @@ namespace
     bool ImportObjToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error)
     {
         MeshData mesh = {};
-        if (!LoadObjMeshFromFile(inputPath.c_str(), mesh))
+        std::vector<std::string> materialNames;
+        if (!LoadObjMeshFromFile(inputPath.c_str(), mesh, &materialNames))
         {
             error = "Failed to load OBJ mesh";
             return false;
@@ -28,6 +29,8 @@ namespace
 
         KModelData model = {};
         model.sourcePath = std::filesystem::path(inputPath).filename().string();
+        for (const std::string& name : materialNames)
+            model.materials.push_back({ name, {} });
 
         KModelMesh kmesh = {};
         ConvertMeshDataToKModelMesh(mesh, kmesh, std::filesystem::path(inputPath).stem().string().c_str());

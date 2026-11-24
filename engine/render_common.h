@@ -224,6 +224,8 @@ namespace render
     Matrix4 TransformToMatrix(const Transform& transform);
     // outScale is what the bounding sphere has to be scaled by
     Matrix4 SceneObjectMatrix(const SceneObject& object, Vector3& outScale);
+    // The object's material for a mesh section's slot (-1 or unassigned: the object's own material).
+    MaterialHandle SectionMaterial(const SceneObject& object, int32_t materialSlot);
 
     uint16_t FloatToHalf(float value);
 }

@@ -65,10 +65,13 @@ namespace
     }
 }
 
-bool LoadObjMeshFromFile(const char* path, MeshData& outMesh)
+bool LoadObjMeshFromFile(const char* path, MeshData& outMesh, std::vector<std::string>* outMaterialNames)
 {
     outMesh.vertices.clear();
     outMesh.indices.clear();
+    outMesh.sections.clear();
+    std::vector<std::string> materialNames;
+    int32_t currentSlot = -1;
 
     std::ifstream file(path);
     if (!file.is_open())
@@ -108,6 +111,24 @@ bool LoadObjMeshFromFile(const char* path, MeshData& outMesh)
             Float2 uv = {};
             ss >> uv.x >> uv.y;
             uvs.push_back(uv);
+        }
+        else if (tag == "usemtl")
+        {
+            std::string name;
+            std::getline(ss >> std::ws, name);
+            while (!name.empty() && (name.back() == '\r' || name.back() == ' ' || name.back() == '\t'))
+                name.pop_back();
+            currentSlot = -1;
+            for (size_t index = 0; index < materialNames.size(); ++index)
+            {
+                if (materialNames[index] == name)
+                    currentSlot = (int32_t)index;
+            }
+            if (currentSlot < 0 && !name.empty())
+            {
+                materialNames.push_back(name);
+                currentSlot = (int32_t)materialNames.size() - 1;
+            }
         }
         else if (tag == "f")
         {
@@ -186,6 +207,9 @@ bool LoadObjMeshFromFile(const char* path, MeshData& outMesh)
             if (faceIndices.size() < 3)
                 continue;
 
+            if (outMesh.sections.empty() || outMesh.sections.back().materialSlot != currentSlot)
+                outMesh.sections.push_back({ (uint32_t)outMesh.indices.size(), 0, currentSlot });
+            outMesh.sections.back().indexCount += (uint32_t)(faceIndices.size() - 2) * 3;
             for (size_t i = 1; i + 1 < faceIndices.size(); ++i)
             {
                 outMesh.indices.push_back(faceIndices[0]);
@@ -196,6 +220,8 @@ bool LoadObjMeshFromFile(const char* path, MeshData& outMesh)
     }
 
     const bool valid = !outMesh.vertices.empty() && !outMesh.indices.empty();
+    if (outMaterialNames)
+        *outMaterialNames = std::move(materialNames);
 
     return valid;
 }

@@ -44,10 +44,11 @@ struct KModelMesh
     std::vector<KModelPrimitive> primitives;
 };
 
+// A material slot. Primitives pick one by index; an entity can override it by name ("Material.<name>").
 struct KModelMaterial
 {
     std::string name;
-    std::string materialPath;
+    std::string materialPath; // empty = the entity Material, then the model's default material
 };
 
 struct KModelNode
@@ -133,9 +134,14 @@ struct KModelData
 
 bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outError = nullptr);
 bool SaveKModelFile(const char* path, const KModelData& model, std::string* outError = nullptr);
+// The draw sections of one mesh's primitives, offset by baseIndex; neighbours with the same slot merge.
+void AppendKModelMeshSections(const KModelMesh& mesh, uint32_t baseIndex, std::vector<MeshSection>& sections);
 bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::string* outError = nullptr, uint32_t meshIndex = KModelAllMeshes);
 // Re-import keeps hand-made sockets, colliders, children and the default material: copies them
 // from the .kmodel at existingPath (if any), remapping bones by name. Returns how many were kept.
+// Slot materials are kept by slot name. A primitive the new source gives no material keeps the slot
+// it had (matched by mesh name and primitive order).
 size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model);
 const KModelSocket* FindKModelSocket(const KModelData& model, const char* name);
+int32_t FindKModelMaterialSlot(const KModelData& model, const char* name); // -1 if missing
 void ConvertMeshDataToKModelMesh(const MeshData& mesh, KModelMesh& outMesh, const char* name = nullptr);

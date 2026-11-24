@@ -52,6 +52,7 @@ namespace kes::vk
         VkBuffer indexBuffer = VK_NULL_HANDLE;
         VkDeviceMemory indexMemory = VK_NULL_HANDLE;
         uint32_t indexCount = 0;
+        std::vector<MeshSection> sections; // never empty once uploaded
         Vector3 boundsCenter = {}; // local-space bounding sphere
         float boundsRadius = 0.0f;
     };
@@ -179,7 +180,9 @@ namespace kes::vk
         float distanceSq = 0.0f;
         render::Matrix4 world;
         bool skinned = false;
-        GPUMesh* mesh = nullptr; // static objects
+        GPUMesh* mesh = nullptr;
+        uint32_t firstIndex = 0; // one mesh section
+        uint32_t indexCount = 0;
         Vector3 boundsCenter = {}; // static objects, world space
         float boundsRadius = 0.0f;
     };

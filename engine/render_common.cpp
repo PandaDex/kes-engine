@@ -171,6 +171,13 @@ namespace render
         return r;
     }
 
+    MaterialHandle SectionMaterial(const SceneObject& object, int32_t materialSlot)
+    {
+        if (materialSlot >= 0 && (size_t)materialSlot < object.slotMaterials.size() && object.slotMaterials[(size_t)materialSlot] != 0)
+            return object.slotMaterials[(size_t)materialSlot];
+        return object.material;
+    }
+
     Matrix4 SceneObjectMatrix(const SceneObject& object, Vector3& outScale)
     {
         if (!object.useWorldMatrix)

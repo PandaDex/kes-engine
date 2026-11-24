@@ -1338,7 +1338,10 @@ namespace kes::d3d11
         GPUMesh gpu = {};
         if (!UploadMeshBuffers(r, vertices, data->indices, gpu))
             return nullptr;
-        return &(r.gpuMeshes[handle] = gpu);
+        gpu.sections = data->sections;
+        if (gpu.sections.empty())
+            gpu.sections.push_back({ 0, gpu.indexCount, -1 });
+        return &(r.gpuMeshes[handle] = std::move(gpu));
     }
 
     static GPUMesh* GetOrUploadModelMesh(Renderer& r, ModelHandle handle, uint32_t meshIndex, const AssetSystem& assets)
@@ -1385,7 +1388,10 @@ namespace kes::d3d11
         GPUMesh gpu = {};
         if (!UploadMeshBuffers(r, vertices, source.indices, gpu))
             return nullptr;
-        return &(r.gpuModelMeshes[key] = gpu);
+        AppendKModelMeshSections(source, 0, gpu.sections);
+        if (gpu.sections.empty())
+            gpu.sections.push_back({ 0, gpu.indexCount, -1 });
+        return &(r.gpuModelMeshes[key] = std::move(gpu));
     }
 
     static void DestroyRendererAssetCaches(Renderer& r)
@@ -1730,7 +1736,7 @@ namespace kes::d3d11
         bool haveMaterial = false;
     };
 
-    static void DrawGPUMesh(Renderer& r, DrawState& state, const GPUMesh& gpuMesh)
+    static void DrawGPUMesh(Renderer& r, DrawState& state, const GPUMesh& gpuMesh, uint32_t firstIndex, uint32_t indexCount)
     {
         if (gpuMesh.vertexBuffer != state.vb)
         {
@@ -1746,11 +1752,11 @@ namespace kes::d3d11
                 r.context->IASetIndexBuffer(gpuMesh.indexBuffer, DXGI_FORMAT_R32_UINT, 0);
                 state.ib = gpuMesh.indexBuffer;
             }
-            r.context->DrawIndexed(gpuMesh.indexCount, 0, 0);
+            r.context->DrawIndexed(indexCount, firstIndex, 0);
         }
         else
         {
-            r.context->Draw(gpuMesh.indexCount, 0);
+            r.context->Draw(indexCount, firstIndex);
         }
     }
 
@@ -1809,27 +1815,12 @@ namespace kes::d3d11
             state.haveMaterial = true;
         }
 
+        // Skinned: glTF semantics, the skin matrices already place the mesh, so the mesh node's
+        // own transform doesn't apply. Not culled (the bind-pose bounds don't cover the animation).
         const Matrix4 worldViewProj = render::MatrixMultiply(item.world, viewProj);
-        if (item.skinned)
-        {
-            // glTF semantics: the skin matrices already place the mesh, so the mesh node's
-            // own transform doesn't apply. Animated: no culling (the bind-pose bounds don't
-            // cover the animation).
-            const KModelData* model = assets.GetModel(obj.model);
-            const uint32_t matrixCount = std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices);
-            for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
-            {
-                GPUMesh* gpuMesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
-                if (!gpuMesh)
-                    continue;
-                UpdateModelConstants(r, worldViewProj, item.world, obj.skinMatrices.data(), matrixCount);
-                DrawGPUMesh(r, state, *gpuMesh);
-            }
-            return;
-        }
-
-        UpdateModelConstants(r, worldViewProj, item.world, nullptr, 0);
-        DrawGPUMesh(r, state, *item.mesh);
+        const uint32_t matrixCount = item.skinned ? std::min<uint32_t>(obj.skinMatrixCount, SceneObject::MaxSkinMatrices) : 0u;
+        UpdateModelConstants(r, worldViewProj, item.world, item.skinned ? obj.skinMatrices.data() : nullptr, matrixCount);
+        DrawGPUMesh(r, state, *item.mesh, item.firstIndex, item.indexCount);
     }
 
     static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
@@ -2015,21 +2006,38 @@ namespace kes::d3d11
                     continue;
                 DrawItem item = {};
                 item.object = &obj;
-                item.material = assets.GetMaterial(obj.material);
                 item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
                 Vector3 worldScale;
                 item.world = render::SceneObjectMatrix(obj, worldScale);
                 const KModelData* model = assets.GetModel(obj.model);
                 item.skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
-                if (!item.skinned)
+                // One draw item per mesh section, each with its slot's material.
+                const auto addSections = [&](GPUMesh* mesh)
                 {
-                    item.mesh = GetOrUploadMesh(r, obj.mesh, assets);
-                    if (!item.mesh)
-                        continue;
-                    render::TransformSphere(item.world, worldScale, item.mesh->boundsCenter, item.mesh->boundsRadius,
-                        item.boundsCenter, item.boundsRadius);
+                    item.mesh = mesh;
+                    for (const MeshSection& section : mesh->sections)
+                    {
+                        item.firstIndex = section.firstIndex;
+                        item.indexCount = section.indexCount;
+                        item.material = assets.GetMaterial(render::SectionMaterial(obj, section.materialSlot));
+                        (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);
+                    }
+                };
+                if (item.skinned)
+                {
+                    for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
+                    {
+                        if (GPUMesh* mesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets))
+                            addSections(mesh);
+                    }
+                    continue;
                 }
-                (IsTransparentMaterial(item.material) ? transparentItems : opaqueItems).push_back(item);
+                GPUMesh* mesh = GetOrUploadMesh(r, obj.mesh, assets);
+                if (!mesh)
+                    continue;
+                render::TransformSphere(item.world, worldScale, mesh->boundsCenter, mesh->boundsRadius,
+                    item.boundsCenter, item.boundsRadius);
+                addSections(mesh);
             }
             // Opaque: group by material, near-to-far inside a group (early depth reject).
             std::sort(opaqueItems.begin(), opaqueItems.end(), [](const DrawItem& a, const DrawItem& b)

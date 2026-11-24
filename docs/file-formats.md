@@ -275,6 +275,22 @@ Each vertex currently stores:
 
 The format is glTF-like in structure: meshes, nodes, materials, and skinning data are all part of the same asset.
 
+### Material slots
+
+The material table is a list of slots, each with a name and an optional `.mat` path. Every primitive names one slot (or `-1`, none), so one mesh can use several materials and each mesh (body) of a model can have its own. The importer makes one slot per source material a primitive uses: glTF/FBX material names, OBJ `usemtl` names. The model editor assigns `.mat` files to slots, adds slots and picks the slot of each mesh part.
+
+A part's material, first match wins:
+
+1. the entity key `Material.<slot name>` (Forge lists one field per slot under *Material slots*)
+2. the slot's `.mat` in the `.kmodel`
+3. the entity `Material`
+4. the model's default material
+5. the engine default (white)
+
+A child model uses its slot materials, then the child's `materialPath`, then its own default material; the parent entity's keys don't reach it. Re-importing keeps slot materials by slot name, and keeps the slot picked in the model editor for a part the new source leaves without a material.
+
+Game code can change a slot at runtime with `SkinnedModelEntity::SetSlotMaterialPath(slot, path)` (an empty path removes the override).
+
 ## Texture Files: `.ktex`
 
 `.ktex` is the runtime texture format.

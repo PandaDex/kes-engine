@@ -337,8 +337,30 @@ namespace
         return nullptr;
     }
 
+    // One slot per source material a primitive uses, in first-use order, named after the material.
+    static int32_t MaterialSlot(const cgltf_data& data, const cgltf_material* material, std::vector<int32_t>& slots, KModelData& model)
+    {
+        if (!material || !data.materials)
+            return -1;
+        const ptrdiff_t index = material - data.materials;
+        if (index < 0 || index >= (ptrdiff_t)data.materials_count)
+            return -1;
+        slots.resize(data.materials_count, -1);
+        if (slots[(size_t)index] < 0)
+        {
+            KModelMaterial slot;
+            slot.name = material->name && material->name[0] ? material->name : ("Material" + std::to_string(index));
+            for (int suffix = 1; FindKModelMaterialSlot(model, slot.name.c_str()) >= 0; ++suffix)
+                slot.name = (material->name && material->name[0] ? material->name : "Material") + std::string("_") + std::to_string(suffix);
+            model.materials.push_back(slot);
+            slots[(size_t)index] = (int32_t)model.materials.size() - 1;
+        }
+        return slots[(size_t)index];
+    }
+
     static bool ImportMeshes(const cgltf_data& data, KModelData& model, std::string& error)
     {
+        std::vector<int32_t> slots;
         model.meshes.resize(data.meshes_count);
         for (cgltf_size meshIndex = 0; meshIndex < data.meshes_count; ++meshIndex)
         {
@@ -354,6 +376,7 @@ namespace
                     error = "Mesh " + mesh.name + ": " + error;
                     return false;
                 }
+                mesh.primitives.back().materialIndex = MaterialSlot(data, sourceMesh.primitives[primitiveIndex].material, slots, model);
             }
         }
         return true;

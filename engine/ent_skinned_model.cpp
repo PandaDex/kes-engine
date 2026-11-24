@@ -28,6 +28,7 @@ void SkinnedModelEntity::Start()
         object.mesh = meshHandle;
         object.model = modelHandle;
         object.material = materialHandle;
+        object.slotMaterials = slotMaterialHandles;
 
         if (!IsAnimBlendTreePath(animationGraphPath))
         {
@@ -46,6 +47,28 @@ void SkinnedModelEntity::Start()
 
 namespace
 {
+    // Slot handles for a model: override (by slot name) > the slot's .kmodel material > 0 (the object's material).
+    void ResolveSlotMaterials(AssetSystem& assets, const KModelData* model,
+        const std::vector<std::pair<std::string, std::string>>& overrides, std::vector<MaterialHandle>& out)
+    {
+        out.clear();
+        if (!model)
+            return;
+        out.resize(model->materials.size(), 0);
+        for (size_t slot = 0; slot < model->materials.size(); ++slot)
+        {
+            const KModelMaterial& material = model->materials[slot];
+            const std::string* path = material.materialPath.empty() ? nullptr : &material.materialPath;
+            for (const auto& entry : overrides)
+            {
+                if (entry.first == material.name)
+                    path = &entry.second;
+            }
+            if (path && !path->empty())
+                out[slot] = assets.LoadMaterial(path->c_str());
+        }
+    }
+
     // Collider placed by `matrix` (model space, from BuildBoneAttachmentMatrix with unit scale),
     // then scaled by the entity. The shape's centre and rotation are its pose in entity space.
     RigidShape MakeModelShape(const KModelCollider& source, const float matrix[16], const Vector3& scale)
@@ -216,6 +239,12 @@ bool SkinnedModelEntity::ApplyProperty(const std::string& name, const std::strin
         return true;
     }
 
+    if (name.rfind("Material.", 0) == 0 && name.size() > 9)
+    {
+        SetSlotMaterialPath(name.substr(9), entityprops::ParseString(value));
+        return true;
+    }
+
     if (name == "AnimGraph")
     {
         SetAnimationGraphPath(entityprops::ParseString(value));
@@ -259,6 +288,32 @@ void SkinnedModelEntity::SetMaterialPath(const std::string& path)
     materialPath = path;
     materialHandle = 0;
     assetsDirty = true;
+}
+
+void SkinnedModelEntity::SetSlotMaterialPath(const std::string& slot, const std::string& path)
+{
+    const auto found = std::find_if(slotMaterialPaths.begin(), slotMaterialPaths.end(),
+        [&](const std::pair<std::string, std::string>& entry) { return entry.first == slot; });
+    if (path.empty())
+    {
+        if (found != slotMaterialPaths.end())
+            slotMaterialPaths.erase(found);
+    }
+    else if (found != slotMaterialPaths.end())
+        found->second = path;
+    else
+        slotMaterialPaths.emplace_back(slot, path);
+    assetsDirty = true;
+}
+
+std::string SkinnedModelEntity::GetSlotMaterialPath(const std::string& slot) const
+{
+    for (const auto& entry : slotMaterialPaths)
+    {
+        if (entry.first == slot)
+            return entry.second;
+    }
+    return {};
 }
 
 void SkinnedModelEntity::SetAnimationGraphPath(const std::string& path)
@@ -312,6 +367,7 @@ void SkinnedModelEntity::RefreshAssetHandles()
     const KModelData* model = game->assets->GetModel(modelHandle);
     const std::string& material = materialPath.empty() && model ? model->defaultMaterial : materialPath;
     materialHandle = material.empty() ? 0 : game->assets->LoadMaterial(material.c_str());
+    ResolveSlotMaterials(*game->assets, game->assets->GetModel(modelHandle), slotMaterialPaths, slotMaterialHandles);
 }
 
 const AnimationGraphData* SkinnedModelEntity::ResolveAnimationGraph()
@@ -424,6 +480,7 @@ void SkinnedModelEntity::SyncSceneObject(float dt)
     object->model = modelHandle;
     object->mesh = meshHandle;
     object->material = materialHandle;
+    object->slotMaterials = slotMaterialHandles;
 
     if (childPartsModel != modelHandle)
     {
@@ -542,6 +599,7 @@ void SkinnedModelEntity::CreateChildParts(ModelHandle parentModel, int parentPar
         object.mesh = game->assets->LoadMesh(child.modelPath.c_str());
         const std::string material = child.materialPath.empty() ? game->assets->GetModel(handle)->defaultMaterial : child.materialPath;
         object.material = material.empty() ? 0 : game->assets->LoadMaterial(material.c_str());
+        ResolveSlotMaterials(*game->assets, game->assets->GetModel(handle), {}, object.slotMaterials);
         object.useWorldMatrix = true;
 
         ChildPart part;

@@ -11,6 +11,8 @@
 #include "mesh.h"
 
 // Properties beyond the model and animation paths:
+//   Material.<slot>  material for one material slot of the model; it wins over the slot's own
+//             material in the .kmodel, which wins over Material, then the model's default material
 //   AnimGraph a .kanimgraph blend tree, or the older state-machine graph
 //   Collider  "Box" or "Sphere": a collider fitted to the mesh bounds. Without it the
 //             colliders saved in the .kmodel are used, if it has any: those on the model
@@ -30,6 +32,9 @@ public:
 
     void SetModelPath(const std::string& path);
     void SetMaterialPath(const std::string& path);
+    // Overrides one material slot by name; an empty path removes the override.
+    void SetSlotMaterialPath(const std::string& slot, const std::string& path);
+    std::string GetSlotMaterialPath(const std::string& slot) const;
     void SetAnimationClipPath(const std::string& path);
     void SetAnimationGraphPath(const std::string& path);
     void SetScale(const Vector3& value);
@@ -94,6 +99,8 @@ private:
     MeshHandle meshHandle = 0;
     ModelHandle modelHandle = 0;
     MaterialHandle materialHandle = 0;
+    std::vector<std::pair<std::string, std::string>> slotMaterialPaths; // slot name, material
+    std::vector<MaterialHandle> slotMaterialHandles;
     AnimationClipHandle animationClipHandle = 0;
     AnimationGraphHandle animationGraphHandle = 0;
     AnimationClipHandle playbackClipHandle = 0;
