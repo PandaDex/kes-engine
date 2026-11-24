@@ -6,20 +6,20 @@ This document covers the file types currently used by KES.
 
 The editor scans `Project.AssetRoot` recursively and classifies assets by extension.
 
-| Extension | Purpose | Format |
-| --- | --- | --- |
-| `.kmodel` | runtime model asset | binary |
-| `.ktex` | runtime texture asset | binary |
-| `.ksound` | runtime sound asset | binary |
-| `.kanim` | runtime animation clip | binary |
-| `.kagraph` | animation state graph | text block |
-| `.mat` | material graph and material settings | text block |
-| `.fmap` | map source, edited in the Forge editor | JSON |
-| `.fmapc` | compiled map loaded by the engine | binary (chunked) |
-| `.shader` | shader descriptor | text block |
-| `.kproject` | project file | text block |
-| `.kdec` | editor entity/property declarations | text block |
-| `.pak` | packaged asset archive | binary |
+| Extension   | Purpose                                | Format           |
+| ----------- | -------------------------------------- | ---------------- |
+| `.kmodel`   | runtime model asset                    | binary           |
+| `.ktex`     | runtime texture asset                  | binary           |
+| `.ksound`   | runtime sound asset                    | binary           |
+| `.kanim`    | runtime animation clip                 | binary           |
+| `.ag`       | animation state graph                  | text block       |
+| `.mat`      | material graph and material settings   | text block       |
+| `.fmap`     | map source, edited in the Forge editor | JSON             |
+| `.fmapc`    | compiled map loaded by the engine      | binary (chunked) |
+| `.shader`   | shader descriptor                      | text block       |
+| `.kproject` | project file                           | text block       |
+| `.kdec`     | editor entity/property declarations    | text block       |
+| `.pak`      | packaged asset archive                 | binary           |
 
 The conventional asset folders are:
 
@@ -99,12 +99,12 @@ Maps are built in the Forge editor (`tools/forgeMapEditor`), a Hammer-style brus
 
 `.fmapc` version 3 layout (little-endian): `FORGECMP`, u32 version, u32 flags, then chunks of `{char[4] id, u32 size, data}`. Readers skip unknown chunks, so new data can be added without breaking older engines.
 
-| Chunk | Contents |
-| --- | --- |
-| `MATL` | material paths (content-relative `.mat`, `""` = engine default material) |
-| `GEOM` | render meshes, one per material per owner: vertices (position, normal, uv) and triangle indices |
+| Chunk  | Contents                                                                                                                                         |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MATL` | material paths (content-relative `.mat`, `""` = engine default material)                                                                         |
+| `GEOM` | render meshes, one per material per owner: vertices (position, normal, uv) and triangle indices                                                  |
 | `ENTS` | entities: class, name, GUID, solid flag, origin, angles, bounds, keyvalues, MapScript links (output, target GUID, input, parameter, delay, once) |
-| `BRSH` | convex collision hulls: owner, bounds, planes |
+| `BRSH` | convex collision hulls: owner, bounds, planes                                                                                                    |
 
 Data is stored in editor space (Z-up, right-handed, editor units). World geometry is in world space; geometry and brushes owned by an entity are relative to the entity origin. The engine converts on load:
 
@@ -172,6 +172,7 @@ Typical top-level data stored in a material file:
 - `CastShadows`
 
 The keys and their defaults are described in [rendering.md](rendering.md#materials-metallic--roughness-pbr).
+
 - `Node` blocks
 - `Link` blocks
 
@@ -281,7 +282,7 @@ The material table is a list of slots, each with a name and an optional `.mat` p
 
 A part's material, first match wins:
 
-1. the entity key `Material.<slot name>` (Forge lists one field per slot under *Material slots*)
+1. the entity key `Material.<slot name>` (Forge lists one field per slot under _Material slots_)
 2. the slot's `.mat` in the `.kmodel`
 3. the entity `Material`
 4. the model's default material
@@ -416,11 +417,11 @@ Current encryption details:
 
 The importer currently converts common source formats into runtime formats:
 
-| Source | Imported Runtime Asset |
-| --- | --- |
-| `.obj`, `.gltf`, `.glb`, `.fbx` | `.kmodel` |
-| `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff` | `.ktex` |
-| `.wav`, `.mp3`, `.ogg` | `.ksound` |
+| Source                                           | Imported Runtime Asset |
+| ------------------------------------------------ | ---------------------- |
+| `.obj`, `.gltf`, `.glb`, `.fbx`                  | `.kmodel`              |
+| `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff` | `.ktex`                |
+| `.wav`, `.mp3`, `.ogg`                           | `.ksound`              |
 
 ## Format Stability
 

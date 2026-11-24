@@ -7,7 +7,7 @@
 #include <vector>
 #include "animation_clip.h"
 
-// Pose blend tree (.kanimgraph): a node graph from clips, blends and parameter
+// Pose blend tree (.ag): a node graph from clips, blends and parameter
 // logic to one Output pose. The model editor (tools/modelEditor) compiles this
 // file as well, so its preview runs the same evaluator as the game.
 

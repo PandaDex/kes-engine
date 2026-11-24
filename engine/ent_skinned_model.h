@@ -13,7 +13,7 @@
 // Properties beyond the model and animation paths:
 //   Material.<slot>  material for one material slot of the model; it wins over the slot's own
 //             material in the .kmodel, which wins over Material, then the model's default material
-//   AnimGraph a .kanimgraph blend tree, or the older state-machine graph
+//   AnimGraph a .ag blend tree, or the older state-machine graph
 //   Collider  "Box" or "Sphere": a collider fitted to the mesh bounds. Without it the
 //             colliders saved in the .kmodel are used, if it has any: those on the model
 //             root form the entity's body, those on bones follow the animation as kinematic

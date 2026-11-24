@@ -240,7 +240,7 @@ void AnimBlendTreeNode::Set(const std::string& key, const std::string& value)
 
 bool IsAnimBlendTreePath(const std::string& path)
 {
-    static const std::string extension = ".kanimgraph";
+    static const std::string extension = ".ag";
     if (path.size() < extension.size())
         return false;
     return std::equal(extension.rbegin(), extension.rend(), path.rbegin(),

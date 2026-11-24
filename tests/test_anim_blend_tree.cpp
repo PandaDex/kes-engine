@@ -45,7 +45,7 @@ namespace
 TEST_CASE("anim graph: file round trip keeps nodes, values and links")
 {
     kestest::TempDir dir;
-    const std::string path = dir.File("test.kanimgraph");
+    const std::string path = dir.File("test.ag");
 
     AnimBlendTreeData tree;
     tree.modelPath = "meshes/guy.kmodel";
@@ -120,7 +120,8 @@ TEST_CASE("anim graph: blend by parameter and clip time advance")
     CHECK(instance.Parameters()[0].name == "Mix");
 
     const AnimBlendTreeInstance::ClipResolver clips = [&](const std::string& path) -> const AnimationClipData*
-    { return path == "a" ? &slideA : path == "b" ? &slideB : nullptr; };
+    { return path == "a" ? &slideA : path == "b" ? &slideB
+                                                 : nullptr; };
 
     std::vector<AnimationTransform> pose;
     REQUIRE(instance.Evaluate(model, 0.5f, clips, pose));
@@ -143,7 +144,8 @@ TEST_CASE("anim graph: select cross-fades and layer blend masks children")
 {
     const KModelData model = MakeTwoNodeModel();
     const AnimationClipData slide = MakeSlide(1, 2.0f);
-    const AnimBlendTreeInstance::ClipResolver clips = [&](const std::string&) { return &slide; };
+    const AnimBlendTreeInstance::ClipResolver clips = [&](const std::string&)
+    { return &slide; };
 
     AnimBlendTreeData tree;
     tree.nodes.push_back(MakeNode(1, "Clip", { { "Clip", "slide" } }));
@@ -160,9 +162,9 @@ TEST_CASE("anim graph: select cross-fades and layer blend masks children")
     CHECK_NEAR(pose[1].translation[0], 0.0, 1e-5);
 
     instance.SetBool("Moving", true);
-    REQUIRE(instance.Evaluate(model, 0.5f, clips, pose));   // the switch frame starts the fade at 0
+    REQUIRE(instance.Evaluate(model, 0.5f, clips, pose)); // the switch frame starts the fade at 0
     CHECK_NEAR(pose[1].translation[0], 0.0, 1e-5);
-    REQUIRE(instance.Evaluate(model, 0.25f, clips, pose));  // clip at 0.75 s (x 1.5), a quarter faded in
+    REQUIRE(instance.Evaluate(model, 0.25f, clips, pose)); // clip at 0.75 s (x 1.5), a quarter faded in
     CHECK_NEAR(pose[1].translation[0], 0.375, 1e-4);
 
     AnimBlendTreeData layer;
