@@ -545,6 +545,7 @@ bool EngineTick(EngineApp& app)
     KES_PROFILE_PLOT("Frame time (ms)", static_cast<double>(dt) * 1000.0);
 
     RendererUpdateScene(app.sceneState, app.input);
+    app.sceneState.deltaTime = dt;
 
     {
         KES_ZONE(WORLD, "Fixed update loop");

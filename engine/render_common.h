@@ -14,6 +14,7 @@
 
 class Scene;
 struct SkySettings;
+struct PostProcessSettings;
 struct SceneObject;
 
 namespace render
@@ -95,10 +96,39 @@ namespace render
         float skyParams[4];
     };
 
+    // present.slang and the bloom passes.
+    struct BlitCBData
+    {
+        float params[4];
+    };
+
+    // blit.slang (tonemap).
     struct TonemapCBData
     {
-        float params[4]; // x = exposure, y = dither strength
+        float params[4]; // x = exposure multiplier, y = dither strength, z = 1 multiply by the adapted exposure, w = bloom intensity
+        float vignette[4]; // x = intensity, y = smoothness, z = aspect (width / height), w = 1 / bloom level count
+        float vignetteColor[4]; // rgb
     };
+
+    // exposure_histogram.slang / exposure_adapt.slang.
+    struct ExposureCBData
+    {
+        float params0[4]; // x = histogram min log2 luminance, y = 1 / histogram log2 range, z = width, w = height
+        float params1[4]; // x = delta time, y = speed up, z = speed down, w = 1 snap to the target
+        float params2[4]; // x = adaptation min log2 luminance, y = max
+    };
+
+    constexpr int kBloomMaxLevels = 6; // level 0 is half the render resolution
+    constexpr float kHistogramMinLog2 = -12.0f;
+    constexpr float kHistogramLog2Range = 18.0f;
+    constexpr uint32_t kHistogramBins = 256;
+    constexpr uint32_t kExposureStateFloats = 4; // x = exposure, y = adapted log2 luminance, z = 1 once initialized
+
+    // Bloom chain sizes for a render resolution; returns the level count (0 when too small).
+    int ComputeBloomLevels(int renderWidth, int renderHeight, int outSizes[kBloomMaxLevels][2]);
+    TonemapCBData BuildTonemapConstants(const SceneState& state, const PostProcessSettings& post, bool autoExposure,
+        int bloomLevels, int renderWidth, int renderHeight);
+    ExposureCBData BuildExposureConstants(const PostProcessSettings& post, float deltaTime, bool reset, int renderWidth, int renderHeight);
 
     // Offsets as Slang lays out kes_common.slang (checked with -reflection-json).
     static_assert(offsetof(SceneCBData, ambientSH) == 96, "SceneCB layout");
@@ -111,6 +141,8 @@ namespace render
     static_assert(offsetof(ModelCBData, skinInfo) == 128, "ModelCB layout");
     static_assert(offsetof(ModelCBData, skinMatrices) == 144, "ModelCB layout");
     static_assert(sizeof(MaterialCBData) == 64, "MaterialCB layout");
+    static_assert(sizeof(TonemapCBData) == 48, "TonemapCB layout");
+    static_assert(sizeof(ExposureCBData) == 48, "ExposureCB layout");
 
     MaterialCBData BuildMaterialConstants(const MaterialData* material, uint32_t textureFlags);
     SkyCBData BuildSkyConstants(const SkySettings& sky, const Camera& camera, float aspect);

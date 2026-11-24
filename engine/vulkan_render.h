@@ -27,7 +27,8 @@ namespace tracy
 // renderer through IRenderer (render_backend.h).
 //
 // Frame: shadow depth passes (sun cascades + local lights) -> HDR scene pass
-// (RGBA16F, MSAA with resolve) -> tonemap into the swapchain image -> UI.
+// (RGBA16F, MSAA with resolve) -> eye adaptation (compute) and bloom (fragment
+// passes) -> tonemap into the swapchain image -> UI.
 // With post AA: tonemap into an RGBA8 target -> CMAA2 (compute) -> present
 // (copy or FXAA) into the swapchain image -> UI.
 //
@@ -227,7 +228,11 @@ namespace kes::vk
         VkDeviceMemory sceneColorMemory = VK_NULL_HANDLE;
         VkImageView sceneColorView = VK_NULL_HANDLE;
         VkFramebuffer sceneFramebuffer = VK_NULL_HANDLE;
+        VkDescriptorSet sceneColorDescriptorSet = VK_NULL_HANDLE; // texSetLayout: scene color (bloom input)
+        // tonemapSetLayout: scene, bloom level 0, exposure state. The no-bloom set
+        // has the scene color in the bloom slot, for frames that skip bloom.
         VkDescriptorSet tonemapDescriptorSet = VK_NULL_HANDLE;
+        VkDescriptorSet tonemapNoBloomDescriptorSet = VK_NULL_HANDLE;
 
         // Shadows and image-based ambient
         GPUShadowArray cascadeShadows;
@@ -238,7 +243,8 @@ namespace kes::vk
         render::FrameSetup frame;
         VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE; // set 2
         bool globalSetDirty = true;
-        float exposure = 1.0f;
+        render::TonemapCBData tonemap = {}; // this frame's tonemap constants
+        bool bloomThisFrame = false;
         GraphicsOptions options = {};
         bool depthBiasClampSupported = false;
         GraphicsOptions deferredOptions = {}; // set during a frame, applied after Present
@@ -248,11 +254,13 @@ namespace kes::vk
         VkDescriptorSetLayout uboSetLayout = VK_NULL_HANDLE; // set 0: SceneCB, ModelCB(dyn), MaterialCB(dyn)
         VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE; // set 1: 5 combined image samplers
         VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE; // set 2: env, shadows, samplers
-        VkDescriptorSetLayout texSetLayout = VK_NULL_HANDLE; // tonemap set 0: combined image sampler (linear)
+        VkDescriptorSetLayout texSetLayout = VK_NULL_HANDLE; // present / bloom set 0: combined image sampler (linear)
+        VkDescriptorSetLayout tonemapSetLayout = VK_NULL_HANDLE; // scene + bloom (linear samplers), exposure state buffer
         VkDescriptorSetLayout skySetLayout = VK_NULL_HANDLE; // sky set 0: SkyCB
         VkPipelineLayout meshPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
-        VkPipelineLayout tonemapPipelineLayout = VK_NULL_HANDLE; // + push constant: exposure
+        VkPipelineLayout tonemapPipelineLayout = VK_NULL_HANDLE; // tonemapSetLayout + push constant: TonemapCBData
+        VkPipelineLayout blitPipelineLayout = VK_NULL_HANDLE; // texSetLayout + push constant: BlitCBData (present, bloom)
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
 
         GPUShaderProgram meshDefaultProgram;
@@ -274,7 +282,7 @@ namespace kes::vk
         VkPipeline tonemapLdrPipeline = VK_NULL_HANDLE;
         VkShaderModule presentVS = VK_NULL_HANDLE;
         VkShaderModule presentPS = VK_NULL_HANDLE;
-        VkPipeline presentPipeline = VK_NULL_HANDLE; // tonemapPipelineLayout
+        VkPipeline presentPipeline = VK_NULL_HANDLE; // blitPipelineLayout
         GPUTexture ldrColor = {};
         VkFramebuffer ldrFramebuffer = VK_NULL_HANDLE;
         VkDescriptorSet presentDescriptorSet = VK_NULL_HANDLE;
@@ -294,6 +302,42 @@ namespace kes::vk
         uint32_t cmaa2GroupsX = 0;
         uint32_t cmaa2GroupsY = 0;
         bool cmaa2NeedsInit = false; // clear the counters, move the images to GENERAL
+
+        // Bloom (bloom_downsample / bloom_upsample.slang): RGBA16F chain from half
+        // the render resolution down, summed back up into level 0. Downsample
+        // passes overwrite a level, upsample passes add onto it.
+        bool bloomAvailable = false; // pipelines created
+        VkRenderPass bloomRenderPass = VK_NULL_HANDLE; // don't care -> shader read
+        VkRenderPass bloomAddRenderPass = VK_NULL_HANDLE; // load -> shader read (compatible with bloomRenderPass)
+        VkShaderModule bloomDownVS = VK_NULL_HANDLE;
+        VkShaderModule bloomDownPS = VK_NULL_HANDLE;
+        VkShaderModule bloomUpVS = VK_NULL_HANDLE;
+        VkShaderModule bloomUpPS = VK_NULL_HANDLE;
+        VkPipeline bloomDownPipeline = VK_NULL_HANDLE;
+        VkPipeline bloomUpPipeline = VK_NULL_HANDLE; // additive
+        int bloomLevelCount = 0; // 0 = no targets (bloom off)
+        int bloomSizes[render::kBloomMaxLevels][2] = {};
+        GPUTexture bloomLevels[render::kBloomMaxLevels] = {};
+        VkFramebuffer bloomFramebuffers[render::kBloomMaxLevels] = {};
+        VkDescriptorSet bloomDescriptorSets[render::kBloomMaxLevels] = {}; // texSetLayout, level as the source
+
+        // Eye adaptation (exposure_histogram / exposure_adapt.slang). The state
+        // buffer carries the adapted exposure from frame to frame.
+        bool exposureAvailable = false; // pipelines created
+        VkDescriptorSetLayout exposureSetLayout = VK_NULL_HANDLE; // scene color, histogram, state
+        VkPipelineLayout exposurePipelineLayout = VK_NULL_HANDLE; // + push constant: ExposureCBData
+        VkShaderModule exposureHistogramCS = VK_NULL_HANDLE;
+        VkShaderModule exposureAdaptCS = VK_NULL_HANDLE;
+        VkPipeline exposureHistogramPipeline = VK_NULL_HANDLE;
+        VkPipeline exposureAdaptPipeline = VK_NULL_HANDLE;
+        VkBuffer histogramBuffer = VK_NULL_HANDLE;
+        VkDeviceMemory histogramMemory = VK_NULL_HANDLE;
+        VkBuffer exposureStateBuffer = VK_NULL_HANDLE;
+        VkDeviceMemory exposureStateMemory = VK_NULL_HANDLE;
+        VkDescriptorSet exposureDescriptorSet = VK_NULL_HANDLE;
+        bool exposureNeedsInit = true; // zero both buffers before the first use
+        uint32_t exposureResetSerial = ~0u; // Scene::GetExposureResetSerial last seen
+        bool autoExposureWasOn = false;
 
         // UI pass (ui.slang): premultiplied alpha, scissor per draw, drawn inside
         // the backbuffer pass after the tonemap.

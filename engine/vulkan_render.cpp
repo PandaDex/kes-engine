@@ -986,9 +986,11 @@ namespace kes::vk
         VkSubpassDependency dependencies[2] = {};
         dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
         dependencies[0].dstSubpass = 0;
-        // Previous frame's tonemap read of the color target (WAR) and its depth
-        // writes (WAW): with several frames in flight, frames overlap on the GPU.
-        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        // Previous frame's tonemap / bloom / histogram reads of the color target
+        // (WAR) and its depth writes (WAW): with several frames in flight, frames
+        // overlap on the GPU.
+        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -1228,6 +1230,32 @@ namespace kes::vk
         VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &texLayoutInfo, nullptr, &r.texSetLayout), "vkCreateDescriptorSetLayout (tex)", false);
         VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &texLayoutInfo, nullptr, &r.uiTexSetLayout), "vkCreateDescriptorSetLayout (ui tex)", false);
 
+        // Tonemap: scene color, bloom (linear immutable samplers), exposure state.
+        VkDescriptorSetLayoutBinding tonemapBindings[3] = { texBinding, texBinding, {} };
+        tonemapBindings[1].binding = 1;
+        tonemapBindings[2].binding = 2;
+        tonemapBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        tonemapBindings[2].descriptorCount = 1;
+        tonemapBindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo tonemapLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        tonemapLayoutInfo.bindingCount = 3;
+        tonemapLayoutInfo.pBindings = tonemapBindings;
+        VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &tonemapLayoutInfo, nullptr, &r.tonemapSetLayout), "vkCreateDescriptorSetLayout (tonemap)", false);
+
+        // Eye adaptation: scene color, histogram, state (bindings of exposure_*.slang).
+        VkDescriptorSetLayoutBinding exposureBindings[3] = {};
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            exposureBindings[i].binding = i;
+            exposureBindings[i].descriptorType = i == 0 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            exposureBindings[i].descriptorCount = 1;
+            exposureBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo exposureLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        exposureLayoutInfo.bindingCount = 3;
+        exposureLayoutInfo.pBindings = exposureBindings;
+        VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &exposureLayoutInfo, nullptr, &r.exposureSetLayout), "vkCreateDescriptorSetLayout (exposure)", false);
+
         // set 0 for the sky pipeline: SkyCB only.
         VkDescriptorSetLayoutBinding skyBinding = {};
         skyBinding.binding = 0;
@@ -1260,10 +1288,30 @@ namespace kes::vk
         tonemapPush.size = sizeof(render::TonemapCBData);
         VkPipelineLayoutCreateInfo tonemapLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         tonemapLayoutInfo.setLayoutCount = 1;
-        tonemapLayoutInfo.pSetLayouts = &r.texSetLayout;
+        tonemapLayoutInfo.pSetLayouts = &r.tonemapSetLayout;
         tonemapLayoutInfo.pushConstantRangeCount = 1;
         tonemapLayoutInfo.pPushConstantRanges = &tonemapPush;
         VK_CHECK_RET(vkCreatePipelineLayout(r.device, &tonemapLayoutInfo, nullptr, &r.tonemapPipelineLayout), "vkCreatePipelineLayout (tonemap)", false);
+
+        VkPushConstantRange blitPush = {};
+        blitPush.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        blitPush.size = sizeof(render::BlitCBData);
+        VkPipelineLayoutCreateInfo blitLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        blitLayoutInfo.setLayoutCount = 1;
+        blitLayoutInfo.pSetLayouts = &r.texSetLayout;
+        blitLayoutInfo.pushConstantRangeCount = 1;
+        blitLayoutInfo.pPushConstantRanges = &blitPush;
+        VK_CHECK_RET(vkCreatePipelineLayout(r.device, &blitLayoutInfo, nullptr, &r.blitPipelineLayout), "vkCreatePipelineLayout (blit)", false);
+
+        VkPushConstantRange exposurePush = {};
+        exposurePush.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        exposurePush.size = sizeof(render::ExposureCBData);
+        VkPipelineLayoutCreateInfo exposureLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        exposureLayoutInfo.setLayoutCount = 1;
+        exposureLayoutInfo.pSetLayouts = &r.exposureSetLayout;
+        exposureLayoutInfo.pushConstantRangeCount = 1;
+        exposureLayoutInfo.pPushConstantRanges = &exposurePush;
+        VK_CHECK_RET(vkCreatePipelineLayout(r.device, &exposureLayoutInfo, nullptr, &r.exposurePipelineLayout), "vkCreatePipelineLayout (exposure)", false);
 
         VkPushConstantRange uiPushRange = {};
         uiPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -1286,14 +1334,14 @@ namespace kes::vk
         poolSizes[0] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8 };
         poolSizes[1] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8 };
         poolSizes[2] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 };
-        poolSizes[3] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16 };
+        poolSizes[3] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 32 };
         poolSizes[4] = { VK_DESCRIPTOR_TYPE_SAMPLER, 16 };
         poolSizes[5] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 }; // CMAA2
-        poolSizes[6] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16 }; // CMAA2
+        poolSizes[6] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32 }; // CMAA2, eye adaptation, tonemap
 
         VkDescriptorPoolCreateInfo poolInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
         poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        poolInfo.maxSets = 4096 + 16;
+        poolInfo.maxSets = 4096 + 32;
         poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes));
         poolInfo.pPoolSizes = poolSizes;
 
@@ -1631,14 +1679,144 @@ namespace kes::vk
         r.postAA = mode;
     }
 
+    static void FreeDescriptorSet(Renderer& r, VkDescriptorSet& set)
+    {
+        if (set)
+        {
+            vkFreeDescriptorSets(r.device, r.descriptorPool, 1, &set);
+            set = VK_NULL_HANDLE;
+        }
+    }
+
+    static void DestroyBloomTargets(Renderer& r)
+    {
+        for (int i = 0; i < render::kBloomMaxLevels; ++i)
+        {
+            FreeDescriptorSet(r, r.bloomDescriptorSets[i]);
+            if (r.bloomFramebuffers[i])
+            {
+                vkDestroyFramebuffer(r.device, r.bloomFramebuffers[i], nullptr);
+                r.bloomFramebuffers[i] = VK_NULL_HANDLE;
+            }
+            DestroyGPUTexture(r, r.bloomLevels[i]);
+        }
+        r.bloomLevelCount = 0;
+        r.bloomThisFrame = false;
+    }
+
+    // Tonemap binding 1: bloom level 0, or the scene color when there is no bloom.
+    static void WriteTonemapBloomBinding(Renderer& r, VkDescriptorSet set, VkImageView view)
+    {
+        VkDescriptorImageInfo imageInfo = { r.linearSampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = set;
+        write.dstBinding = 1;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &imageInfo;
+        vkUpdateDescriptorSets(r.device, 1, &write, 0, nullptr);
+    }
+
+    // Non-fatal: on failure bloom stays off. Needs the device idle (rewrites the tonemap set).
+    static void CreateBloomTargets(Renderer& r)
+    {
+        if (!r.options.bloom || !r.bloomAvailable || r.bloomLevelCount > 0 || !r.tonemapDescriptorSet)
+            return;
+        const int count = render::ComputeBloomLevels(r.renderWidth, r.renderHeight, r.bloomSizes);
+        bool ok = count > 0;
+        for (int i = 0; ok && i < count; ++i)
+        {
+            const uint32_t width = static_cast<uint32_t>(r.bloomSizes[i][0]);
+            const uint32_t height = static_cast<uint32_t>(r.bloomSizes[i][1]);
+            ok = CreateColorImage(r, width, height, kSceneColorFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                r.bloomLevels[i]);
+            if (ok)
+            {
+                VkFramebufferCreateInfo fbInfo = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+                fbInfo.renderPass = r.bloomRenderPass;
+                fbInfo.attachmentCount = 1;
+                fbInfo.pAttachments = &r.bloomLevels[i].view;
+                fbInfo.width = width;
+                fbInfo.height = height;
+                fbInfo.layers = 1;
+                ok = vkCreateFramebuffer(r.device, &fbInfo, nullptr, &r.bloomFramebuffers[i]) == VK_SUCCESS;
+            }
+            if (ok)
+            {
+                r.bloomDescriptorSets[i] = AllocateTextureDescriptorSet(r, r.bloomLevels[i].view, r.texSetLayout);
+                ok = r.bloomDescriptorSets[i] != VK_NULL_HANDLE;
+            }
+        }
+        if (!ok)
+        {
+            if (count > 0)
+                EngineLog("Creating the bloom targets failed; bloom is off.");
+            DestroyBloomTargets(r);
+            return;
+        }
+        r.bloomLevelCount = count;
+        WriteTonemapBloomBinding(r, r.tonemapDescriptorSet, r.bloomLevels[0].view);
+    }
+
+    static VkDescriptorSet AllocateTonemapDescriptorSet(Renderer& r)
+    {
+        VkDescriptorSet set = AllocateDescriptorSet(r, r.tonemapSetLayout);
+        if (!set)
+            return VK_NULL_HANDLE;
+        const VkDescriptorImageInfo images[2] = {
+            { r.linearSampler, r.sceneColorView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+            { r.linearSampler, r.sceneColorView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }
+        };
+        const VkDescriptorBufferInfo state = { r.exposureStateBuffer, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet writes[3] = {};
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            writes[i].dstSet = set;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            if (i < 2)
+                writes[i].pImageInfo = &images[i];
+            else
+                writes[i].pBufferInfo = &state;
+        }
+        vkUpdateDescriptorSets(r.device, 3, writes, 0, nullptr);
+        return set;
+    }
+
+    static VkDescriptorSet AllocateExposureDescriptorSet(Renderer& r)
+    {
+        VkDescriptorSet set = AllocateDescriptorSet(r, r.exposureSetLayout);
+        if (!set)
+            return VK_NULL_HANDLE;
+        const VkDescriptorImageInfo scene = { VK_NULL_HANDLE, r.sceneColorView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        const VkDescriptorBufferInfo buffers[2] = { { r.histogramBuffer, 0, VK_WHOLE_SIZE }, { r.exposureStateBuffer, 0, VK_WHOLE_SIZE } };
+        VkWriteDescriptorSet writes[3] = {};
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            writes[i].dstSet = set;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = i == 0 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            if (i == 0)
+                writes[i].pImageInfo = &scene;
+            else
+                writes[i].pBufferInfo = &buffers[i - 1];
+        }
+        vkUpdateDescriptorSets(r.device, 3, writes, 0, nullptr);
+        return set;
+    }
+
     static void DestroySceneTargets(Renderer& r)
     {
         DestroyPostAATargets(r);
-        if (r.tonemapDescriptorSet)
-        {
-            vkFreeDescriptorSets(r.device, r.descriptorPool, 1, &r.tonemapDescriptorSet);
-            r.tonemapDescriptorSet = VK_NULL_HANDLE;
-        }
+        DestroyBloomTargets(r);
+        FreeDescriptorSet(r, r.tonemapDescriptorSet);
+        FreeDescriptorSet(r, r.tonemapNoBloomDescriptorSet);
+        FreeDescriptorSet(r, r.sceneColorDescriptorSet);
+        FreeDescriptorSet(r, r.exposureDescriptorSet);
         if (r.sceneFramebuffer)
         {
             vkDestroyFramebuffer(r.device, r.sceneFramebuffer, nullptr);
@@ -1719,10 +1897,14 @@ namespace kes::vk
         fbInfo.layers = 1;
         VK_CHECK_RET(vkCreateFramebuffer(r.device, &fbInfo, nullptr, &r.sceneFramebuffer), "vkCreateFramebuffer (scene)", false);
 
-        r.tonemapDescriptorSet = AllocateTextureDescriptorSet(r, r.sceneColorView, r.texSetLayout);
-        if (!r.tonemapDescriptorSet)
+        r.sceneColorDescriptorSet = AllocateTextureDescriptorSet(r, r.sceneColorView, r.texSetLayout);
+        r.tonemapDescriptorSet = AllocateTonemapDescriptorSet(r);
+        r.tonemapNoBloomDescriptorSet = AllocateTonemapDescriptorSet(r);
+        r.exposureDescriptorSet = AllocateExposureDescriptorSet(r);
+        if (!r.sceneColorDescriptorSet || !r.tonemapDescriptorSet || !r.tonemapNoBloomDescriptorSet || !r.exposureDescriptorSet)
             return false;
         CreatePostAATargets(r);
+        CreateBloomTargets(r);
         return true;
     }
 
@@ -2068,7 +2250,7 @@ namespace kes::vk
 
     // Sky / tonemap pipelines (fixed, no vertex input, drawn via gl_VertexIndex)
     static VkPipeline CreateFullscreenTrianglePipeline(Renderer& r, VkShaderModule vs, VkShaderModule ps, VkPipelineLayout layout,
-        VkRenderPass renderPass, bool hasDepthAttachment, VkSampleCountFlagBits samples)
+        VkRenderPass renderPass, bool hasDepthAttachment, VkSampleCountFlagBits samples, bool additive = false)
     {
         VkPipelineShaderStageCreateInfo stages[2] = {};
         stages[0] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
@@ -2106,7 +2288,13 @@ namespace kes::vk
 
         VkPipelineColorBlendAttachmentState blendAttachment = {};
         blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        blendAttachment.blendEnable = VK_FALSE;
+        blendAttachment.blendEnable = additive ? VK_TRUE : VK_FALSE;
+        blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+        blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
         VkPipelineColorBlendStateCreateInfo colorBlend = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
         colorBlend.attachmentCount = 1;
@@ -2323,7 +2511,7 @@ namespace kes::vk
             r.presentVS = CreateShaderModuleFromBinary(r, kEngineShaderPresent, ShaderStage::Vertex);
             r.presentPS = CreateShaderModuleFromBinary(r, kEngineShaderPresent, ShaderStage::Pixel);
             if (r.presentVS && r.presentPS)
-                r.presentPipeline = CreateFullscreenTrianglePipeline(r, r.presentVS, r.presentPS, r.tonemapPipelineLayout,
+                r.presentPipeline = CreateFullscreenTrianglePipeline(r, r.presentVS, r.presentPS, r.blitPipelineLayout,
                     r.backbufferRenderPass, false, VK_SAMPLE_COUNT_1_BIT);
             ok = r.tonemapLdrPipeline && r.presentPipeline && CreateCmaa2Pipelines(r);
         }
@@ -2334,6 +2522,152 @@ namespace kes::vk
             return;
         }
         r.postAAAvailable = true;
+    }
+
+    static bool GraphicsQueueSupportsCompute(Renderer& r)
+    {
+        uint32_t familyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(r.physicalDevice, &familyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> families(familyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(r.physicalDevice, &familyCount, families.data());
+        return r.graphicsQueueFamily < familyCount && (families[r.graphicsQueueFamily].queueFlags & VK_QUEUE_COMPUTE_BIT);
+    }
+
+    // Bloom level pass: overwrite (downsample) or add onto (upsample) a level.
+    static bool CreateBloomRenderPass(Renderer& r, bool load, VkRenderPass& out)
+    {
+        VkAttachmentDescription color = {};
+        color.format = kSceneColorFormat;
+        color.samples = VK_SAMPLE_COUNT_1_BIT;
+        color.loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color.initialLayout = load ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference colorRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+        VkSubpassDescription subpass = {};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+
+        VkSubpassDependency dependencies[2] = {};
+        // Earlier reads of the level (previous upsample or tonemap) and its earlier writes.
+        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass = 0;
+        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].srcSubpass = 0;
+        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        VkRenderPassCreateInfo passInfo = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+        passInfo.attachmentCount = 1;
+        passInfo.pAttachments = &color;
+        passInfo.subpassCount = 1;
+        passInfo.pSubpasses = &subpass;
+        passInfo.dependencyCount = 2;
+        passInfo.pDependencies = dependencies;
+        VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &out), "vkCreateRenderPass (bloom)", false);
+        return true;
+    }
+
+    static VkPipeline CreateComputePipeline(Renderer& r, VkShaderModule module, VkPipelineLayout layout)
+    {
+        VkComputePipelineCreateInfo info = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+        info.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+        info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        info.stage.module = module;
+        info.stage.pName = "main";
+        info.layout = layout;
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        if (vkCreateComputePipelines(r.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
+        {
+            EngineLogf("vkCreateComputePipelines failed");
+            return VK_NULL_HANDLE;
+        }
+        return pipeline;
+    }
+
+    static void DestroyPostProcessPipelines(Renderer& r)
+    {
+        for (VkPipeline* pipeline : { &r.bloomDownPipeline, &r.bloomUpPipeline, &r.exposureHistogramPipeline, &r.exposureAdaptPipeline })
+        {
+            if (*pipeline)
+            {
+                vkDestroyPipeline(r.device, *pipeline, nullptr);
+                *pipeline = VK_NULL_HANDLE;
+            }
+        }
+        for (VkShaderModule* module : { &r.bloomDownVS, &r.bloomDownPS, &r.bloomUpVS, &r.bloomUpPS, &r.exposureHistogramCS, &r.exposureAdaptCS })
+        {
+            if (*module)
+            {
+                vkDestroyShaderModule(r.device, *module, nullptr);
+                *module = VK_NULL_HANDLE;
+            }
+        }
+        for (VkRenderPass* pass : { &r.bloomRenderPass, &r.bloomAddRenderPass })
+        {
+            if (*pass)
+            {
+                vkDestroyRenderPass(r.device, *pass, nullptr);
+                *pass = VK_NULL_HANDLE;
+            }
+        }
+        r.bloomAvailable = false;
+        r.exposureAvailable = false;
+    }
+
+    // Non-fatal: bloom and eye adaptation are each switched off when their part fails.
+    static void CreatePostProcessPipelines(Renderer& r)
+    {
+        r.bloomDownVS = CreateShaderModuleFromBinary(r, kEngineShaderBloomDownsample, ShaderStage::Vertex);
+        r.bloomDownPS = CreateShaderModuleFromBinary(r, kEngineShaderBloomDownsample, ShaderStage::Pixel);
+        r.bloomUpVS = CreateShaderModuleFromBinary(r, kEngineShaderBloomUpsample, ShaderStage::Vertex);
+        r.bloomUpPS = CreateShaderModuleFromBinary(r, kEngineShaderBloomUpsample, ShaderStage::Pixel);
+        if (r.bloomDownVS && r.bloomDownPS && r.bloomUpVS && r.bloomUpPS &&
+            CreateBloomRenderPass(r, false, r.bloomRenderPass) && CreateBloomRenderPass(r, true, r.bloomAddRenderPass))
+        {
+            r.bloomDownPipeline = CreateFullscreenTrianglePipeline(r, r.bloomDownVS, r.bloomDownPS, r.blitPipelineLayout, r.bloomRenderPass,
+                false, VK_SAMPLE_COUNT_1_BIT);
+            r.bloomUpPipeline = CreateFullscreenTrianglePipeline(r, r.bloomUpVS, r.bloomUpPS, r.blitPipelineLayout, r.bloomAddRenderPass,
+                false, VK_SAMPLE_COUNT_1_BIT, true);
+        }
+        r.bloomAvailable = r.bloomDownPipeline && r.bloomUpPipeline;
+        if (!r.bloomAvailable)
+            EngineLog("Bloom is unavailable on this device.");
+
+        if (GraphicsQueueSupportsCompute(r))
+        {
+            r.exposureHistogramCS = CreateShaderModuleFromBinary(r, kEngineShaderExposureHistogram, ShaderStage::Compute);
+            r.exposureAdaptCS = CreateShaderModuleFromBinary(r, kEngineShaderExposureAdapt, ShaderStage::Compute);
+            if (r.exposureHistogramCS && r.exposureAdaptCS)
+            {
+                r.exposureHistogramPipeline = CreateComputePipeline(r, r.exposureHistogramCS, r.exposurePipelineLayout);
+                r.exposureAdaptPipeline = CreateComputePipeline(r, r.exposureAdaptCS, r.exposurePipelineLayout);
+            }
+        }
+        r.exposureAvailable = r.exposureHistogramPipeline && r.exposureAdaptPipeline;
+        if (!r.exposureAvailable)
+            EngineLog("Auto exposure is unavailable on this device; the manual exposure is used.");
+    }
+
+    // Resolution independent, bound by the tonemap set, so required.
+    static bool CreateExposureBuffers(Renderer& r)
+    {
+        const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        r.exposureNeedsInit = true;
+        return CreateBuffer(r, render::kHistogramBins * sizeof(uint32_t), usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                   r.histogramBuffer, r.histogramMemory) &&
+            CreateBuffer(r, render::kExposureStateFloats * sizeof(float), usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                r.exposureStateBuffer, r.exposureStateMemory);
     }
 
     static void GlobalBarrier(VkCommandBuffer cmd, VkPipelineStageFlags srcStages, VkAccessFlags srcAccess,
@@ -2419,6 +2753,80 @@ namespace kes::vk
             VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &toRead);
+    }
+
+    static VkViewport BuildFlippedViewport(float width, float height)
+    {
+        VkViewport vp = {};
+        vp.y = height;
+        vp.width = width;
+        vp.height = -height;
+        vp.maxDepth = 1.0f;
+        return vp;
+    }
+
+    static void RecordAutoExposure(Renderer& r, const render::ExposureCBData& constants)
+    {
+        VkCommandBuffer cmd = r.commandBuffer;
+        if (r.exposureNeedsInit)
+        {
+            vkCmdFillBuffer(cmd, r.histogramBuffer, 0, VK_WHOLE_SIZE, 0);
+            vkCmdFillBuffer(cmd, r.exposureStateBuffer, 0, VK_WHOLE_SIZE, 0);
+            GlobalBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            r.exposureNeedsInit = false;
+        }
+        // The scene color (render pass end), the previous frame's adapt pass and
+        // tonemap read of the state buffer.
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.exposurePipelineLayout, 0, 1, &r.exposureDescriptorSet, 0, nullptr);
+        vkCmdPushConstants(cmd, r.exposurePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.exposureHistogramPipeline);
+        vkCmdDispatch(cmd, (static_cast<uint32_t>(r.renderWidth) + 15) / 16, (static_cast<uint32_t>(r.renderHeight) + 15) / 16, 1);
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r.exposureAdaptPipeline);
+        vkCmdDispatch(cmd, 1, 1, 1);
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    }
+
+    static void RecordBloomPass(Renderer& r, bool add, int target, VkDescriptorSet source, float sourceWidth, float sourceHeight, float z)
+    {
+        VkCommandBuffer cmd = r.commandBuffer;
+        VkRenderPassBeginInfo begin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        begin.renderPass = add ? r.bloomAddRenderPass : r.bloomRenderPass;
+        begin.framebuffer = r.bloomFramebuffers[target];
+        begin.renderArea.extent = { static_cast<uint32_t>(r.bloomSizes[target][0]), static_cast<uint32_t>(r.bloomSizes[target][1]) };
+        vkCmdBeginRenderPass(cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        // Flipped like the scene, so every pass keeps the image orientation.
+        const VkViewport viewport = BuildFlippedViewport(static_cast<float>(r.bloomSizes[target][0]), static_cast<float>(r.bloomSizes[target][1]));
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &begin.renderArea);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, add ? r.bloomUpPipeline : r.bloomDownPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r.blitPipelineLayout, 0, 1, &source, 0, nullptr);
+        const render::BlitCBData constants = { { 1.0f / sourceWidth, 1.0f / sourceHeight, z, 0.0f } };
+        vkCmdPushConstants(cmd, r.blitPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(constants), &constants);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cmd);
+    }
+
+    static void RecordBloom(Renderer& r, float radius)
+    {
+        for (int i = 0; i < r.bloomLevelCount; ++i)
+        {
+            if (i == 0)
+                RecordBloomPass(r, false, 0, r.sceneColorDescriptorSet, static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight), 1.0f);
+            else
+                RecordBloomPass(r, false, i, r.bloomDescriptorSets[i - 1], static_cast<float>(r.bloomSizes[i - 1][0]),
+                    static_cast<float>(r.bloomSizes[i - 1][1]), 0.0f);
+        }
+        for (int i = r.bloomLevelCount - 1; i > 0; --i)
+            RecordBloomPass(r, true, i - 1, r.bloomDescriptorSets[i], static_cast<float>(r.bloomSizes[i][0]),
+                static_cast<float>(r.bloomSizes[i][1]), radius);
     }
 
     // UI pipeline (ui.slang): UiVertex input, premultiplied alpha, dynamic scissor.
@@ -3041,7 +3449,7 @@ namespace kes::vk
             r.msaaSamples = ChooseMsaaSamples(r, r.options.msaaSamples);
         ok = ok && CreateSamplers(r) && CreateDescriptorSetLayouts(r) && CreatePipelineLayouts(r) && CreateDescriptorPool(r) &&
             CreateUboDescriptorSets(r) && CreateCommandObjects(r) && CreateSceneRenderPass(r) && CreateShadowRenderPass(r) &&
-            CreateRenderTargets(r) && CreateMeshPrograms(r) && CreateSkyPipeline(r) && CreateTonemapPipeline(r) &&
+            CreateExposureBuffers(r) && CreateRenderTargets(r) && CreateMeshPrograms(r) && CreateSkyPipeline(r) && CreateTonemapPipeline(r) &&
             CreateUiPipeline(r) && CreateConstantBuffers(r) && CreateWhiteTexture(r) &&
             CreateShadowArray(r, r.dummyShadows, 1, 1, false);
         if (ok)
@@ -3050,6 +3458,8 @@ namespace kes::vk
         {
             CreatePostAAPipelines(r); // non-fatal: post AA stays off on failure
             CreatePostAATargets(r);
+            CreatePostProcessPipelines(r); // non-fatal as well
+            CreateBloomTargets(r);
         }
         if (ok)
         {
@@ -3154,10 +3564,18 @@ namespace kes::vk
             if (!CreateSceneRenderPass(r) || !CreateSceneTargets(r) || !CreateSkyPipeline(r))
                 EngineLog("Recreating the scene pass for the new MSAA setting failed.");
         }
-        else if (previous.postAntiAliasing != options.postAntiAliasing)
+        else
         {
-            DestroyPostAATargets(r);
-            CreatePostAATargets(r);
+            if (previous.postAntiAliasing != options.postAntiAliasing)
+            {
+                DestroyPostAATargets(r);
+                CreatePostAATargets(r);
+            }
+            if (previous.bloom != options.bloom)
+            {
+                DestroyBloomTargets(r);
+                CreateBloomTargets(r);
+            }
         }
         if (previous.shadowQuality != options.shadowQuality)
             CreateShadowTargets(r);
@@ -3167,8 +3585,9 @@ namespace kes::vk
             CreateMaterialSampler(r);
         }
         static const char* const kPostAANames[] = { "off", "FXAA", "CMAA2" };
-        EngineLogf("Graphics options: MSAA %dx, post AA %s, shadows %d, anisotropy %dx.", static_cast<int>(r.msaaSamples),
-            kPostAANames[static_cast<int>(r.postAA)], static_cast<int>(options.shadowQuality), std::clamp(options.anisotropy, 1, 16));
+        EngineLogf("Graphics options: MSAA %dx, post AA %s, bloom %s, shadows %d, anisotropy %dx.", static_cast<int>(r.msaaSamples),
+            kPostAANames[static_cast<int>(r.postAA)], r.bloomLevelCount > 0 ? "on" : "off", static_cast<int>(options.shadowQuality),
+            std::clamp(options.anisotropy, 1, 16));
     }
 
     // Per-draw dynamic constant writes
@@ -3206,16 +3625,6 @@ namespace kes::vk
     // Viewports (negative-height trick: makes Vulkan's screen-space Y and
     // depth-range conventions match D3D11's, so the shared camera/projection
     // math, shadow matrices and every clip-space computation need no changes)
-
-    static VkViewport BuildFlippedViewport(float width, float height)
-    {
-        VkViewport vp = {};
-        vp.y = height;
-        vp.width = width;
-        vp.height = -height;
-        vp.maxDepth = 1.0f;
-        return vp;
-    }
 
     static VkViewport BuildPresentationViewport(const Renderer& r)
     {
@@ -3585,7 +3994,6 @@ namespace kes::vk
             r.frame.scene.shadowParams[3] = 0.0f;
             r.frame.shadowViews.clear();
         }
-        r.exposure = std::max(scene.exposure, 0.0f);
 
         BeginFrameIfNeeded(r);
         if (!r.frameActive)
@@ -3675,6 +4083,26 @@ namespace kes::vk
         }
 
         vkCmdEndRenderPass(r.commandBuffer);
+
+        // Eye adaptation and bloom on the resolved scene.
+        const PostProcessSettings& post = sceneObj.GetPostProcess();
+        const bool autoExposure = r.exposureAvailable && post.autoExposure;
+        r.bloomThisFrame = r.bloomLevelCount > 0 && post.bloomIntensity > 0.0f;
+        r.tonemap = render::BuildTonemapConstants(scene, post, autoExposure, r.bloomThisFrame ? r.bloomLevelCount : 0,
+            r.renderWidth, r.renderHeight);
+        if (autoExposure)
+        {
+            KES_VK_GPU_ZONE(r, "Auto exposure");
+            const bool reset = r.exposureResetSerial != sceneObj.GetExposureResetSerial() || !r.autoExposureWasOn;
+            r.exposureResetSerial = sceneObj.GetExposureResetSerial();
+            RecordAutoExposure(r, render::BuildExposureConstants(post, scene.deltaTime, reset, r.renderWidth, r.renderHeight));
+        }
+        r.autoExposureWasOn = autoExposure;
+        if (r.bloomThisFrame)
+        {
+            KES_VK_GPU_ZONE(r, "Bloom");
+            RecordBloom(r, std::clamp(post.bloomRadius, 0.0f, 4.0f));
+        }
     }
 
     void RendererBeginBackbufferOverlay(Renderer& r)
@@ -3707,9 +4135,8 @@ namespace kes::vk
 
         r.haveSwapchainImage = true;
 
-        render::TonemapCBData tonemap = {};
-        tonemap.params[0] = r.exposure;
-        tonemap.params[1] = 1.0f / 255.0f;
+        const render::TonemapCBData& tonemap = r.tonemap;
+        VkDescriptorSet tonemapSet = r.bloomThisFrame && r.bloomLevelCount > 0 ? r.tonemapDescriptorSet : r.tonemapNoBloomDescriptorSet;
 
         // Post AA: tonemap into ldrColor at render resolution, CMAA2 in place,
         // then present.slang (FXAA or copy) replaces the tonemap draw below.
@@ -3727,7 +4154,7 @@ namespace kes::vk
                 vkCmdSetViewport(r.commandBuffer, 0, 1, &ldrViewport);
                 vkCmdSetScissor(r.commandBuffer, 0, 1, &ldrBegin.renderArea);
                 vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapLdrPipeline);
-                vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &r.tonemapDescriptorSet, 0, nullptr);
+                vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &tonemapSet, 0, nullptr);
                 vkCmdPushConstants(r.commandBuffer, r.tonemapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemap), &tonemap);
                 vkCmdDraw(r.commandBuffer, 3, 1, 0, 0);
                 vkCmdEndRenderPass(r.commandBuffer);
@@ -3759,18 +4186,18 @@ namespace kes::vk
 
         if (postAA)
         {
-            render::TonemapCBData present = {}; // present.slang: same 16-byte push constant layout
+            render::BlitCBData present = {};
             present.params[0] = 1.0f / static_cast<float>(r.renderWidth);
             present.params[1] = 1.0f / static_cast<float>(r.renderHeight);
             present.params[2] = r.postAA == PostAntiAliasing::FXAA ? 1.0f : 0.0f;
             vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.presentPipeline);
-            vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &r.presentDescriptorSet, 0, nullptr);
-            vkCmdPushConstants(r.commandBuffer, r.tonemapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(present), &present);
+            vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.blitPipelineLayout, 0, 1, &r.presentDescriptorSet, 0, nullptr);
+            vkCmdPushConstants(r.commandBuffer, r.blitPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(present), &present);
         }
         else
         {
             vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipeline);
-            vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &r.tonemapDescriptorSet, 0, nullptr);
+            vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.tonemapPipelineLayout, 0, 1, &tonemapSet, 0, nullptr);
             vkCmdPushConstants(r.commandBuffer, r.tonemapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemap), &tonemap);
         }
         vkCmdDraw(r.commandBuffer, 3, 1, 0, 0);
@@ -4115,6 +4542,9 @@ namespace kes::vk
 
         DestroyRenderTargets(r);
         DestroyPostAAPipelines(r);
+        DestroyPostProcessPipelines(r);
+        DestroyBuffer(r, r.histogramBuffer, r.histogramMemory);
+        DestroyBuffer(r, r.exposureStateBuffer, r.exposureStateMemory);
         for (VkRenderPass* pass : { &r.sceneRenderPass, &r.shadowRenderPass, &r.backbufferRenderPass })
         {
             if (*pass)
@@ -4131,7 +4561,8 @@ namespace kes::vk
             vkDestroyDescriptorPool(r.device, r.descriptorPool, nullptr);
             r.descriptorPool = VK_NULL_HANDLE;
         }
-        for (VkPipelineLayout* layout : { &r.meshPipelineLayout, &r.skyPipelineLayout, &r.tonemapPipelineLayout, &r.uiPipelineLayout })
+        for (VkPipelineLayout* layout : { &r.meshPipelineLayout, &r.skyPipelineLayout, &r.tonemapPipelineLayout, &r.blitPipelineLayout,
+                 &r.exposurePipelineLayout, &r.uiPipelineLayout })
         {
             if (*layout)
             {
@@ -4139,7 +4570,8 @@ namespace kes::vk
                 *layout = VK_NULL_HANDLE;
             }
         }
-        for (VkDescriptorSetLayout* layout : { &r.uiTexSetLayout, &r.uboSetLayout, &r.materialSetLayout, &r.globalSetLayout, &r.texSetLayout, &r.skySetLayout })
+        for (VkDescriptorSetLayout* layout : { &r.uiTexSetLayout, &r.uboSetLayout, &r.materialSetLayout, &r.globalSetLayout, &r.texSetLayout,
+                 &r.tonemapSetLayout, &r.exposureSetLayout, &r.skySetLayout })
         {
             if (*layout)
             {

@@ -918,4 +918,52 @@ namespace render
         outCenter = TransformPoint(world, localCenter);
         outRadius = localRadius * std::max({ std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z) });
     }
+    int ComputeBloomLevels(int renderWidth, int renderHeight, int outSizes[kBloomMaxLevels][2])
+    {
+        int width = renderWidth / 2;
+        int height = renderHeight / 2;
+        int count = 0;
+        while (count < kBloomMaxLevels && width >= 2 && height >= 2)
+        {
+            outSizes[count][0] = width;
+            outSizes[count][1] = height;
+            ++count;
+            width /= 2;
+            height /= 2;
+        }
+        return count;
+    }
+
+    TonemapCBData BuildTonemapConstants(const SceneState& state, const PostProcessSettings& post, bool autoExposure,
+        int bloomLevels, int renderWidth, int renderHeight)
+    {
+        TonemapCBData out = {};
+        out.params[0] = std::max(state.exposure, 0.0f) * std::exp2(std::clamp(post.exposureCompensation, -16.0f, 16.0f));
+        out.params[1] = 1.0f / 255.0f;
+        out.params[2] = autoExposure && post.autoExposure ? 1.0f : 0.0f;
+        out.params[3] = bloomLevels > 0 ? std::clamp(post.bloomIntensity, 0.0f, 1.0f) : 0.0f;
+        out.vignette[0] = std::clamp(post.vignetteIntensity, 0.0f, 1.0f);
+        out.vignette[1] = std::clamp(post.vignetteSmoothness, 0.0f, 1.0f);
+        out.vignette[2] = renderHeight > 0 ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight) : 1.0f;
+        out.vignette[3] = bloomLevels > 0 ? 1.0f / static_cast<float>(bloomLevels) : 0.0f;
+        for (int i = 0; i < 3; ++i)
+            out.vignetteColor[i] = std::max(post.vignetteColor[i], 0.0f);
+        return out;
+    }
+
+    ExposureCBData BuildExposureConstants(const PostProcessSettings& post, float deltaTime, bool reset, int renderWidth, int renderHeight)
+    {
+        ExposureCBData out = {};
+        out.params0[0] = kHistogramMinLog2;
+        out.params0[1] = 1.0f / kHistogramLog2Range;
+        out.params0[2] = static_cast<float>(renderWidth);
+        out.params0[3] = static_cast<float>(renderHeight);
+        out.params1[0] = std::clamp(deltaTime, 0.0f, 0.25f);
+        out.params1[1] = std::max(post.adaptationSpeedUp, 0.0f);
+        out.params1[2] = std::max(post.adaptationSpeedDown, 0.0f);
+        out.params1[3] = reset ? 1.0f : 0.0f;
+        out.params2[0] = std::min(post.autoExposureMin, post.autoExposureMax);
+        out.params2[1] = std::max(post.autoExposureMin, post.autoExposureMax);
+        return out;
+    }
 }

@@ -372,6 +372,7 @@ Built-in ports:
 | `AudioSourceEntity` | Play, Stop, Toggle | |
 | `CameraEntity` | Activate, Deactivate | |
 | `FogVolumeEntity` | Enable, Disable, Toggle | |
+| `PostProcessVolumeEntity` | Enable, Disable, Toggle, SetWeight(float) | |
 | `LogicRelayEntity` | Trigger, Enable, Disable, Toggle | OnTrigger |
 | `LogicAutoEntity` | | OnMapSpawn |
 
@@ -470,6 +471,7 @@ Stored scene state includes:
 - light list
 - sky settings
 - fog settings
+- post processing: `GetPostProcessDefaults()`, layers (`AddPostProcessLayer`, `FindPostProcessLayer`, `RemovePostProcessLayer`, `SubmitPostProcessLayer`), the resolved `GetPostProcess()` and `ResetExposureAdaptation()`. See [rendering.md](rendering.md#post-processing).
 
 This is a runtime scene representation, not a full authored scene graph editor API.
 

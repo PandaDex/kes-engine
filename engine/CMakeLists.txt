@@ -87,6 +87,8 @@ add_library(engine ${_kes_engine_type}
     "ent_skybox.cpp"
     "ent_fog_volume.h"
     "ent_fog_volume.cpp"
+    "ent_post_process_volume.h"
+    "ent_post_process_volume.cpp"
     "entity_property_utils.h"
     "text_parse_utils.h"
     "entity.h"

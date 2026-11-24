@@ -137,7 +137,7 @@ void CameraBuildMatrices(const Camera& camera, float aspect, CameraViewData& out
     const float3 up = { 0.0f, 1.0f, 0.0f };
 
     const float4x4 view = LookToLH(eye, forward, up);
-    const float4x4 proj = PerspectiveFovLH(kCameraFovYRadians, aspect, kCameraNearPlane, kCameraFarPlane);
+    const float4x4 proj = PerspectiveFovLH(camera.fovY, aspect, kCameraNearPlane, kCameraFarPlane);
     const float4x4 vp = Multiply(view, proj);
 
     MatrixToArray(view, outData.view);
@@ -176,7 +176,7 @@ Ray CameraBuildRay(const Camera& camera)
 Ray CameraBuildViewportRay(const Camera& camera, float aspect, const Vector2& viewportUv)
 {
     const float safeAspect = aspect > 0.00001f ? aspect : 1.0f;
-    const float tanHalfFov = std::tan(kCameraFovYRadians * 0.5f);
+    const float tanHalfFov = std::tan(camera.fovY * 0.5f);
     const float ndcX = viewportUv.x * 2.0f - 1.0f;
     const float ndcY = 1.0f - viewportUv.y * 2.0f;
 

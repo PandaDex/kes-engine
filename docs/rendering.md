@@ -7,9 +7,62 @@ Both renderer backends (Vulkan and D3D11) draw the same way. The backend-indepen
 1. **Shadow maps**: depth passes for the sun cascades and the local shadow slices (see below).
 2. **Scene**: HDR (RGBA16F) with MSAA, at the internal render resolution (window size × `ResolutionScale`). The sky draws first, then opaque objects grouped by material and front to back, then transparent objects back to front. Objects outside the view are culled by bounding sphere. Animated (skinned) models are not culled.
 3. **Resolve**: the multisampled scene into a single-sample HDR image.
-4. **Tonemap** (`engine/shaders/blit.slang`): exposure (`SceneState::exposure`), the ACES filmic curve, sRGB encoding and a slight dither, drawn into the backbuffer. With post anti-aliasing it draws into an RGBA8 image at the render resolution instead.
-5. **Post anti-aliasing** (optional, see below): CMAA2 on that image, then `engine/shaders/present.slang` draws it into the backbuffer, either as a plain copy or with FXAA.
-6. **UI**: drawn in display space on top.
+4. **Eye adaptation** (compute, when auto exposure is on): a log2 luminance histogram of that image and the adapted exposure (see Post processing).
+5. **Bloom** (when on): a downsample / upsample chain of the HDR image (see Post processing).
+6. **Tonemap** (`engine/shaders/blit.slang`): bloom, exposure, vignette, the ACES filmic curve, sRGB encoding and a slight dither, drawn into the backbuffer. With post anti-aliasing it draws into an RGBA8 image at the render resolution instead.
+7. **Post anti-aliasing** (optional, see below): CMAA2 on that image, then `engine/shaders/present.slang` draws it into the backbuffer, either as a plain copy or with FXAA.
+8. **UI**: drawn in display space on top.
+
+## Post processing
+
+Exposure, bloom and vignette come from `PostProcessSettings` (`engine/scene.h`). The renderer reads `Scene::GetPostProcess()`, which `World::Update` resolves once a frame from:
+
+1. `Scene::GetPostProcessDefaults()`: the base values. Game code may change them.
+2. Layers (`PostProcessLayer`): settings, an `overrides` mask (`PostProcessOverride_*`, only those fields are applied), a `priority` and a `weight` (0-1). Layers are applied over the defaults in ascending priority, each blending its fields in by weight. Booleans (`autoExposure`) switch once the weight passes 0.5.
+   - Code layers: `AddPostProcessLayer` returns an id for `FindPostProcessLayer` (change it at any time, e.g. fade the weight) and `RemovePostProcessLayer`. They stay until removed, also across map loads, and win priority ties.
+   - `PostProcessVolumeEntity` submits a layer every frame (`SubmitPostProcessLayer`). Submitted layers are cleared each unpaused frame.
+
+```cpp
+PostProcessLayer hurt;
+hurt.overrides = PostProcessOverride_VignetteIntensity | PostProcessOverride_VignetteColor;
+hurt.settings.vignetteIntensity = 0.7f;
+hurt.settings.vignetteColor[0] = 0.5f; // reddish edges
+hurt.priority = 100;
+PostProcessLayerId id = game->scene->AddPostProcessLayer(hurt);
+// later
+if (PostProcessLayer* layer = game->scene->FindPostProcessLayer(id))
+    layer->weight = damageFlash;
+game->scene->RemovePostProcessLayer(id);
+```
+
+`Scene::ResetExposureAdaptation()` snaps eye adaptation to the current view on the next frame (use after a teleport or camera cut). Map loads do this on their own.
+
+**Exposure.** The HDR image is multiplied by `SceneState::exposure` × 2^`exposureCompensation`, and with `autoExposure` by the adapted exposure as well:
+- `engine/shaders/exposure_histogram.slang` builds a 256-bin histogram of log2 luminance (-12 to +6).
+- `exposure_adapt.slang` averages the pixels between the 40th and 95th percentile and clamps the result to `autoExposureMin` / `autoExposureMax` (log2 luminance, EV). It moves the adapted value towards it with `adaptationSpeedUp` / `adaptationSpeedDown` (1/s, exponential), and maps it to middle grey (0.18).
+- The result stays on the GPU (a small state buffer) and is never read back.
+- Auto exposure needs compute on the graphics queue. Without it the manual exposure is used and a message is logged.
+
+**Bloom.** It follows Jimenez's Call of Duty: Advanced Warfare method:
+- `bloom_downsample.slang` uses 13 taps. The first pass from the scene uses a Karis average against flicker.
+- The chain has up to 6 levels, starting at half the render resolution.
+- `bloom_upsample.slang` applies a 3x3 tent filter scaled by `bloomRadius`, added onto each larger level.
+- There is no threshold. The tonemap blends the result in as `lerp(scene, bloom, bloomIntensity)`, so bright areas bloom the most.
+- The `bBloom` game setting (`GraphicsOptions::bloom`) skips it entirely, and so does an intensity of 0.
+
+**Vignette.** It darkens towards `vignetteColor` at the edges, in HDR before tonemapping:
+- `vignetteIntensity` runs from 0 (off) to 1.
+- `vignetteSmoothness` sets the falloff.
+- The shape is a circle, corrected for the aspect ratio.
+
+### `PostProcessVolumeEntity`
+
+A brush volume, like `FogVolumeEntity`. It applies while the camera is inside, fading in over `BlendDistance` meters outside, or everywhere with `Unbound`.
+- `Priority` and `Weight` work as for layers.
+- A setting the map leaves empty is not overridden.
+- Settings: `ExposureCompensation`, `AutoExposure`, `AutoExposureMin`, `AutoExposureMax`, `AdaptationSpeedUp`, `AdaptationSpeedDown`, `BloomIntensity`, `BloomRadius`, `VignetteIntensity`, `VignetteSmoothness`, `VignetteColor`.
+- Inputs: `Enable`, `Disable`, `Toggle`, `SetWeight(float)`.
+- From code, `GetLayer()` gives the layer it submits.
 
 ## Anti-aliasing
 
@@ -75,7 +128,7 @@ The source is the `SkyboxEntity` gradient (without the sun disc, which a directi
 
 ## Settings
 
-`config/DefaultGameSettings.ini` / `GameSettings`: `ShadowQuality`, `AntiAliasing` (MSAA samples 1/2/4/8), `PostAntiAliasing` (`Off` / `FXAA` / `CMAA2`, `GameSettings::SetPostAntiAliasing`), `AnisotropicFiltering` (1-16), `ShadowDistance`, `ResolutionScale`. They are applied live with `ApplySettings` (`IRenderer::SetGraphicsOptions`). Unsupported values are clamped to what the GPU supports.
+`config/DefaultGameSettings.ini` / `GameSettings`: `ShadowQuality`, `AntiAliasing` (MSAA samples 1/2/4/8), `PostAntiAliasing` (`Off` / `FXAA` / `CMAA2`, `GameSettings::SetPostAntiAliasing`), `bBloom` (`GameSettings::SetBloom`), `AnisotropicFiltering` (1-16), `ShadowDistance`, `ResolutionScale`. They are applied live with `ApplySettings` (`IRenderer::SetGraphicsOptions`). Unsupported values are clamped to what the GPU supports.
 
 ## Custom material shaders
 

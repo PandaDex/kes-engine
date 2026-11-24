@@ -20,6 +20,7 @@
 #include "ent_player.h"
 #include "ent_player_start.h"
 #include "ent_fog_volume.h"
+#include "ent_post_process_volume.h"
 #include "ent_skybox.h"
 #include "ent_trigger.h"
 #include "logger.h"
@@ -133,15 +134,17 @@ void World::Shutdown()
 void World::Update(float dt)
 {
     KES_ZONE_FN(WORLD);
-    // While paused, per-frame scene state that entities set (fog) is kept
-    // as it was, so the paused frame looks the same.
+    // While paused, per-frame scene state that entities set (fog, post-process
+    // volumes) is kept as it was, so the paused frame looks the same.
     if (!paused)
     {
         scene.GetFog() = {};
+        scene.ClearSubmittedPostProcessLayers();
         entities.Update(dt);
         mapScript.Update(dt);
         entities.DestroyPending();
     }
+    scene.ResolvePostProcess();
     if (gameContext.mainCamera)
     {
         AudioListener listener = {};
@@ -486,6 +489,7 @@ void World::RegisterBuiltInEntityClasses()
     RegisterBuiltInEntityClass<SkyboxEntity>(entityFactories, "SkyboxEntity");
     RegisterBuiltInEntityClass<CameraEntity>(entityFactories, "CameraEntity");
     RegisterBuiltInEntityClass<FogVolumeEntity>(entityFactories, "FogVolumeEntity");
+    RegisterBuiltInEntityClass<PostProcessVolumeEntity>(entityFactories, "PostProcessVolumeEntity");
     RegisterBuiltInEntityClass<AudioSourceEntity>(entityFactories, "AudioSourceEntity");
     RegisterBuiltInEntityClass<SkinnedModelEntity>(entityFactories, "SkinnedModelEntity");
     // A static mesh is a model without animation; same entity, clearer name in the editor.

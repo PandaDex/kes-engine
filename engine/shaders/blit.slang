@@ -1,11 +1,14 @@
-// Tonemap: the HDR scene (resolved, linear) to the display. Exposure, ACES
-// filmic curve (Hill's fit), sRGB encoding and a little dither against banding.
-// The backbuffer stays UNORM, so the UI keeps drawing in display space.
+// Tonemap: the HDR scene (resolved, linear) to the display. Bloom, exposure
+// (manual times eye adaptation), vignette, ACES filmic curve (Hill's fit), sRGB
+// encoding and a little dither against banding. The backbuffer stays UNORM, so
+// the UI keeps drawing in display space.
 #include "fullscreen.slang"
 
 struct TonemapConstants
 {
-    float4 params;   // x = exposure, y = dither strength
+    float4 params;          // x = exposure, y = dither strength, z = 1 auto exposure, w = bloom intensity
+    float4 vignette;        // x = intensity, y = smoothness, z = aspect, w = 1 / bloom level count
+    float4 vignetteColor;   // rgb
 };
 
 [[vk::push_constant]]
@@ -13,6 +16,10 @@ ConstantBuffer<TonemapConstants> uTonemap;   // b0 on D3D
 
 [[vk::binding(0, 0)]]
 Sampler2D uSceneColor : register(t0);
+[[vk::binding(1, 0)]]
+Sampler2D uBloom : register(t1);
+[[vk::binding(2, 0)]]
+StructuredBuffer<float> uExposureState : register(t2);   // [0] = adapted exposure
 
 static const float3x3 kAcesInput = float3x3(
     0.59719, 0.35458, 0.04823,
@@ -56,7 +63,23 @@ FullscreenVSOut vsMain(uint id : KES_VERTEX_ID)
 [shader("fragment")]
 float4 psMain(FullscreenVSOut input) : SV_Target
 {
-    float3 hdr = max(uSceneColor.Sample(input.uv).rgb, 0.0) * uTonemap.params.x;
+    float3 hdr = max(uSceneColor.Sample(input.uv).rgb, 0.0);
+    if (uTonemap.params.w > 0.0)
+        hdr = lerp(hdr, uBloom.SampleLevel(input.uv, 0.0).rgb * uTonemap.vignette.w, uTonemap.params.w);
+
+    float exposure = uTonemap.params.x;
+    if (uTonemap.params.z > 0.5)
+        exposure *= uExposureState[0];
+    hdr *= exposure;
+
+    if (uTonemap.vignette.x > 0.0)
+    {
+        float2 d = abs(input.uv - 0.5) * (uTonemap.vignette.x * 1.5);
+        d.x *= uTonemap.vignette.z;
+        float falloff = pow(saturate(1.0 - dot(d, d)), max(uTonemap.vignette.y * 5.0, 0.01));
+        hdr *= lerp(uTonemap.vignetteColor.rgb, float3(1.0, 1.0, 1.0), falloff);
+    }
+
     float3 color = LinearToSrgb(AcesFitted(hdr));
     color += (Hash(input.position.xy) - 0.5) * uTonemap.params.y;
     return float4(color, 1.0);

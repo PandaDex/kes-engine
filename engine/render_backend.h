@@ -17,7 +17,8 @@ struct SceneState
     // Ambient environment when no sky is active (a uniform environment:
     // diffuse and reflections). With a sky, ambient light comes from the sky.
     float ambient[3] = { 0.25f, 0.25f, 0.25f };
-    float exposure = 1.0f; // HDR exposure before tonemapping
+    float exposure = 1.0f; // HDR exposure multiplier before tonemapping (on top of Scene post processing)
+    float deltaTime = 0.0f; // seconds since the last frame (eye adaptation)
 
     bool wireframe = false;
     bool animDebug = false;
@@ -49,10 +50,11 @@ struct GraphicsOptions
     ShadowQuality shadowQuality = ShadowQuality::High;
     int anisotropy = 8; // 1-16
     float shadowDistance = 60.0f; // meters covered by the sun cascades
+    bool bloom = true; // off skips the bloom passes whatever the scene asks for
 
     bool operator==(const GraphicsOptions& other) const
     {
-        return msaaSamples == other.msaaSamples && postAntiAliasing == other.postAntiAliasing &&
+        return msaaSamples == other.msaaSamples && postAntiAliasing == other.postAntiAliasing && bloom == other.bloom &&
             shadowQuality == other.shadowQuality &&
             anisotropy == other.anisotropy && shadowDistance == other.shadowDistance;
     }
@@ -129,7 +131,7 @@ public:
     virtual void SetVSync(bool enabled) = 0;
     virtual bool IsVSyncEnabled() const = 0;
 
-    // MSAA, post AA, shadow quality, texture filtering. May recreate render targets.
+    // MSAA, post AA, bloom, shadow quality, texture filtering. May recreate render targets.
     virtual void SetGraphicsOptions(const GraphicsOptions& options) = 0;
     virtual GraphicsOptions GetGraphicsOptions() const = 0;
 

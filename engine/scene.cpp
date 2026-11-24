@@ -1,4 +1,5 @@
 #include "scene.h"
+#include <algorithm>
 
 uint32_t Scene::CreateObject(const SceneObject& object)
 {
@@ -86,6 +87,98 @@ void Scene::Clear()
     lights.clear();
     sky = {};
     fog = {};
+    submittedPostProcessLayers.clear();
+    ++exposureResetSerial;
     nextObjectId = 1;
     nextLightId = 1;
+}
+
+PostProcessSettings ResolvePostProcessLayers(const PostProcessSettings& base, const PostProcessLayer* const* layers, size_t count)
+{
+    std::vector<const PostProcessLayer*> sorted(layers, layers + count);
+    std::stable_sort(sorted.begin(), sorted.end(), [](const PostProcessLayer* a, const PostProcessLayer* b)
+        { return a->priority < b->priority; });
+
+    PostProcessSettings out = base;
+    for (const PostProcessLayer* layer : sorted)
+    {
+        const float w = std::clamp(layer->weight, 0.0f, 1.0f);
+        if (w <= 0.0f)
+            continue;
+        const PostProcessSettings& in = layer->settings;
+        const uint32_t mask = layer->overrides;
+        auto blend = [&](uint32_t bit, float& value, float target)
+        {
+            if (mask & bit)
+                value += (target - value) * w;
+        };
+        blend(PostProcessOverride_ExposureCompensation, out.exposureCompensation, in.exposureCompensation);
+        if ((mask & PostProcessOverride_AutoExposure) && w > 0.5f)
+            out.autoExposure = in.autoExposure;
+        blend(PostProcessOverride_AutoExposureMin, out.autoExposureMin, in.autoExposureMin);
+        blend(PostProcessOverride_AutoExposureMax, out.autoExposureMax, in.autoExposureMax);
+        blend(PostProcessOverride_AdaptationSpeedUp, out.adaptationSpeedUp, in.adaptationSpeedUp);
+        blend(PostProcessOverride_AdaptationSpeedDown, out.adaptationSpeedDown, in.adaptationSpeedDown);
+        blend(PostProcessOverride_BloomIntensity, out.bloomIntensity, in.bloomIntensity);
+        blend(PostProcessOverride_BloomRadius, out.bloomRadius, in.bloomRadius);
+        blend(PostProcessOverride_VignetteIntensity, out.vignetteIntensity, in.vignetteIntensity);
+        blend(PostProcessOverride_VignetteSmoothness, out.vignetteSmoothness, in.vignetteSmoothness);
+        for (int i = 0; i < 3; ++i)
+            blend(PostProcessOverride_VignetteColor, out.vignetteColor[i], in.vignetteColor[i]);
+    }
+    if (out.autoExposureMax < out.autoExposureMin)
+        out.autoExposureMax = out.autoExposureMin;
+    return out;
+}
+
+PostProcessLayerId Scene::AddPostProcessLayer(const PostProcessLayer& layer)
+{
+    const PostProcessLayerId id = nextPostProcessLayerId++;
+    postProcessLayers.emplace_back(id, layer);
+    return id;
+}
+
+PostProcessLayer* Scene::FindPostProcessLayer(PostProcessLayerId id)
+{
+    for (auto& entry : postProcessLayers)
+    {
+        if (entry.first == id)
+            return &entry.second;
+    }
+    return nullptr;
+}
+
+bool Scene::RemovePostProcessLayer(PostProcessLayerId id)
+{
+    for (auto it = postProcessLayers.begin(); it != postProcessLayers.end(); ++it)
+    {
+        if (it->first == id)
+        {
+            postProcessLayers.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
+void Scene::SubmitPostProcessLayer(const PostProcessLayer& layer)
+{
+    submittedPostProcessLayers.push_back(layer);
+}
+
+void Scene::ClearSubmittedPostProcessLayers()
+{
+    submittedPostProcessLayers.clear();
+}
+
+void Scene::ResolvePostProcess()
+{
+    // Code layers are applied after submitted ones, so they win priority ties.
+    std::vector<const PostProcessLayer*> layers;
+    layers.reserve(postProcessLayers.size() + submittedPostProcessLayers.size());
+    for (const PostProcessLayer& layer : submittedPostProcessLayers)
+        layers.push_back(&layer);
+    for (const auto& entry : postProcessLayers)
+        layers.push_back(&entry.second);
+    postProcess = ResolvePostProcessLayers(postProcessDefaults, layers.data(), layers.size());
 }

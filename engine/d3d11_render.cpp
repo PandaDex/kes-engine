@@ -266,9 +266,50 @@ namespace kes::d3d11
         r.postAA = mode;
     }
 
+    static void DestroyBloomTargets(Renderer& r)
+    {
+        for (int i = 0; i < render::kBloomMaxLevels; ++i)
+        {
+            SafeRelease(r.bloomSRVs[i]);
+            SafeRelease(r.bloomRTVs[i]);
+            SafeRelease(r.bloomTextures[i]);
+        }
+        r.bloomLevelCount = 0;
+    }
+
+    // Non-fatal: on failure bloom stays off.
+    static void CreateBloomTargets(Renderer& r)
+    {
+        if (!r.options.bloom || !r.bloomAvailable || r.bloomLevelCount > 0)
+            return;
+        const int count = render::ComputeBloomLevels(r.renderWidth, r.renderHeight, r.bloomSizes);
+        for (int i = 0; i < count; ++i)
+        {
+            D3D11_TEXTURE2D_DESC desc = {};
+            desc.Width = static_cast<UINT>(r.bloomSizes[i][0]);
+            desc.Height = static_cast<UINT>(r.bloomSizes[i][1]);
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = kSceneColorFormat;
+            desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+            if (FAILED(r.device->CreateTexture2D(&desc, nullptr, &r.bloomTextures[i])) ||
+                FAILED(r.device->CreateRenderTargetView(r.bloomTextures[i], nullptr, &r.bloomRTVs[i])) ||
+                FAILED(r.device->CreateShaderResourceView(r.bloomTextures[i], nullptr, &r.bloomSRVs[i])))
+            {
+                EngineLog("Creating the bloom targets failed; bloom is off.");
+                DestroyBloomTargets(r);
+                return;
+            }
+        }
+        r.bloomLevelCount = count;
+    }
+
     static void DestroySceneTargets(Renderer& r)
     {
         DestroyPostAATargets(r);
+        DestroyBloomTargets(r);
         SafeRelease(r.sceneColorSRV);
         SafeRelease(r.sceneColorRTV);
         SafeRelease(r.sceneColor);
@@ -352,6 +393,7 @@ namespace kes::d3d11
             return false;
         }
         CreatePostAATargets(r);
+        CreateBloomTargets(r);
         return true;
     }
 
@@ -767,6 +809,91 @@ namespace kes::d3d11
             return;
         }
         r.postAAAvailable = true;
+    }
+
+    static void DestroyPostProcessResources(Renderer& r)
+    {
+        SafeRelease(r.bloomDownVS);
+        SafeRelease(r.bloomDownPS);
+        SafeRelease(r.bloomUpVS);
+        SafeRelease(r.bloomUpPS);
+        SafeRelease(r.additiveBlendState);
+        SafeRelease(r.exposureHistogramCS);
+        SafeRelease(r.exposureAdaptCS);
+        SafeRelease(r.exposureCB);
+        SafeRelease(r.histogramUAV);
+        SafeRelease(r.histogramBuffer);
+        SafeRelease(r.exposureStateSRV);
+        SafeRelease(r.exposureStateUAV);
+        SafeRelease(r.exposureStateBuffer);
+        r.bloomAvailable = false;
+        r.exposureAvailable = false;
+    }
+
+    static bool CreateComputeShaderFromBinary(Renderer& r, const char* source, ID3D11ComputeShader** out)
+    {
+        std::vector<uint8_t> bytes;
+        std::string error;
+        if (!LoadCompiledShader(source, ShaderStage::Compute, RendererBackend::D3D11, bytes, &error))
+        {
+            EngineLogf("%s", error.c_str());
+            return false;
+        }
+        if (FAILED(r.device->CreateComputeShader(bytes.data(), bytes.size(), nullptr, out)))
+        {
+            EngineLogf("CreateComputeShader failed for %s", source);
+            return false;
+        }
+        return true;
+    }
+
+    static bool CreateStructuredBuffer(Renderer& r, UINT elements, UINT stride, bool shaderResource,
+        ID3D11Buffer** outBuffer, ID3D11UnorderedAccessView** outUAV, ID3D11ShaderResourceView** outSRV)
+    {
+        std::vector<uint8_t> zeros(static_cast<size_t>(elements) * stride, 0);
+        D3D11_BUFFER_DESC desc = {};
+        desc.ByteWidth = elements * stride;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | (shaderResource ? D3D11_BIND_SHADER_RESOURCE : 0);
+        desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        desc.StructureByteStride = stride;
+        D3D11_SUBRESOURCE_DATA init = { zeros.data(), 0, 0 };
+        if (FAILED(r.device->CreateBuffer(&desc, &init, outBuffer)) ||
+            FAILED(r.device->CreateUnorderedAccessView(*outBuffer, nullptr, outUAV)))
+            return false;
+        return !shaderResource || SUCCEEDED(r.device->CreateShaderResourceView(*outBuffer, nullptr, outSRV));
+    }
+
+    // Non-fatal: bloom and eye adaptation are each switched off when their part fails.
+    static void CreatePostProcessResources(Renderer& r)
+    {
+        D3D11_BLEND_DESC additive = {};
+        additive.RenderTarget[0].BlendEnable = TRUE;
+        additive.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        additive.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+        additive.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        additive.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        additive.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+        additive.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        additive.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        r.bloomAvailable = SUCCEEDED(r.device->CreateBlendState(&additive, &r.additiveBlendState)) &&
+            CreateShaderPairFromBinaries(r, kEngineShaderBloomDownsample, kEngineShaderBloomDownsample, &r.bloomDownVS, &r.bloomDownPS, nullptr) &&
+            CreateShaderPairFromBinaries(r, kEngineShaderBloomUpsample, kEngineShaderBloomUpsample, &r.bloomUpVS, &r.bloomUpPS, nullptr);
+        if (!r.bloomAvailable)
+            EngineLog("Bloom is unavailable.");
+
+        D3D11_BUFFER_DESC cb = {};
+        cb.ByteWidth = sizeof(render::ExposureCBData);
+        cb.Usage = D3D11_USAGE_DYNAMIC;
+        cb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        r.exposureAvailable = SUCCEEDED(r.device->CreateBuffer(&cb, nullptr, &r.exposureCB)) &&
+            CreateComputeShaderFromBinary(r, kEngineShaderExposureHistogram, &r.exposureHistogramCS) &&
+            CreateComputeShaderFromBinary(r, kEngineShaderExposureAdapt, &r.exposureAdaptCS) &&
+            CreateStructuredBuffer(r, render::kHistogramBins, 4, false, &r.histogramBuffer, &r.histogramUAV, nullptr) &&
+            CreateStructuredBuffer(r, render::kExposureStateFloats, 4, true, &r.exposureStateBuffer, &r.exposureStateUAV, &r.exposureStateSRV);
+        if (!r.exposureAvailable)
+            EngineLog("Auto exposure is unavailable; the manual exposure is used.");
     }
 
     // CMAA2 on ldrColor, in place. D3D11 unbinds an SRV whose resource is bound
@@ -1401,6 +1528,8 @@ namespace kes::d3d11
         }
         CreatePostAAShaders(r); // non-fatal: post AA stays off on failure
         CreatePostAATargets(r);
+        CreatePostProcessResources(r); // non-fatal as well
+        CreateBloomTargets(r);
 
         EngineLogf("Renderer initialized successfully. window=%dx%d render=%dx%d, MSAA %dx.", r.windowWidth, r.windowHeight,
             r.renderWidth, r.renderHeight, r.msaaSamples);
@@ -1477,18 +1606,27 @@ namespace kes::d3d11
             if (!CreateSceneTargets(r))
                 SetFatalError(r, "Creating the scene targets", r.device->GetDeviceRemovedReason());
         }
-        else if (previous.postAntiAliasing != options.postAntiAliasing)
+        else
         {
-            DestroyPostAATargets(r);
-            CreatePostAATargets(r);
+            if (previous.postAntiAliasing != options.postAntiAliasing)
+            {
+                DestroyPostAATargets(r);
+                CreatePostAATargets(r);
+            }
+            if (previous.bloom != options.bloom)
+            {
+                DestroyBloomTargets(r);
+                CreateBloomTargets(r);
+            }
         }
         if (previous.shadowQuality != options.shadowQuality)
             CreateShadowTargets(r);
         if (previous.anisotropy != options.anisotropy)
             CreateMaterialSampler(r);
         static const char* const kPostAANames[] = { "off", "FXAA", "CMAA2" };
-        EngineLogf("Graphics options: MSAA %dx, post AA %s, shadows %d, anisotropy %dx.", r.msaaSamples,
-            kPostAANames[static_cast<int>(r.postAA)], static_cast<int>(options.shadowQuality), std::clamp(options.anisotropy, 1, 16));
+        EngineLogf("Graphics options: MSAA %dx, post AA %s, bloom %s, shadows %d, anisotropy %dx.", r.msaaSamples,
+            kPostAANames[static_cast<int>(r.postAA)], r.bloomLevelCount > 0 ? "on" : "off", static_cast<int>(options.shadowQuality),
+            std::clamp(options.anisotropy, 1, 16));
     }
 
     // Per-draw constants
@@ -1740,6 +1878,98 @@ namespace kes::d3d11
         }
     }
 
+    static void RunAutoExposure(Renderer& r, const render::ExposureCBData& constants)
+    {
+        ID3D11DeviceContext* ctx = r.context;
+        UploadDynamic(r, r.exposureCB, &constants, sizeof(constants));
+        ctx->CSSetConstantBuffers(0, 1, &r.exposureCB);
+
+        ctx->CSSetShaderResources(0, 1, &r.sceneColorSRV);
+        ctx->CSSetUnorderedAccessViews(0, 1, &r.histogramUAV, nullptr);
+        ctx->CSSetShader(r.exposureHistogramCS, nullptr, 0);
+        ctx->Dispatch((static_cast<UINT>(r.renderWidth) + 15) / 16, (static_cast<UINT>(r.renderHeight) + 15) / 16, 1);
+
+        ID3D11ShaderResourceView* nullSRV = nullptr;
+        ctx->CSSetShaderResources(0, 1, &nullSRV);
+        ID3D11UnorderedAccessView* uavs[2] = { r.histogramUAV, r.exposureStateUAV };
+        ctx->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+        ctx->CSSetShader(r.exposureAdaptCS, nullptr, 0);
+        ctx->Dispatch(1, 1, 1);
+
+        ID3D11UnorderedAccessView* nullUavs[2] = {};
+        ctx->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
+        ctx->CSSetShader(nullptr, nullptr, 0);
+    }
+
+    static void RunBloom(Renderer& r, float radius)
+    {
+        ID3D11DeviceContext* ctx = r.context;
+        ID3D11ShaderResourceView* nullSRV = nullptr;
+        const float blendFactor[4] = { 0, 0, 0, 0 };
+        BindFullscreenTriangle(r);
+        ctx->RSSetState(r.solidNoCullRS);
+        ctx->OMSetDepthStencilState(nullptr, 0);
+        ctx->PSSetConstantBuffers(0, 1, &r.tonemapCB);
+        ctx->PSSetSamplers(0, 1, &r.linearClampSampler);
+
+        auto drawLevel = [&](int target, ID3D11ShaderResourceView* source, float sourceWidth, float sourceHeight, float z)
+        {
+            render::BlitCBData constants = { { 1.0f / sourceWidth, 1.0f / sourceHeight, z, 0.0f } };
+            UploadDynamic(r, r.tonemapCB, &constants, sizeof(constants));
+            ctx->PSSetShaderResources(0, 1, &nullSRV);
+            ctx->OMSetRenderTargets(1, &r.bloomRTVs[target], nullptr);
+            const D3D11_VIEWPORT vp = { 0.0f, 0.0f, static_cast<float>(r.bloomSizes[target][0]), static_cast<float>(r.bloomSizes[target][1]), 0.0f, 1.0f };
+            ctx->RSSetViewports(1, &vp);
+            ctx->PSSetShaderResources(0, 1, &source);
+            ctx->Draw(3, 0);
+        };
+
+        ctx->VSSetShader(r.bloomDownVS, nullptr, 0);
+        ctx->PSSetShader(r.bloomDownPS, nullptr, 0);
+        ctx->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
+        for (int i = 0; i < r.bloomLevelCount; ++i)
+        {
+            if (i == 0)
+                drawLevel(0, r.sceneColorSRV, static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight), 1.0f);
+            else
+                drawLevel(i, r.bloomSRVs[i - 1], static_cast<float>(r.bloomSizes[i - 1][0]), static_cast<float>(r.bloomSizes[i - 1][1]), 0.0f);
+        }
+
+        ctx->VSSetShader(r.bloomUpVS, nullptr, 0);
+        ctx->PSSetShader(r.bloomUpPS, nullptr, 0);
+        ctx->OMSetBlendState(r.additiveBlendState, blendFactor, 0xFFFFFFFF);
+        for (int i = r.bloomLevelCount - 1; i > 0; --i)
+            drawLevel(i - 1, r.bloomSRVs[i], static_cast<float>(r.bloomSizes[i][0]), static_cast<float>(r.bloomSizes[i][1]), radius);
+
+        ctx->PSSetShaderResources(0, 1, &nullSRV);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        ctx->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
+    }
+
+    // Eye adaptation and bloom on the resolved scene; fills r.tonemap.
+    static void RenderPostProcess(Renderer& r, const SceneState& scene, const Scene& sceneObj)
+    {
+        const PostProcessSettings& post = sceneObj.GetPostProcess();
+        const bool autoExposure = r.exposureAvailable && post.autoExposure;
+        const bool bloom = r.bloomLevelCount > 0 && post.bloomIntensity > 0.0f;
+        r.tonemap = render::BuildTonemapConstants(scene, post, autoExposure, bloom ? r.bloomLevelCount : 0, r.renderWidth, r.renderHeight);
+
+        if (autoExposure)
+        {
+            KES_D3D11_GPU_ZONE(r, "Auto exposure");
+            const bool reset = r.exposureResetSerial != sceneObj.GetExposureResetSerial() || !r.autoExposureWasOn;
+            r.exposureResetSerial = sceneObj.GetExposureResetSerial();
+            RunAutoExposure(r, render::BuildExposureConstants(post, scene.deltaTime, reset, r.renderWidth, r.renderHeight));
+        }
+        r.autoExposureWasOn = autoExposure;
+
+        if (bloom)
+        {
+            KES_D3D11_GPU_ZONE(r, "Bloom");
+            RunBloom(r, std::clamp(post.bloomRadius, 0.0f, 4.0f));
+        }
+    }
+
     void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
     {
         if (!r.sceneColor || !r.dsv || (r.msaaSamples > 1 && !r.sceneColorMSRTV))
@@ -1769,7 +1999,6 @@ namespace kes::d3d11
             r.frame.scene.shadowParams[3] = 0.0f;
             r.frame.shadowViews.clear();
         }
-        r.exposure = std::max(scene.exposure, 0.0f);
         r.context->UpdateSubresource(r.sceneCB, 0, nullptr, &r.frame.scene, 0, 0);
 
         // Draw lists (shared by shadow and scene passes).
@@ -1867,17 +2096,21 @@ namespace kes::d3d11
             r.context->ResolveSubresource(r.sceneColor, 0, r.sceneColorMS, 0, kSceneColorFormat);
         }
         r.context->OMSetRenderTargets(0, nullptr, nullptr);
+        RenderPostProcess(r, scene, sceneObj);
     }
 
     void RendererBeginBackbufferOverlay(Renderer& r)
     {
         if (!r.rtv)
             return;
-        ID3D11ShaderResourceView* nullSRV = nullptr;
+        ID3D11ShaderResourceView* nullSRVs[3] = {};
         const float blendFactor[4] = { 0, 0, 0, 0 };
-        render::TonemapCBData tonemap = {};
-        tonemap.params[0] = r.exposure;
-        tonemap.params[1] = 1.0f / 255.0f;
+        const render::TonemapCBData& tonemap = r.tonemap;
+        // t0 scene, t1 bloom (white when unused: intensity 0), t2 exposure state.
+        ID3D11ShaderResourceView* tonemapInputs[3] = { r.sceneColorSRV,
+            tonemap.params[3] > 0.0f ? r.bloomSRVs[0] : r.whiteTexture.srv,
+            r.exposureStateSRV };
+        ID3D11SamplerState* tonemapSamplers[2] = { r.linearClampSampler, r.linearClampSampler };
 
         // Post AA: tonemap into ldrColor at render resolution, CMAA2 in place,
         // then present.slang (FXAA or copy) replaces the tonemap draw below.
@@ -1894,13 +2127,13 @@ namespace kes::d3d11
                 r.context->VSSetShader(r.tonemapVS, nullptr, 0);
                 r.context->PSSetShader(r.tonemapPS, nullptr, 0);
                 r.context->PSSetConstantBuffers(0, 1, &r.tonemapCB);
-                r.context->PSSetShaderResources(0, 1, &r.sceneColorSRV);
-                r.context->PSSetSamplers(0, 1, &r.linearClampSampler);
+                r.context->PSSetShaderResources(0, 3, tonemapInputs);
+                r.context->PSSetSamplers(0, 2, tonemapSamplers);
                 r.context->RSSetState(r.solidNoCullRS);
                 r.context->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
                 r.context->OMSetDepthStencilState(nullptr, 0);
                 r.context->Draw(3, 0);
-                r.context->PSSetShaderResources(0, 1, &nullSRV);
+                r.context->PSSetShaderResources(0, 3, nullSRVs);
                 r.context->OMSetRenderTargets(0, nullptr, nullptr);
             }
             if (r.postAA == PostAntiAliasing::CMAA2)
@@ -1923,7 +2156,7 @@ namespace kes::d3d11
         BindFullscreenTriangle(r);
         if (postAA)
         {
-            render::TonemapCBData present = {}; // present.slang: same 16-byte constant layout
+            render::BlitCBData present = {};
             present.params[0] = 1.0f / static_cast<float>(r.renderWidth);
             present.params[1] = 1.0f / static_cast<float>(r.renderHeight);
             present.params[2] = r.postAA == PostAntiAliasing::FXAA ? 1.0f : 0.0f;
@@ -1937,16 +2170,16 @@ namespace kes::d3d11
             UploadDynamic(r, r.tonemapCB, &tonemap, sizeof(tonemap));
             r.context->VSSetShader(r.tonemapVS, nullptr, 0);
             r.context->PSSetShader(r.tonemapPS, nullptr, 0);
-            r.context->PSSetShaderResources(0, 1, &r.sceneColorSRV);
+            r.context->PSSetShaderResources(0, 3, tonemapInputs);
         }
         r.context->PSSetConstantBuffers(0, 1, &r.tonemapCB);
-        r.context->PSSetSamplers(0, 1, &r.linearClampSampler);
+        r.context->PSSetSamplers(0, 2, tonemapSamplers);
         r.context->RSSetState(r.solidNoCullRS);
         r.context->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
         r.context->OMSetDepthStencilState(nullptr, 0);
         r.context->Draw(3, 0);
 
-        r.context->PSSetShaderResources(0, 1, &nullSRV);
+        r.context->PSSetShaderResources(0, 3, nullSRVs);
     }
 
     // UI
@@ -2174,6 +2407,7 @@ namespace kes::d3d11
         SafeRelease(r.tonemapCB);
 
         DestroyPostAAShaders(r);
+        DestroyPostProcessResources(r);
         SafeRelease(r.tonemapPS);
         SafeRelease(r.tonemapVS);
         SafeRelease(r.skyPS);

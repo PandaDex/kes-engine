@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include "engine_types.h"
 #include "entity_manager.h"
@@ -75,6 +76,62 @@ struct FogSettings
     float selectionVolume = 0.0f;
 };
 
+// Camera post processing: exposure (manual or eye adaptation), bloom, vignette.
+// Exposure values are in EV (stops, powers of two).
+struct PostProcessSettings
+{
+    float exposureCompensation = 0.0f; // EV added on top of manual or auto exposure
+
+    bool autoExposure = true;
+    // Range of the scene's average log2 luminance the eye adapts to. A darker
+    // scene than autoExposureMin stays dark; brighter than the max stays bright.
+    float autoExposureMin = -5.0f;
+    float autoExposureMax = 3.0f;
+    float adaptationSpeedUp = 3.0f; // towards a brighter scene, 1/s
+    float adaptationSpeedDown = 1.0f; // towards a darker scene, 1/s
+
+    float bloomIntensity = 0.05f; // 0 = off; share of the blurred image in the result
+    float bloomRadius = 1.0f; // upsample filter scale, ~0.5-2
+
+    float vignetteIntensity = 0.0f; // 0 = off, 1 = strong
+    float vignetteSmoothness = 0.5f; // 0-1, falloff softness
+    float vignetteColor[3] = { 0.0f, 0.0f, 0.0f };
+};
+
+// Which PostProcessSettings fields a layer sets. Fields it doesn't set keep
+// the value from the layers below.
+enum PostProcessOverride : uint32_t
+{
+    PostProcessOverride_ExposureCompensation = 1u << 0,
+    PostProcessOverride_AutoExposure = 1u << 1,
+    PostProcessOverride_AutoExposureMin = 1u << 2,
+    PostProcessOverride_AutoExposureMax = 1u << 3,
+    PostProcessOverride_AdaptationSpeedUp = 1u << 4,
+    PostProcessOverride_AdaptationSpeedDown = 1u << 5,
+    PostProcessOverride_BloomIntensity = 1u << 6,
+    PostProcessOverride_BloomRadius = 1u << 7,
+    PostProcessOverride_VignetteIntensity = 1u << 8,
+    PostProcessOverride_VignetteSmoothness = 1u << 9,
+    PostProcessOverride_VignetteColor = 1u << 10,
+    PostProcessOverride_All = (1u << 11) - 1u,
+};
+
+// One contribution to the final post-process settings. Layers are applied in
+// ascending priority over the scene defaults; each blends its overridden
+// fields in by weight (0-1). Booleans switch once the weight passes 0.5.
+struct PostProcessLayer
+{
+    PostProcessSettings settings;
+    uint32_t overrides = PostProcessOverride_All;
+    int32_t priority = 0;
+    float weight = 1.0f;
+};
+
+using PostProcessLayerId = uint32_t;
+
+// Blends `layers` (any order) over `base`.
+PostProcessSettings ResolvePostProcessLayers(const PostProcessSettings& base, const PostProcessLayer* const* layers, size_t count);
+
 class Scene
 {
 public:
@@ -103,6 +160,23 @@ public:
     FogSettings& GetFog() { return fog; }
     const FogSettings& GetFog() const { return fog; }
 
+    // Post processing. Game code changes the defaults or adds layers (kept
+    // until removed, also across map loads); volumes submit a layer every
+    // frame. The renderer uses GetPostProcess(), resolved once per frame.
+    PostProcessSettings& GetPostProcessDefaults() { return postProcessDefaults; }
+    const PostProcessSettings& GetPostProcessDefaults() const { return postProcessDefaults; }
+    PostProcessLayerId AddPostProcessLayer(const PostProcessLayer& layer);
+    PostProcessLayer* FindPostProcessLayer(PostProcessLayerId id);
+    bool RemovePostProcessLayer(PostProcessLayerId id);
+    void SubmitPostProcessLayer(const PostProcessLayer& layer); // this frame only
+    void ClearSubmittedPostProcessLayers();
+    void ResolvePostProcess();
+    const PostProcessSettings& GetPostProcess() const { return postProcess; }
+    // Snap eye adaptation to the current scene next frame (after a teleport, cut, map load).
+    void ResetExposureAdaptation() { ++exposureResetSerial; }
+    uint32_t GetExposureResetSerial() const { return exposureResetSerial; } // renderers snap when it changes
+
+    // Keeps the post-process defaults and the code layers.
     void Clear();
 
     template<typename T>
@@ -135,6 +209,12 @@ private:
     std::vector<Light> lights;
     SkySettings sky;
     FogSettings fog;
+    PostProcessSettings postProcessDefaults;
+    PostProcessSettings postProcess; // resolved
+    std::vector<std::pair<PostProcessLayerId, PostProcessLayer>> postProcessLayers;
+    std::vector<PostProcessLayer> submittedPostProcessLayers;
+    PostProcessLayerId nextPostProcessLayerId = 1;
+    uint32_t exposureResetSerial = 0;
     EntityManager* entityManager = nullptr;
     uint32_t nextObjectId = 1;
     uint32_t nextLightId = 1;

@@ -132,7 +132,36 @@ namespace kes::d3d11
 
         ID3D11VertexShader* tonemapVS = nullptr;
         ID3D11PixelShader* tonemapPS = nullptr;
-        ID3D11Buffer* tonemapCB = nullptr; // also present.slang's constants
+        ID3D11Buffer* tonemapCB = nullptr; // also the present and bloom constants (BlitCBData)
+
+        // Bloom (bloom_downsample / bloom_upsample.slang): RGBA16F chain from half
+        // the render resolution down, summed back up into level 0.
+        bool bloomAvailable = false; // shaders loaded
+        ID3D11VertexShader* bloomDownVS = nullptr;
+        ID3D11PixelShader* bloomDownPS = nullptr;
+        ID3D11VertexShader* bloomUpVS = nullptr;
+        ID3D11PixelShader* bloomUpPS = nullptr;
+        ID3D11BlendState* additiveBlendState = nullptr;
+        int bloomLevelCount = 0; // 0 = no targets (bloom off)
+        int bloomSizes[render::kBloomMaxLevels][2] = {};
+        ID3D11Texture2D* bloomTextures[render::kBloomMaxLevels] = {};
+        ID3D11RenderTargetView* bloomRTVs[render::kBloomMaxLevels] = {};
+        ID3D11ShaderResourceView* bloomSRVs[render::kBloomMaxLevels] = {};
+
+        // Eye adaptation (exposure_histogram / exposure_adapt.slang). The state
+        // buffer carries the adapted exposure from frame to frame.
+        bool exposureAvailable = false;
+        ID3D11ComputeShader* exposureHistogramCS = nullptr;
+        ID3D11ComputeShader* exposureAdaptCS = nullptr;
+        ID3D11Buffer* exposureCB = nullptr;
+        ID3D11Buffer* histogramBuffer = nullptr;
+        ID3D11UnorderedAccessView* histogramUAV = nullptr;
+        ID3D11Buffer* exposureStateBuffer = nullptr;
+        ID3D11UnorderedAccessView* exposureStateUAV = nullptr;
+        ID3D11ShaderResourceView* exposureStateSRV = nullptr;
+        uint32_t exposureResetSerial = ~0u; // Scene::GetExposureResetSerial last seen
+        bool autoExposureWasOn = false;
+        render::TonemapCBData tonemap = {}; // this frame's tonemap constants
 
         // Post anti-aliasing (FXAA / CMAA2): tonemap into ldrColor (RGBA8, render
         // resolution, sRGB encoded), CMAA2 in place, present.slang to the backbuffer.
@@ -198,7 +227,6 @@ namespace kes::d3d11
         GPUTexture environmentMap = {}; // RGBA16F cube with mips
         render::EnvironmentMaps environment;
         render::FrameSetup frame;
-        float exposure = 1.0f;
 
         GraphicsOptions options = {};
 

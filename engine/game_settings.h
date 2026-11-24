@@ -101,6 +101,8 @@ public:
     int GetAnisotropicFiltering() const { return m_anisotropy; }
     void SetShadowDistance(float meters) { m_shadowDistance = meters; }
     float GetShadowDistance() const { return m_shadowDistance; }
+    void SetBloom(bool enabled) { m_bloom = enabled; }
+    bool GetBloom() const { return m_bloom; }
     GraphicsOptions GetGraphicsOptions() const;
 
     // Look controls, applied live (multipliers on the player's base values,
@@ -221,6 +223,7 @@ private:
     PostAntiAliasing m_postAntiAliasing = PostAntiAliasing::Off; // PostAntiAliasing
     int m_anisotropy = 8; // AnisotropicFiltering
     float m_shadowDistance = 60.0f; // ShadowDistance
+    bool m_bloom = true; // bBloom
     float m_mouseSensitivity = 1.0f; // MouseSensitivity
     float m_gamepadLookSensitivity = 1.0f; // GamepadLookSensitivity
     bool m_invertLookY = false; // bInvertLookY

@@ -223,6 +223,7 @@ GraphicsOptions GameSettings::GetGraphicsOptions() const
     options.shadowQuality = m_shadowQuality;
     options.anisotropy = m_anisotropy;
     options.shadowDistance = m_shadowDistance;
+    options.bloom = m_bloom;
     return options;
 }
 
@@ -387,6 +388,7 @@ void GameSettings::SetToDefaults()
     m_postAntiAliasing = PostAntiAliasing::Off;
     m_anisotropy = 8;
     m_shadowDistance = 60.0f;
+    m_bloom = true;
 }
 
 void GameSettings::ValidateSettings()
@@ -480,6 +482,7 @@ void GameSettings::ReadFromIni(const IniFile& ini)
     m_postAntiAliasing = PostAntiAliasingFromString(ini.GetString(kSection, "PostAntiAliasing"), m_postAntiAliasing);
     m_anisotropy = ini.GetInt(kSection, "AnisotropicFiltering", m_anisotropy);
     m_shadowDistance = ini.GetFloat(kSection, "ShadowDistance", m_shadowDistance);
+    m_bloom = ini.GetBool(kSection, "bBloom", m_bloom);
     m_mouseSensitivity = ini.GetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     m_gamepadLookSensitivity = ini.GetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     m_invertLookY = ini.GetBool(kSection, "bInvertLookY", m_invertLookY);
@@ -515,6 +518,7 @@ void GameSettings::WriteToIni(IniFile& ini) const
     ini.SetString(kSection, "PostAntiAliasing", PostAntiAliasingToString(m_postAntiAliasing));
     ini.SetInt(kSection, "AnisotropicFiltering", m_anisotropy);
     ini.SetFloat(kSection, "ShadowDistance", m_shadowDistance);
+    ini.SetBool(kSection, "bBloom", m_bloom);
     ini.SetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     ini.SetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     ini.SetBool(kSection, "bInvertLookY", m_invertLookY);
