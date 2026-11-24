@@ -198,8 +198,6 @@ add_custom_target(kes_build_info
         "-DOUT=${_kes_build_info_dir}/kes_build_info.h"
         "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
         "-DGIT=${GIT_EXECUTABLE}"
-        "-DNAME=${KES_PROJECT_NAME}"
-        "-DVERSION=${KES_PROJECT_VERSION}"
         "-DCONFIG=$<CONFIG>"
         "-DPLATFORM=${KES_PLATFORM}"
         -P "${CMAKE_SOURCE_DIR}/cmake/KesBuildInfo.cmake"
@@ -279,8 +277,6 @@ else()
 endif()
 
 target_compile_definitions(engine PRIVATE
-        "ENGINE_PROJECT_NAME=\"${KES_PROJECT_NAME}\""
-        "ENGINE_COMPANY_NAME=\"${KES_PROJECT_PUBLISHER}\""
         "ENGINE_PAK_ENCRYPTION_KEY_HEX=\"${KES_PAK_ENCRYPTION_KEY}\""
 )
 

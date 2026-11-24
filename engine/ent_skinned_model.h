@@ -26,6 +26,7 @@ public:
     void Teleport(const Vector3& newPosition) override;
     bool ApplyProperty(const std::string& name, const std::string& value) override;
     bool OwnsCollider(ColliderHandle handle) const override;
+    void OnDestroy() override;
 
     void SetModelPath(const std::string& path);
     void SetMaterialPath(const std::string& path);
@@ -70,7 +71,6 @@ private:
     void CreateChildParts(ModelHandle parentModel, int parentPart, int depth);
     void DestroyChildParts();
     void UpdateChildParts(const KModelData& model, const std::vector<AnimationTransform>& pose, float dt);
-    void OnDestroy() override;
 
     uint32_t objectId = 0;
     std::string colliderShape;

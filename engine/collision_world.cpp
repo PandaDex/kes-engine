@@ -477,6 +477,15 @@ bool CollisionWorld::Exists(ColliderHandle handle) const
     return impl->Find(handle) != nullptr;
 }
 
+bool CollisionWorld::GetMotion(ColliderHandle handle, ColliderMotion& outMotion) const
+{
+    const Impl::Entry* entry = impl->Find(handle);
+    if (!entry)
+        return false;
+    outMotion = entry->motion;
+    return true;
+}
+
 void CollisionWorld::SetActive(ColliderHandle handle, bool active)
 {
     if (Impl::Entry* entry = impl->Find(handle))

@@ -3,6 +3,7 @@
 #include "engine_configuration.h"
 #include <filesystem>
 #include "file_paths.h"
+#include "input.h"
 #include "localization.h"
 #include "on_screen_debug.h"
 #include "render_backend.h"
@@ -41,7 +42,7 @@ namespace
         NullRenderer renderer;
         UiSystem ui;
 
-        OffscreenUi()
+        explicit OffscreenUi(InputState* input = nullptr)
         {
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
             REQUIRE(SDL_InitSubSystem(SDL_INIT_VIDEO));
@@ -49,7 +50,7 @@ namespace
             REQUIRE(window != nullptr);
             const std::string roots = KES_TEST_CONTENT_DIRS;
             SetAssetRootOverride(roots.substr(roots.find('|') + 1).c_str());   // engine/assets: fonts, kes.rcss
-            REQUIRE(ui.Init(window, &renderer, 1280, 720));
+            REQUIRE(ui.Init(window, &renderer, 1280, 720, input));
         }
 
         ~OffscreenUi()
@@ -171,4 +172,73 @@ TEST_CASE("ui: documents are translated through the active .po file")
         CHECK(document->GetElementById("d")->GetInnerRML() == "#Missing.Key");
     }
     LocalizationShutdown();
+}
+
+TEST_CASE("ui: gamepad text field callback fires on focus and accept")
+{
+    InputState input;
+    OffscreenUi ui(&input);
+    ui.ui.SetInputEnabled(true);
+    ui.ui.SetNavigationEnabled(true);
+
+    std::vector<UiTextFieldRequest> requests;
+    ui.ui.SetGamepadTextFieldCallback([&](const UiTextFieldRequest& request) { requests.push_back(request); });
+
+    Rml::ElementDocument* document = ui.ui.LoadDocumentFromMemory(
+        "<rml><head><link type=\"text/rcss\" href=\"/engine/ui/kes.rcss\"/></head><body>"
+        "<div><button id=\"play\">Play</button></div>"
+        "<div><input id=\"seed\" type=\"number\" value=\"42\" maxlength=\"6\" placeholder=\"Seed\"/></div>"
+        "<div><textarea id=\"notes\">hi</textarea></div>"
+        "</body></rml>");
+    REQUIRE(document != nullptr);
+
+    const auto press = [&](const char* action)
+    {
+        input.actionStates[action] = { true, true, false };
+        ui.Frame();
+        input.actionStates[action] = {};
+        ui.Frame();
+    };
+
+    // Keyboard: no callback.
+    SDL_Event key{};
+    key.type = SDL_EVENT_KEY_DOWN;
+    ui.ui.ProcessEvent(key);
+    ui.Frame();
+    press("UI_Accept");   // focuses #play
+    REQUIRE(ui.ui.GetContext()->GetFocusElement() == document->GetElementById("play"));
+    press("UI_Down");
+    REQUIRE(ui.ui.GetContext()->GetFocusElement() == document->GetElementById("seed"));
+    CHECK(requests.empty());
+
+    SDL_Event pad{};
+    pad.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    ui.ui.ProcessEvent(pad);
+    REQUIRE(ui.ui.GetActiveInputDevice() == UiInputDevice::Gamepad);
+
+    press("UI_Accept");
+    REQUIRE(requests.size() == 1);
+    CHECK(requests[0].trigger == UiTextFieldTrigger::Activated);
+    CHECK(requests[0].kind == UiTextFieldKind::Number);
+    CHECK(requests[0].value == "42");
+    CHECK(requests[0].placeholder == "Seed");
+    CHECK(requests[0].maxLength == 6);
+    CHECK(requests[0].width > 0.0f);
+    CHECK(requests[0].height > 0.0f);
+
+    press("UI_Down");
+    REQUIRE(ui.ui.GetContext()->GetFocusElement() == document->GetElementById("notes"));
+    REQUIRE(requests.size() == 2);
+    CHECK(requests[1].trigger == UiTextFieldTrigger::Focused);
+    CHECK(requests[1].kind == UiTextFieldKind::Multiline);
+    CHECK(requests[1].value == "hi");
+
+    press("UI_Accept");   // replaces Enter: no newline added
+    REQUIRE(requests.size() == 3);
+    CHECK(rmlui_dynamic_cast<Rml::ElementFormControl*>(document->GetElementById("notes"))->GetValue() == "hi");
+
+    press("UI_Up");
+    press("UI_Up");
+    REQUIRE(ui.ui.GetContext()->GetFocusElement() == document->GetElementById("play"));
+    CHECK(requests.size() == 4);   // passing #seed fired Focused, #play didn't
 }

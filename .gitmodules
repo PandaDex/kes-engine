@@ -33,3 +33,7 @@
 	path = tools/localizationEditor
 	url = https://github.com/PandaDex/kes-localizationEditor
 	branch = master
+[submodule "tools/buildLauncher"]
+	path = tools/buildLauncher
+	url = https://github.com/PandaDex/kes-buildLauncher.git
+	branch = master

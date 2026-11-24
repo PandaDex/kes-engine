@@ -51,7 +51,7 @@ namespace
             // Created windowed and hidden; ApplySettings switches to the saved
             // window mode before the window is shown.
             WindowDesc desc = {};
-            desc.title = ENGINE_PROJECT_NAME;
+            desc.title = BuildInfoName();
             desc.width = settings.GetScreenResolution().x;
             desc.height = settings.GetScreenResolution().y;
             desc.mode = WindowMode::Windowed;
@@ -59,7 +59,7 @@ namespace
             desc.extraFlags = GetRendererWindowFlags(backend);
             if (!CreateAppWindow(app.window, desc))
                 return false;
-            EngineLogf("Application window created: \"%s\" (%dx%d, pixels %dx%d).", ENGINE_PROJECT_NAME,
+            EngineLogf("Application window created: \"%s\" (%dx%d, pixels %dx%d).", BuildInfoName(),
                 app.window.width, app.window.height, app.window.pixelWidth, app.window.pixelHeight);
 
             AppConfig rendererConfig = app.config;
@@ -194,6 +194,13 @@ namespace
         ApplyCursor(app);
     }
 
+    // Function-local so the generated project file can set it during static init.
+    std::string& ProjectStartupMap()
+    {
+        static std::string map;
+        return map;
+    }
+
     UiConfig LoadProjectUiConfig()
     {
         bool found = false;
@@ -260,13 +267,23 @@ namespace
         const std::string message = "The graphics device stopped responding, so the game has to close.\n\n"
                                     "Updating your graphics driver may help.\n\n" +
             error;
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, ENGINE_PROJECT_NAME, message.c_str(), nullptr);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, BuildInfoName(), message.c_str(), nullptr);
     }
 
     bool IsKeyPress(const SDL_Event& event, SDL_Scancode scancode)
     {
         return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == scancode;
     }
+}
+
+void EngineSetProjectStartupMap(const char* mapName)
+{
+    ProjectStartupMap() = mapName ? mapName : "";
+}
+
+void EngineSetProjectInfo(const char* name, const char* company, const char* version)
+{
+    BuildInfoSetProject(name, company, version);
 }
 
 void EngineSetCommandLine(int argc, const char* const* argv)
@@ -278,13 +295,13 @@ bool EngineStart(EngineApp& app)
 {
     KES_PROFILE_THREAD_NAME("Main");
     KES_ZONE(CORE, "Engine startup");
-    KES_PROFILE_APP_INFO(ENGINE_PROJECT_NAME, std::strlen(ENGINE_PROJECT_NAME));
+    KES_PROFILE_APP_INFO(BuildInfoName(), std::strlen(BuildInfoName()));
     // `reason` is shown to the player; null when the failing code already did.
     const auto failStartup = [&app](const char* reason) -> bool
     {
         EngineLog("Startup failed. Beginning shutdown cleanup.");
         if (reason)
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, ENGINE_PROJECT_NAME, reason, nullptr);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, BuildInfoName(), reason, nullptr);
         EngineShutdown(app);
         return false;
     };
@@ -419,14 +436,17 @@ bool EngineStart(EngineApp& app)
     app.settings->AttachAudio(&app.world.GetAudio());
     app.world.SetDeferMapLoads(true);
     EngineLog("World initialized.");
+    if (app.startupMap.empty())
+        app.startupMap = ProjectStartupMap().empty() ? ENGINE_STARTUP_MAP : ProjectStartupMap();
+    EngineLogf("Startup map: %s", app.startupMap.c_str());
     if (app.onMapLoadBegin)
-        app.onMapLoadBegin(app, ENGINE_STARTUP_MAP);
-    const bool startupLoaded = app.world.LoadMap(ENGINE_STARTUP_MAP);
+        app.onMapLoadBegin(app, app.startupMap);
+    const bool startupLoaded = app.world.LoadMap(app.startupMap.c_str());
     if (!startupLoaded)
-        EngineLogf("Startup map %s could not be loaded; starting with an empty level.", ENGINE_STARTUP_MAP);
+        EngineLogf("Startup map %s could not be loaded; starting with an empty level.", app.startupMap.c_str());
     PreloadLevel(app);
     if (app.onMapLoaded)
-        app.onMapLoaded(app, ENGINE_STARTUP_MAP, startupLoaded);
+        app.onMapLoaded(app, app.startupMap, startupLoaded);
     app.performanceFrequency = static_cast<double>(SDL_GetPerformanceFrequency());
     app.prevCounter = SDL_GetPerformanceCounter();
     app.frameDeadline = app.prevCounter;

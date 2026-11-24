@@ -69,6 +69,9 @@ struct EngineApp
     // Runs after the UI documents were reloaded for a new language, so any
     // Rml::ElementDocument pointers held from before are dangling.
     std::function<void(EngineApp& app)> onLanguageChanged;
+    // Map loaded by EngineStart. Empty = the project's StartupMap (.kproject),
+    // else ENGINE_STARTUP_MAP. Set before EngineStart to override both.
+    std::string startupMap;
     uint64_t localizationGeneration = 0;
     std::string loadingMap; // announced, loads after this frame is drawn
     bool loadingFrameDrawn = false;
@@ -84,6 +87,13 @@ void EngineSetPlayerClass(EngineApp& app, const std::string& className);
 
 // Stores the process command line (see command_line.h). Call before EngineStart.
 void EngineSetCommandLine(int argc, const char* const* argv);
+
+// Default startup map for EngineStart. kes_add_game calls this from a generated
+// source file with the StartupMap of the game's .kproject.
+void EngineSetProjectStartupMap(const char* mapName);
+// Window title, user data folder (<company>/<name>) and build version. Set the same
+// way from the Name, Company and Version of the .kproject; null or empty keeps the default.
+void EngineSetProjectInfo(const char* name, const char* company, const char* version);
 
 // Mouse / cursor
 void EngineSetInputMode(EngineApp& app, InputMode mode);

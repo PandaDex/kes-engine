@@ -3,6 +3,7 @@
 #include <string_view>
 #include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_stdinc.h>
+#include "build_info.h"
 #include "engine_configuration.h"
 
 namespace
@@ -153,7 +154,7 @@ std::string ResolveAssetPath(const char* path)
 
 std::filesystem::path GetUserDataDirectory()
 {
-    if (char* pref = SDL_GetPrefPath(ENGINE_COMPANY_NAME, ENGINE_PROJECT_NAME))
+    if (char* pref = SDL_GetPrefPath(BuildInfoCompany(), BuildInfoName()))
     {
         const std::string utf8 = pref;
         SDL_free(pref);

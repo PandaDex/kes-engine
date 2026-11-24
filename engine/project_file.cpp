@@ -52,6 +52,10 @@ bool LoadProjectFile(const char* path, ProjectFileData& outProject, std::string*
 
     if (const std::string* value = FindTextBlockProperty(*projectBlock, "Name"))
         outProject.name = UnquoteProjectValue(*value);
+    if (const std::string* value = FindTextBlockProperty(*projectBlock, "Company"))
+        outProject.company = UnquoteProjectValue(*value);
+    if (const std::string* value = FindTextBlockProperty(*projectBlock, "Version"))
+        outProject.version = UnquoteProjectValue(*value);
     if (const std::string* value = FindTextBlockProperty(*projectBlock, "AssetRoot"))
         outProject.assetRoot = UnquoteProjectValue(*value);
     if (const std::string* value = FindTextBlockProperty(*projectBlock, "StartupMap"))
@@ -83,6 +87,10 @@ bool SaveProjectFile(const char* path, const ProjectFileData& project, std::stri
 
     file << "Project\n{\n";
     file << "    Name=" << QuoteProjectValue(project.name) << "\n";
+    if (!project.company.empty())
+        file << "    Company=" << QuoteProjectValue(project.company) << "\n";
+    if (!project.version.empty())
+        file << "    Version=" << QuoteProjectValue(project.version) << "\n";
     file << "    AssetRoot=" << QuoteProjectValue(project.assetRoot) << "\n";
     file << "    StartupMap=" << QuoteProjectValue(project.startupMap) << "\n";
     file << "}\n";

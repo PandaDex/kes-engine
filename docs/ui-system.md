@@ -81,6 +81,7 @@ ui.CloseDocument(menu);
 | `RegisterAction(name, callback)` / `UnregisterAction(name)` | C++ handlers for `on<event>` attributes |
 | `LoadFontFace(path, fallback)` | load more `.ttf`/`.otf` fonts |
 | `WantsTextInput()` | a text field has keyboard focus |
+| `SetGamepadTextFieldCallback(callback)` | called when a text field is focused or activated with the gamepad (see below) |
 | `IsPointerOverUi()` | the cursor is over a UI element (not an empty document body) |
 | `SetDebuggerVisible(bool)` | RmlUi's element inspector (debug builds) |
 | `GetContext()` | the `Rml::Context`, for data models, element queries and anything else in the Rml API |
@@ -172,6 +173,24 @@ Focusable elements need `tab-index: auto`, and arrow/gamepad navigation needs `n
 body.input-gamepad .pad-only { display: inline; }
 body.input-gamepad .kbm-only { display: none; }
 ```
+
+**Text fields and the gamepad:** a gamepad can't type, so the UI reports text fields to game code, e.g. to open Steam's or a console's on-screen keyboard. The callback fires while the gamepad is the active device when navigation moves focus onto a text field (`Focused`) and when `UI_Accept` is pressed on one (`Activated`). With a callback set, `Activated` replaces the Enter key the field would otherwise get. Text fields are `<textarea>` and any `<input>` that isn't `radio`, `checkbox`, `range`, `submit` or `button` (RmlUi treats `number`, `email`... as text).
+
+```cpp
+ui.SetGamepadTextFieldCallback([&](const UiTextFieldRequest& request) {
+    if (request.trigger != UiTextFieldTrigger::Activated)
+        return;
+    // request.kind: Text, Password, Number or Multiline. Also value, placeholder, maxLength (-1 = none)
+    // and the field's border box (x, y, width, height) in context pixels.
+    Rml::ObserverPtr<Rml::Element> field = request.element->GetObserverPtr();
+    ShowOnScreenKeyboard(request.value, [field](const std::string& text) {
+        if (auto* control = rmlui_dynamic_cast<Rml::ElementFormControl*>(field.get()))
+            control->SetValue(text);   // fires "change", updates data bindings
+    });
+});
+```
+
+`request.element` is only valid during the call, so keep an `ObserverPtr` for results that arrive later. Focus restored automatically (`AutoFocus`) doesn't fire the callback.
 
 While the gamepad navigates, the mouse cursor is hidden (`HideCursorWithGamepad`) and hover styles are cleared. Moving the mouse brings the cursor back.
 

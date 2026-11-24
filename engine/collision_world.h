@@ -121,6 +121,7 @@ public:
     bool Remove(ColliderHandle handle);
     bool Exists(ColliderHandle handle) const;
     void SetActive(ColliderHandle handle, bool active);
+    bool GetMotion(ColliderHandle handle, ColliderMotion& outMotion) const;
 
     // Teleports the body, stopping it if it is dynamic.
     void SetPosition(ColliderHandle handle, const Vector3& position);

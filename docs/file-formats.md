@@ -64,6 +64,8 @@ Project files are text-block files with a single `Project` block.
 Current fields:
 
 - `Name`
+- `Company`
+- `Version`
 - `AssetRoot`
 - `StartupMap`
 
@@ -73,14 +75,20 @@ Example:
 Project
 {
     Name = "KES"
+    Company = "KES"
+    Version = "1.0.0.0"
     AssetRoot = "assets"
     StartupMap = "startup.fmapc"
 }
 ```
 
+`Name`, `Company` and `Version` are baked into the game by `kes_add_game`, like `StartupMap`. `Name` is the window title and the package name, `Name` and `Company` pick the player's data folder (`%APPDATA%\<Company>\<Name>\` on Windows), and `Version` (four numbers) is the build and package version. They default to `kes`, `KES` and `1.0.0.0`; the CMake variables `KES_PROJECT_NAME`, `KES_PROJECT_PUBLISHER` and `KES_PROJECT_VERSION` override them for one build folder.
+
 `AssetRoot` is the root scanned by the editor and used for content-relative paths. Project content uses fixed folders under it: `maps/`, `materials/` and `textures/`. The Forge map editor opens the `.kproject` to find them.
 
 `StartupMap` is stored as a project-relative asset path. In practice you should treat it as pointing into the map set under the asset root.
+
+`StartupMap` is also the map the game opens on start: `kes_add_game` reads it and bakes it into the exe (see [Tools and Pipeline](tools-and-pipeline.md)). It names the compiled map relative to the content folder, e.g. `maps/startup.fmapc`. Leave it empty (`StartupMap=""`) to use the engine default `ENGINE_STARTUP_MAP`.
 
 ## Maps: `.fmap` and `.fmapc`
 

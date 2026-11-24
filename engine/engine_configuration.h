@@ -1,13 +1,5 @@
 #pragma once
 
-#ifndef ENGINE_PROJECT_NAME
-#define ENGINE_PROJECT_NAME "kes"
-#endif
-
-#ifndef ENGINE_COMPANY_NAME
-#define ENGINE_COMPANY_NAME "KES"
-#endif
-
 #ifndef ENGINE_CONTENT_DIRECTORY
 #define ENGINE_CONTENT_DIRECTORY "content"
 #endif

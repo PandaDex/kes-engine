@@ -20,6 +20,36 @@ struct InputState;
 using UiActionCallback = std::function<void(Rml::Event& event, const std::string& args)>;
 using UiSoundCallback = std::function<void(const std::string& path)>;
 
+enum class UiTextFieldKind
+{
+    Text,
+    Password,
+    Number,
+    Multiline
+};
+
+enum class UiTextFieldTrigger
+{
+    Focused,    // gamepad navigation moved focus onto the field
+    Activated   // UI_Accept pressed on the focused field
+};
+
+// element is only valid during the callback; keep element->GetObserverPtr() to write a result back later
+// (e.g. Rml::ElementFormControl::SetValue after a platform on-screen keyboard closes).
+struct UiTextFieldRequest
+{
+    Rml::Element* element = nullptr;
+    UiTextFieldKind kind = UiTextFieldKind::Text;
+    UiTextFieldTrigger trigger = UiTextFieldTrigger::Activated;
+    std::string value;
+    std::string placeholder;
+    int maxLength = -1;
+    // Border box in context pixels.
+    float x = 0.0f, y = 0.0f, width = 0.0f, height = 0.0f;
+};
+
+using UiTextFieldCallback = std::function<void(const UiTextFieldRequest& request)>;
+
 enum class UiInputDevice
 {
     Mouse,
@@ -101,6 +131,8 @@ public:
     void BeginFrame();
 
     void SetSoundCallback(UiSoundCallback callback);
+    // Fires when a text/password/number field or textarea is focused or activated with the gamepad.
+    void SetGamepadTextFieldCallback(UiTextFieldCallback callback);
     void SetViewportSize(int pixelWidth, int pixelHeight);
     void SetDensityScale(float scale);
 

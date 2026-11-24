@@ -4,6 +4,8 @@
 struct ProjectFileData
 {
     std::string name = "KES";
+    std::string company;
+    std::string version;
     std::string assetRoot = "assets";
     std::string startupMap = "maps/startup.fmapc";
 };

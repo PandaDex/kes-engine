@@ -40,9 +40,9 @@ endfunction()
 enable_testing()
 
 # Project settings 
-set(KES_PROJECT_NAME "kes" CACHE STRING "Game name: window title, package names")
-set(KES_PROJECT_VERSION "1.0.0.0" CACHE STRING "Game version (four numbers, required by GDK packages)")
-set(KES_PROJECT_PUBLISHER "KES" CACHE STRING "Publisher display name (GDK packages)")
+set(KES_PROJECT_NAME "" CACHE STRING "Overrides Name of the game's .kproject (window title, user data folder, package names)")
+set(KES_PROJECT_VERSION "" CACHE STRING "Overrides Version of the game's .kproject (four numbers, required by GDK packages)")
+set(KES_PROJECT_PUBLISHER "" CACHE STRING "Overrides Company of the game's .kproject (user data folder, GDK publisher name)")
 set(KES_PAK_ENCRYPTION_KEY "" CACHE STRING "64 hex chars to encrypt packaged .pak files (empty = no encryption). Generate with: pak-tool <src> <out.pak> --generate-key")
 if(KES_PAK_ENCRYPTION_KEY AND NOT KES_PAK_ENCRYPTION_KEY MATCHES "^[0-9a-fA-F]+$")
     message(FATAL_ERROR "KES: KES_PAK_ENCRYPTION_KEY must be hexadecimal.")
@@ -50,9 +50,6 @@ endif()
 string(LENGTH "${KES_PAK_ENCRYPTION_KEY}" _kes_key_length)
 if(KES_PAK_ENCRYPTION_KEY AND NOT _kes_key_length EQUAL 64)
     message(FATAL_ERROR "KES: KES_PAK_ENCRYPTION_KEY must be 64 hex characters (32 bytes).")
-endif()
-if(NOT KES_PROJECT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$")
-    message(FATAL_ERROR "KES: KES_PROJECT_VERSION must look like 1.0.0.0")
 endif()
 
 # Engine as a shared library (engine.dll / libengine.so). RmlUi and Tracy follow

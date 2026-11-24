@@ -21,6 +21,7 @@ endif()
 
 
 kes_add_game(game
+    PROJECT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/kes.kproject"
     CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content"
     CONFIG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/config"
     GDK_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/platform/gdk")

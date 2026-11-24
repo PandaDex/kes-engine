@@ -502,6 +502,7 @@ struct UiSystem::Impl
     bool confirmPressed = false;
     UiInputDevice device = UiInputDevice::Mouse;
     UiSoundCallback soundCallback;
+    UiTextFieldCallback textFieldCallback;
     std::unordered_set<std::string> loadedFonts;
 
     enum NavDirection
@@ -620,6 +621,7 @@ struct UiSystem::Impl
         return element->GetComputedValues().tab_index() == Rml::Style::TabIndex::Auto;
     }
 
+    // RmlUi treats every unknown input type (number, email...) as text.
     static bool IsTextField(const Rml::Element* element)
     {
         const Rml::String& tag = element->GetTagName();
@@ -628,7 +630,39 @@ struct UiSystem::Impl
         if (tag != "input")
             return false;
         const Rml::String type = element->GetAttribute<Rml::String>("type", "text");
-        return type == "text" || type == "password";
+        return type != "radio" && type != "checkbox" && type != "range" && type != "submit" && type != "button";
+    }
+
+    bool NotifyGamepadTextField(Rml::Element* element, UiTextFieldTrigger trigger)
+    {
+        if (!textFieldCallback || device != UiInputDevice::Gamepad || !element || !IsTextField(element))
+            return false;
+        UiTextFieldRequest request;
+        request.element = element;
+        request.trigger = trigger;
+        if (element->GetTagName() == "textarea")
+            request.kind = UiTextFieldKind::Multiline;
+        else
+        {
+            const Rml::String type = element->GetAttribute<Rml::String>("type", "text");
+            request.kind = type == "password" ? UiTextFieldKind::Password
+                : type == "number"            ? UiTextFieldKind::Number
+                                              : UiTextFieldKind::Text;
+        }
+        if (auto* control = rmlui_dynamic_cast<Rml::ElementFormControl*>(element))
+            request.value = control->GetValue();
+        request.placeholder = element->GetAttribute<Rml::String>("placeholder", "");
+        request.maxLength = element->GetAttribute<int>("maxlength", -1);
+        const Rml::Vector2f offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const Rml::Vector2f size = element->GetBox().GetSize(Rml::BoxArea::Border);
+        request.x = offset.x;
+        request.y = offset.y;
+        request.width = size.x;
+        request.height = size.y;
+        // Copy: the callback may replace itself.
+        UiTextFieldCallback callback = textFieldCallback;
+        callback(request);
+        return true;
     }
 
     static bool IsDescendantOf(const Rml::Element* element, const Rml::Element* ancestor)
@@ -722,15 +756,22 @@ struct UiSystem::Impl
         if (!focus)
         {
             if (FocusDefault(NavigationDocument()))
+            {
                 PlaySound(config.focusSound);
+                NotifyGamepadTextField(context->GetFocusElement(), UiTextFieldTrigger::Focused);
+            }
             return;
         }
 
         if (IsTextField(focus) && (direction == Nav_Up || direction == Nav_Down))
         {
             Rml::ElementDocument* document = focus->GetOwnerDocument();
-            if (FocusVisible(document->FindNextTabElement(focus, direction == Nav_Down, false)))
+            Rml::Element* next = document->FindNextTabElement(focus, direction == Nav_Down, false);
+            if (FocusVisible(next))
+            {
                 PlaySound(config.focusSound);
+                NotifyGamepadTextField(next, UiTextFieldTrigger::Focused);
+            }
             return;
         }
 
@@ -738,19 +779,29 @@ struct UiSystem::Impl
             Rml::Input::KI_UP, Rml::Input::KI_DOWN, Rml::Input::KI_LEFT, Rml::Input::KI_RIGHT
         };
         SendKey(kKeys[direction]);
-        if (context->GetFocusElement() != focus)
+        Rml::Element* newFocus = context->GetFocusElement();
+        if (newFocus != focus)
+        {
             PlaySound(config.focusSound);
+            NotifyGamepadTextField(newFocus, UiTextFieldTrigger::Focused);
+        }
     }
 
     void Accept()
     {
-        if (NavigableFocus())
+        if (Rml::Element* focus = NavigableFocus())
         {
-            if (!SendKey(Rml::Input::KI_RETURN))
+            // The callback replaces Enter, which would add a newline to a textarea or submit the form.
+            if (NotifyGamepadTextField(focus, UiTextFieldTrigger::Activated))
+                PlaySound(config.acceptSound);
+            else if (!SendKey(Rml::Input::KI_RETURN))
                 PlaySound(config.acceptSound);
         }
         else if (FocusDefault(NavigationDocument()))
+        {
             PlaySound(config.focusSound);
+            NotifyGamepadTextField(context->GetFocusElement(), UiTextFieldTrigger::Focused);
+        }
         else
             confirmPressed = true;
     }
@@ -1204,6 +1255,11 @@ void UiSystem::SetSoundCallback(UiSoundCallback callback)
     m_impl->soundCallback = std::move(callback);
 }
 
+void UiSystem::SetGamepadTextFieldCallback(UiTextFieldCallback callback)
+{
+    m_impl->textFieldCallback = std::move(callback);
+}
+
 void UiSystem::SetConfig(const UiConfig& config)
 {
     Impl& impl = *m_impl;
@@ -1389,17 +1445,7 @@ bool UiSystem::WantsTextInput() const
     if (!impl.initialized || !impl.inputEnabled)
         return false;
     Rml::Element* focus = impl.context->GetFocusElement();
-    if (!focus)
-        return false;
-    const Rml::String& tag = focus->GetTagName();
-    if (tag == "textarea")
-        return true;
-    if (tag == "input")
-    {
-        const Rml::String type = focus->GetAttribute<Rml::String>("type", "text");
-        return type == "text" || type == "password";
-    }
-    return false;
+    return focus && Impl::IsTextField(focus);
 }
 
 bool UiSystem::IsPointerOverUi() const

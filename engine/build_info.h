@@ -1,6 +1,9 @@
 #pragma once
 #include <string>
 
+void BuildInfoSetProject(const char* name, const char* company, const char* version);
+const char* BuildInfoName();
+const char* BuildInfoCompany();
 const char* BuildInfoVersion();
 const char* BuildInfoCommit();
 const char* BuildInfoConfig();

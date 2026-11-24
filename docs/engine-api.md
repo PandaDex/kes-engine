@@ -95,7 +95,7 @@ Typical usage:
 3. loads the map, then uploads its meshes, textures and pipelines to the GPU (`IRenderer::PreloadAssets`), so the first frames of the level don't stall on uploads
 4. calls `app.onMapLoaded(app, mapName, loaded)`
 
-The startup map calls both hooks from `EngineStart`, without the extra frame. Textures used by both the old and the new level stay on the GPU; the rest are released. `World::LoadMap` called directly from game code still loads at once (the GPU upload then happens before the next frame).
+The startup map calls both hooks from `EngineStart`, without the extra frame. It is `app.startupMap` if the game set it before `EngineStart`, else the `StartupMap` of the game's `.kproject` (baked in by `kes_add_game`), else `ENGINE_STARTUP_MAP`. Textures used by both the old and the new level stay on the GPU; the rest are released. `World::LoadMap` called directly from game code still loads at once (the GPU upload then happens before the next frame).
 
 ## Window and Cursor
 
@@ -168,7 +168,7 @@ Files, lowest priority first:
 
 1. `AppConfig` values set in game code
 2. `<exe>/config/DefaultGameSettings.ini`: project defaults, shipped with the game
-3. `<user config dir>/Config/GameSettings.ini`: the player's settings, from `SDL_GetPrefPath(KES_PROJECT_PUBLISHER, KES_PROJECT_NAME)` (`%APPDATA%\<publisher>\<name>\` on Windows)
+3. `<user config dir>/Config/GameSettings.ini`: the player's settings, from `SDL_GetPrefPath(Company, Name)` of the `.kproject` (`%APPDATA%\<Company>\<Name>\` on Windows)
 
 Bumping `GameSettings::kSettingsVersion` resets old player files to defaults.
 
@@ -561,10 +561,9 @@ The main compile-time defaults live in `engine_configuration.h`.
 
 Important macros:
 
-- `ENGINE_PROJECT_NAME`
 - `ENGINE_CONTENT_DIRECTORY`
 - `ENGINE_PAK_ENCRYPTION_KEY_HEX`
-- `ENGINE_STARTUP_MAP`
+- `ENGINE_STARTUP_MAP` (fallback; the `.kproject` `StartupMap` and `app.startupMap` take precedence)
 - `ENGINE_ALLOW_DEBUG_MODE` (set by the CMake option `KES_DEBUG_TOOLS`)
 - `ENGINE_DEFAULT_PLAYER_CLASS_NAME`
 

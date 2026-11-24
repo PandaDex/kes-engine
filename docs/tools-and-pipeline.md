@@ -105,7 +105,7 @@ The defines are public on the engine target, so game code and tools can use them
 - x64 only
 - the engine calls `XGameRuntimeInitialize()` at startup (`engine/platform/platform_gdk.cpp`). If Gaming Services are missing or out of date, the player gets a message box and the game exits
 - `game/platform/gdk/MicrosoftGame.config.in` is filled in by CMake and copied next to the exe together with the logos, because the Gaming Runtime needs them even for loose development builds
-- identity settings: `KES_GDK_IDENTITY_NAME`, `KES_GDK_PUBLISHER`, `KES_GDK_MSA_APP_ID`, `KES_GDK_TITLE_ID` (placeholders work locally; set the Partner Center values before submission), plus `KES_PROJECT_NAME`, `KES_PROJECT_VERSION` and `KES_PROJECT_PUBLISHER`
+- identity settings: `KES_GDK_IDENTITY_NAME`, `KES_GDK_PUBLISHER`, `KES_GDK_MSA_APP_ID`, `KES_GDK_TITLE_ID` (placeholders work locally; set the Partner Center values before submission), plus `Name`, `Version` and `Company` from the game's `.kproject`
 - default renderers: `KES_RENDERERS_GDK = "d3d11;vulkan"`
 - Visual Studio presets: `gdk-x64-debug`, `gdk-x64-release`
 
@@ -343,10 +343,13 @@ Development builds don't use paks: content, engine assets, shaders and `config/`
 
 ```cmake
 kes_add_game(game
+    PROJECT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/kes.kproject"
     CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content"
     CONFIG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/config"
     GDK_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/platform/gdk")
 ```
+
+`PROJECT_FILE` is optional; without it the only `*.kproject` next to `CONTENT_DIR` is used, if there is one. Its `Name`, `Company`, `Version` and `StartupMap` are read at configure time and compiled into the exe (`<target>_project.cpp` in the build folder, which calls `EngineSetProjectInfo` and `EngineSetProjectStartupMap`). Non-empty `KES_PROJECT_NAME`, `KES_PROJECT_PUBLISHER` and `KES_PROJECT_VERSION` cache variables override the file. Editing the `.kproject` re-runs CMake on the next build. With no project file or an empty `StartupMap`, the engine falls back to `ENGINE_STARTUP_MAP`.
 
 Extra executables (samples, test games) use the same call with two more options. `EXTRA_CONTENT_DIRS` copies other content folders first, so they can reuse another game's maps (development layout only, and their shaders aren't compiled). `NO_PACKAGE` skips the `kes_package` target, which only one game per build can own. See `samples/ui/CMakeLists.txt`.
 
