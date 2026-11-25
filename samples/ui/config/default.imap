@@ -41,7 +41,7 @@
 
 "InputAction_MoveDown": {
 	"NativeKeys": [
-		{"key": "Keyboard_Left Ctrl", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_LeftCtrl", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
 		{"key": "Gamepad_LeftBumper", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
 	],
 	"ValueType": "boolean",
@@ -91,7 +91,7 @@
 	"NativeKeys": [
 		{"key": "Gamepad_Face_Bottom", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
 		{"key": "Keyboard_Return", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
-		{"key": "Keyboard_Keypad Enter", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
+		{"key": "Keyboard_KeypadEnter", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"},
 		{"key": "Keyboard_Space", "modifiers": [], "bPlayerAssignable": "false", "AssignableKey": "none"}
 	],
 	"ValueType": "boolean",

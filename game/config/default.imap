@@ -41,7 +41,7 @@
 
 "InputAction_Sprint": {
 	"NativeKeys": [
-		{"key": "Keyboard_Left Shift", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Keyboard_LeftShift", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
 		{"key": "Gamepad_LeftStick", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"}
 	],
 	"ValueType": "boolean",
@@ -57,7 +57,7 @@
 
 "InputAction_MoveDown": {
 	"NativeKeys": [
-		{"key": "Keyboard_Left Ctrl", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
+		{"key": "Keyboard_LeftCtrl", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"},
 		{"key": "Gamepad_LeftBumper", "modifiers": [], "bPlayerAssignable": "true", "AssignableKey": "none"}
 	],
 	"ValueType": "boolean",

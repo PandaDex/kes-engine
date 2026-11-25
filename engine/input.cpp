@@ -182,18 +182,133 @@ namespace
         return value.empty() ? 0.0f : std::strtof(value.c_str(), nullptr);
     }
 
+    struct KeyboardKeyDef
+    {
+        const char* name;
+        SDL_Scancode scancode;
+    };
+
+    // Names that differ from SDL's scancode name with the spaces removed. Letters, digits and F keys use SDL's.
+    constexpr KeyboardKeyDef kKeyboardKeys[] = {
+        { "Return", SDL_SCANCODE_RETURN },
+        { "Escape", SDL_SCANCODE_ESCAPE },
+        { "Backspace", SDL_SCANCODE_BACKSPACE },
+        { "Tab", SDL_SCANCODE_TAB },
+        { "Space", SDL_SCANCODE_SPACE },
+        { "CapsLock", SDL_SCANCODE_CAPSLOCK },
+        { "PrintScreen", SDL_SCANCODE_PRINTSCREEN },
+        { "ScrollLock", SDL_SCANCODE_SCROLLLOCK },
+        { "Pause", SDL_SCANCODE_PAUSE },
+        { "Insert", SDL_SCANCODE_INSERT },
+        { "Home", SDL_SCANCODE_HOME },
+        { "PageUp", SDL_SCANCODE_PAGEUP },
+        { "Delete", SDL_SCANCODE_DELETE },
+        { "End", SDL_SCANCODE_END },
+        { "PageDown", SDL_SCANCODE_PAGEDOWN },
+        { "Right", SDL_SCANCODE_RIGHT },
+        { "Left", SDL_SCANCODE_LEFT },
+        { "Down", SDL_SCANCODE_DOWN },
+        { "Up", SDL_SCANCODE_UP },
+        { "NumLock", SDL_SCANCODE_NUMLOCKCLEAR },
+        { "Application", SDL_SCANCODE_APPLICATION },
+        { "Menu", SDL_SCANCODE_MENU },
+
+        { "LeftCtrl", SDL_SCANCODE_LCTRL },
+        { "LeftShift", SDL_SCANCODE_LSHIFT },
+        { "LeftAlt", SDL_SCANCODE_LALT },
+        { "LeftGUI", SDL_SCANCODE_LGUI },
+        { "RightCtrl", SDL_SCANCODE_RCTRL },
+        { "RightShift", SDL_SCANCODE_RSHIFT },
+        { "RightAlt", SDL_SCANCODE_RALT },
+        { "RightGUI", SDL_SCANCODE_RGUI },
+
+        { "Minus", SDL_SCANCODE_MINUS },
+        { "Equals", SDL_SCANCODE_EQUALS },
+        { "LeftBracket", SDL_SCANCODE_LEFTBRACKET },
+        { "RightBracket", SDL_SCANCODE_RIGHTBRACKET },
+        { "Backslash", SDL_SCANCODE_BACKSLASH },
+        { "NonUSHash", SDL_SCANCODE_NONUSHASH },
+        { "Semicolon", SDL_SCANCODE_SEMICOLON },
+        { "Apostrophe", SDL_SCANCODE_APOSTROPHE },
+        { "Grave", SDL_SCANCODE_GRAVE },
+        { "Comma", SDL_SCANCODE_COMMA },
+        { "Period", SDL_SCANCODE_PERIOD },
+        { "Slash", SDL_SCANCODE_SLASH },
+        { "NonUSBackslash", SDL_SCANCODE_NONUSBACKSLASH },
+
+        { "Keypad0", SDL_SCANCODE_KP_0 },
+        { "Keypad1", SDL_SCANCODE_KP_1 },
+        { "Keypad2", SDL_SCANCODE_KP_2 },
+        { "Keypad3", SDL_SCANCODE_KP_3 },
+        { "Keypad4", SDL_SCANCODE_KP_4 },
+        { "Keypad5", SDL_SCANCODE_KP_5 },
+        { "Keypad6", SDL_SCANCODE_KP_6 },
+        { "Keypad7", SDL_SCANCODE_KP_7 },
+        { "Keypad8", SDL_SCANCODE_KP_8 },
+        { "Keypad9", SDL_SCANCODE_KP_9 },
+        { "KeypadDivide", SDL_SCANCODE_KP_DIVIDE },
+        { "KeypadMultiply", SDL_SCANCODE_KP_MULTIPLY },
+        { "KeypadMinus", SDL_SCANCODE_KP_MINUS },
+        { "KeypadPlus", SDL_SCANCODE_KP_PLUS },
+        { "KeypadEnter", SDL_SCANCODE_KP_ENTER },
+        { "KeypadPeriod", SDL_SCANCODE_KP_PERIOD },
+        { "KeypadEquals", SDL_SCANCODE_KP_EQUALS },
+    };
+
+    std::string WithoutSpaces(const char* text)
+    {
+        std::string out;
+        for (const char* c = text; *c; ++c)
+        {
+            if (*c != ' ')
+                out += *c;
+        }
+        return out;
+    }
+
+    bool EqualsNoCase(const std::string& a, const std::string& b)
+    {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+                return false;
+        }
+        return true;
+    }
+
+    // "Keyboard_LeftShift"; old names with SDL's spaces ("Keyboard_Left Shift") still parse.
     SDL_Scancode KeyboardNameToScancode(const std::string& key)
     {
-        auto pos = key.find('_');
-        std::string clean = (pos != std::string::npos)
-            ? key.substr(pos + 1)
-            : key;
+        const size_t pos = key.find('_');
+        const std::string clean = WithoutSpaces((pos != std::string::npos ? key.substr(pos + 1) : key).c_str());
 
-        auto res = SDL_GetScancodeFromName(clean.c_str());
-        if (res != SDL_SCANCODE_UNKNOWN) return res;
+        for (const KeyboardKeyDef& def : kKeyboardKeys)
+        {
+            if (EqualsNoCase(clean, def.name))
+                return def.scancode;
+        }
+        for (int sc = 0; sc < SDL_SCANCODE_COUNT; ++sc)
+        {
+            const char* name = SDL_GetScancodeName(static_cast<SDL_Scancode>(sc));
+            if (name && name[0] && EqualsNoCase(clean, WithoutSpaces(name)))
+                return static_cast<SDL_Scancode>(sc);
+        }
 
-        EngineLogf("Unknown Key %s", clean.c_str());
+        EngineLogf("Unknown Key %s", key.c_str());
         return SDL_SCANCODE_UNKNOWN;
+    }
+
+    std::string KeyboardScancodeToName(SDL_Scancode scancode)
+    {
+        for (const KeyboardKeyDef& def : kKeyboardKeys)
+        {
+            if (def.scancode == scancode)
+                return std::string("Keyboard_") + def.name;
+        }
+        const char* name = SDL_GetScancodeName(scancode);
+        return name && name[0] ? std::string("Keyboard_") + WithoutSpaces(name) : std::string();
     }
 
     struct GamepadKeyDef
@@ -306,6 +421,11 @@ namespace
 
         EngineLogf("Unknown input key %s", key.c_str());
         return false;
+    }
+
+    std::string CanonicalKeyName(const InputBinding& parsed, const std::string& key)
+    {
+        return parsed.keyKind == InputNativeKeyKind::Keyboard ? KeyboardScancodeToName(parsed.keyboardKey) : key;
     }
 
     InputActionValueType ValueTypeFromString(const std::string& value)
@@ -510,8 +630,8 @@ namespace
                     return false;
                 if (NativeKeyFromName(key, binding))
                 {
-                    binding.key = key;
-                    binding.defaultKey = key;
+                    binding.key = CanonicalKeyName(binding, key);
+                    binding.defaultKey = binding.key;
                 }
             }
             else if (field == "modifiers")
@@ -589,7 +709,7 @@ namespace
         binding.gamepadButton = parsed.gamepadButton;
         binding.gamepadAxis = parsed.gamepadAxis;
         binding.mouseButton = parsed.mouseButton;
-        binding.key = keyName;
+        binding.key = CanonicalKeyName(parsed, keyName);
         return true;
     }
 
@@ -892,11 +1012,7 @@ namespace
         {
         case SDL_EVENT_KEY_DOWN:
             if (keyboardMouse && !e.key.repeat)
-            {
-                const char* name = SDL_GetScancodeName(e.key.scancode);
-                if (name && name[0])
-                    key = std::string("Keyboard_") + name;
-            }
+                key = KeyboardScancodeToName(e.key.scancode);
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             for (const MouseKeyDef& def : kMouseKeys)

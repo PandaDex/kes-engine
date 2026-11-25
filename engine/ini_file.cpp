@@ -253,6 +253,18 @@ void IniFile::SetBool(std::string_view section, std::string_view key, bool value
     SetString(section, key, value ? "True" : "False");
 }
 
+std::vector<std::string> IniFile::GetKeys(std::string_view sectionName) const
+{
+    std::vector<std::string> keys;
+    if (const Section* section = FindSection(sectionName))
+    {
+        keys.reserve(section->entries.size());
+        for (const Entry& entry : section->entries)
+            keys.push_back(entry.key);
+    }
+    return keys;
+}
+
 void IniFile::RemoveKey(std::string_view sectionName, std::string_view key)
 {
     Section* section = FindSection(sectionName);

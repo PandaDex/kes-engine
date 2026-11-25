@@ -195,7 +195,7 @@ AudioVoiceId AudioSystem::AddVoice(AudioVoice voice)
         nextVoiceId = 1;
     voice.id = id;
     voice.playing = true;
-    if (voice.clip && voice.clip->streamed)
+    if (!voice.isStream && voice.clip && voice.clip->streamed)
     {
         for (std::vector<float>& block : voice.blocks)
             block.resize(static_cast<size_t>(kQoaFrameLength) * static_cast<size_t>(voice.clip->channels));
@@ -278,6 +278,100 @@ AudioVoiceId AudioSystem::Play3D(const Vector3& location, float attenuation, con
     voice.bus = bus;
     voice.ignoresPause = bus == AudioBus::Ui;
     return AddVoice(std::move(voice));
+}
+
+AudioVoiceId AudioSystem::PlayStream(const AudioStreamDesc& desc)
+{
+    if (!stream || !mutex || desc.channels < 1 || desc.channels > 2 || desc.sampleRate <= 0)
+        return 0;
+
+    AudioVoice voice = {};
+    voice.isStream = true;
+    voice.loop = true;   // never evicted for a louder one-shot
+    voice.volume = desc.volume;
+    voice.bus = desc.bus;
+    voice.spatial = desc.spatial;
+    voice.position = desc.position;
+    voice.attenuation = desc.attenuation;
+
+    AudioPcmQueue& pcm = voice.pcm;
+    const auto toFrames = [&](float seconds)
+    { return static_cast<uint64_t>((std::max)(seconds, 0.0f) * static_cast<float>(desc.sampleRate)); };
+    pcm.channels = desc.channels;
+    pcm.sampleRate = desc.sampleRate;
+    pcm.ringFrames = (std::max)(toFrames(desc.bufferSeconds), uint64_t(256));
+    pcm.prebufferFrames = (std::min)(toFrames(desc.prebufferSeconds), pcm.ringFrames / 2);
+    pcm.maxLatencyFrames = (std::clamp)(toFrames(desc.maxLatencySeconds), pcm.prebufferFrames + 2, pcm.ringFrames);
+    pcm.ring.assign(static_cast<size_t>(pcm.ringFrames) * static_cast<size_t>(desc.channels), 0.0f);
+    return AddVoice(std::move(voice));
+}
+
+namespace
+{
+    float SampleToFloat(int16_t sample) { return static_cast<float>(sample) * (1.0f / 32768.0f); }
+    float SampleToFloat(float sample) { return sample; }
+}
+
+template<typename T>
+int AudioSystem::QueueStream(AudioVoiceId id, const T* samples, int frameCount)
+{
+    if (!mutex || !samples || frameCount <= 0)
+        return 0;
+
+    SDL_LockMutex(mutex);
+    AudioVoice* voice = FindVoice(id);
+    if (!voice || !voice->isStream || !voice->playing)
+    {
+        SDL_UnlockMutex(mutex);
+        return 0;
+    }
+
+    AudioPcmQueue& pcm = voice->pcm;
+    const uint64_t count = (std::min)(static_cast<uint64_t>(frameCount), pcm.ringFrames);
+    const size_t channels = static_cast<size_t>(pcm.channels);
+    samples += static_cast<size_t>(static_cast<uint64_t>(frameCount) - count) * channels;
+    // Full ring: the oldest audio makes room, the reader skips past it.
+    if (pcm.writeFrame + count > pcm.ringFrames)
+    {
+        const double oldestKept = static_cast<double>(pcm.writeFrame + count - pcm.ringFrames);
+        pcm.readFrame = (std::max)(pcm.readFrame, oldestKept);
+    }
+
+    for (uint64_t i = 0; i < count; ++i)
+    {
+        float* out = &pcm.ring[static_cast<size_t>((pcm.writeFrame + i) % pcm.ringFrames) * channels];
+        for (size_t c = 0; c < channels; ++c)
+            out[c] = SampleToFloat(samples[static_cast<size_t>(i) * channels + c]);
+    }
+    pcm.writeFrame += count;
+    SDL_UnlockMutex(mutex);
+    return static_cast<int>(count);
+}
+
+int AudioSystem::QueueStreamSamples(AudioVoiceId id, const int16_t* samples, int frameCount)
+{
+    return QueueStream(id, samples, frameCount);
+}
+
+int AudioSystem::QueueStreamSamples(AudioVoiceId id, const float* samples, int frameCount)
+{
+    return QueueStream(id, samples, frameCount);
+}
+
+int AudioSystem::GetStreamQueuedFrames(AudioVoiceId id) const
+{
+    if (!mutex)
+        return 0;
+    SDL_LockMutex(mutex);
+    const AudioVoice* voice = FindVoice(id);
+    int queued = 0;
+    if (voice && voice->isStream)
+    {
+        const double available = static_cast<double>(voice->pcm.writeFrame) - voice->pcm.readFrame;
+        queued = static_cast<int>((std::max)(available, 0.0));
+    }
+    SDL_UnlockMutex(mutex);
+    return queued;
 }
 
 AudioVoiceId AudioSystem::PlayUi(const char* soundFile, float volume)
@@ -484,9 +578,83 @@ bool AudioSystem::ReadFrame(AudioVoice& voice, int frame, float& left, float& ri
     return true;
 }
 
+double AudioSystem::GetVoiceStep(const AudioVoice& voice) const
+{
+    const int rate = voice.isStream ? voice.pcm.sampleRate : voice.clip->sampleRate;
+    return (std::max)(voice.pitch, 0.01f) * static_cast<double>(rate) / deviceSpec.freq;
+}
+
+// Consumes stream audio at playback speed without mixing it (inaudible or
+// culled), so it stays in sync with what was queued.
+void AudioSystem::AdvanceStream(AudioVoice& voice, double frames)
+{
+    AudioPcmQueue& pcm = voice.pcm;
+    const double end = static_cast<double>(pcm.writeFrame);
+    if (pcm.buffering)
+    {
+        if (end - pcm.readFrame < static_cast<double>(pcm.prebufferFrames) + 2.0)
+            return;
+        pcm.buffering = false;
+    }
+    pcm.readFrame += frames;
+    if (pcm.readFrame + 1.0 >= end)
+    {
+        pcm.readFrame = (std::min)(pcm.readFrame, end);
+        pcm.buffering = true;
+    }
+}
+
+void AudioSystem::MixStreamVoice(AudioVoice& voice, const float targetGains[2], float* outSamples, int frameCount)
+{
+    AudioPcmQueue& pcm = voice.pcm;
+    const double end = static_cast<double>(pcm.writeFrame);
+    if (pcm.buffering && end - pcm.readFrame >= static_cast<double>(pcm.prebufferFrames) + 2.0)
+        pcm.buffering = false;
+    // Too far behind the writer (clock drift, a burst after a stall): jump
+    // forward so the delay never keeps growing.
+    if (end - pcm.readFrame > static_cast<double>(pcm.maxLatencyFrames))
+        pcm.readFrame = end - static_cast<double>(pcm.prebufferFrames);
+
+    const float startLeft = voice.gainApplied ? voice.appliedGain[0] : targetGains[0];
+    const float startRight = voice.gainApplied ? voice.appliedGain[1] : targetGains[1];
+    voice.appliedGain[0] = targetGains[0];
+    voice.appliedGain[1] = targetGains[1];
+    voice.gainApplied = true;
+    if (pcm.buffering)
+        return;
+
+    const double step = GetVoiceStep(voice);
+    const float inverseCount = 1.0f / static_cast<float>(frameCount);
+    const size_t channels = static_cast<size_t>(pcm.channels);
+    for (int frame = 0; frame < frameCount; ++frame)
+    {
+        if (pcm.readFrame + 1.0 >= end)
+        {
+            pcm.buffering = true;   // starved: silence until the prebuffer is back
+            break;
+        }
+        const uint64_t index = static_cast<uint64_t>(pcm.readFrame);
+        const float* a = &pcm.ring[static_cast<size_t>(index % pcm.ringFrames) * channels];
+        const float* b = &pcm.ring[static_cast<size_t>((index + 1) % pcm.ringFrames) * channels];
+        const float t = static_cast<float>(pcm.readFrame - static_cast<double>(index));
+        const float left = a[0] + (b[0] - a[0]) * t;
+        const float right = channels > 1 ? a[1] + (b[1] - a[1]) * t : left;
+
+        const float ramp = static_cast<float>(frame + 1) * inverseCount;
+        outSamples[static_cast<size_t>(frame) * 2 + 0] += left * (startLeft + (targetGains[0] - startLeft) * ramp);
+        outSamples[static_cast<size_t>(frame) * 2 + 1] += right * (startRight + (targetGains[1] - startRight) * ramp);
+        pcm.readFrame += step;
+    }
+}
+
 void AudioSystem::AdvanceVoice(AudioVoice& voice, double frames, float seconds)
 {
     (void)seconds;
+    if (voice.isStream)
+    {
+        AdvanceStream(voice, frames);
+        return;
+    }
     voice.samplePosition += frames;
     const double length = static_cast<double>(voice.clip->frameCount);
     if (voice.samplePosition >= length)
@@ -558,7 +726,7 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
     for (size_t i = 0; i < voices.size(); ++i)
     {
         AudioVoice& voice = voices[i];
-        if (!voice.playing || !voice.clip || voice.clip->frameCount <= 0)
+        if (!voice.playing || (!voice.isStream && (!voice.clip || voice.clip->frameCount <= 0)))
             continue;
         if (paused && !voice.ignoresPause)
             continue;
@@ -578,8 +746,7 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
             mixOrder.push_back(i);
         else
         {
-            const double step = (std::max)(voice.pitch, 0.01f) * static_cast<double>(voice.clip->sampleRate) / deviceSpec.freq;
-            AdvanceVoice(voice, step * frameCount, seconds);
+            AdvanceVoice(voice, GetVoiceStep(voice) * frameCount, seconds);
             voice.gainApplied = false;
         }
 
@@ -596,8 +763,7 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
         for (size_t i = kMaxMixedVoices; i < mixOrder.size(); ++i)
         {
             AudioVoice& voice = voices[mixOrder[i]];
-            const double step = (std::max)(voice.pitch, 0.01f) * static_cast<double>(voice.clip->sampleRate) / deviceSpec.freq;
-            AdvanceVoice(voice, step * frameCount, seconds);
+            AdvanceVoice(voice, GetVoiceStep(voice) * frameCount, seconds);
             voice.gainApplied = false;
         }
         mixOrder.resize(kMaxMixedVoices);
@@ -605,7 +771,10 @@ void AudioSystem::MixAudio(float* outSamples, int frameCount)
     for (size_t index : mixOrder)
     {
         AudioVoice& voice = voices[index];
-        MixVoice(voice, &mixGains[index * 2], outSamples, frameCount);
+        if (voice.isStream)
+            MixStreamVoice(voice, &mixGains[index * 2], outSamples, frameCount);
+        else
+            MixVoice(voice, &mixGains[index * 2], outSamples, frameCount);
         if (voice.stopAfterFade && voice.fadeGain <= 0.0f)
             voice.playing = false;
     }

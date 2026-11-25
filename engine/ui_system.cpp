@@ -345,7 +345,7 @@ const char* const kUiDefaultActionMap = R"imap(
 "UI_Left": { "NativeKeys": [ {"key": "Gamepad_DPad_Left"}, {"key": "Keyboard_Left"} ], "ValueType": "boolean" }
 "UI_Right": { "NativeKeys": [ {"key": "Gamepad_DPad_Right"}, {"key": "Keyboard_Right"} ], "ValueType": "boolean" }
 "UI_Navigate": { "NativeKeys": [ {"key": "Gamepad_LeftAxis_2D"} ], "ValueType": "vector2" }
-"UI_Accept": { "NativeKeys": [ {"key": "Gamepad_Face_Bottom"}, {"key": "Keyboard_Return"}, {"key": "Keyboard_Keypad Enter"} ], "ValueType": "boolean" }
+"UI_Accept": { "NativeKeys": [ {"key": "Gamepad_Face_Bottom"}, {"key": "Keyboard_Return"}, {"key": "Keyboard_KeypadEnter"} ], "ValueType": "boolean" }
 "UI_Back": { "NativeKeys": [ {"key": "Gamepad_Face_Right"}, {"key": "Gamepad_Special_Right"}, {"key": "Keyboard_Escape"} ], "ValueType": "boolean" }
 "UI_PrevTab": { "NativeKeys": [ {"key": "Gamepad_LeftBumper"} ], "ValueType": "boolean" }
 "UI_NextTab": { "NativeKeys": [ {"key": "Gamepad_RightBumper"} ], "ValueType": "boolean" }

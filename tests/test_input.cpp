@@ -129,6 +129,32 @@ TEST_CASE("input: a rebound action follows its new key")
     CHECK(InputGetBindings(input, "Jump")[0].key == "Keyboard_Space");
 }
 
+TEST_CASE("input: keyboard key names have no spaces")
+{
+    InputState input;
+    REQUIRE(InputAddDefaultActions(input, kRebindMap));
+    const std::pair<const char*, const char*> names[] = {
+        { "Keyboard_Keypad Enter", "Keyboard_KeypadEnter" },
+        { "Keyboard_left ctrl", "Keyboard_LeftCtrl" },
+        { "Keyboard_-", "Keyboard_Minus" },
+        { "Keyboard_Minus", "Keyboard_Minus" },
+        { "Keyboard_NumLock", "Keyboard_NumLock" },
+        { "Keyboard_F13", "Keyboard_F13" },
+        { "Keyboard_7", "Keyboard_7" },
+    };
+    for (const auto& [given, stored] : names)
+    {
+        REQUIRE(InputRebind(input, "Jump", 0, given));
+        CHECK(InputGetBindings(input, "Jump")[0].key == stored);
+    }
+
+    InputBeginKeyCapture(input, InputDevice::KeyboardMouse);
+    Frame(input, { KeyEvent(SDL_EVENT_KEY_DOWN, SDL_SCANCODE_RSHIFT) });
+    std::string captured;
+    REQUIRE(InputGetCapturedKey(input, captured));
+    CHECK(captured == "Keyboard_RightShift");
+}
+
 TEST_CASE("input: rebinding refuses keys that don't fit")
 {
     InputState input;
@@ -160,7 +186,7 @@ TEST_CASE("input: player bindings are saved and loaded")
     REQUIRE(InputAddDefaultActions(input, kRebindMap));
     REQUIRE(InputLoadBindingOverrides(input, path.c_str()));
     const std::vector<InputBindingInfo> bindings = InputGetBindings(input, "Jump");
-    CHECK(bindings[0].key == "Keyboard_Left Shift");
+    CHECK(bindings[0].key == "Keyboard_LeftShift"); // old spaced names are stored canonical
     CHECK(bindings[1].key == "Gamepad_RightTrigger");
     CHECK(InputGetBindings(input, "Fire")[0].key == "Mouse_Left");
 

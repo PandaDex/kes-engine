@@ -537,7 +537,7 @@ AddOnScreenDebugMessagef(42, 0.0f, DebugMessageType::Info, "Speed %.1f m/s", spe
 
 Raw state: `keys` / `previousKeys`, `mouseButtons` / `previousMouseButtons`, `mouseDeltaX/Y`, `mouseWheel`, and the connected gamepads (`gamepad` is the one used last; all are opened). `InputGetActiveDevice` says whether keyboard/mouse or a gamepad was used last, `InputGetGamepadType` which kind of pad.
 
-Bindable keys: `Keyboard_<SDL scancode name>` (`Keyboard_Left Shift`), `Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_Button4`, `Mouse_Button5`, `Mouse_WheelUp`, `Mouse_WheelDown`, `Mouse_2D_Axis`, and the `Gamepad_*` names (`Gamepad_Face_Bottom`, `Gamepad_LeftTrigger`, `Gamepad_LeftAxis_2D`, ...).
+Bindable keys: `Keyboard_<SDL scancode name without spaces>` (`Keyboard_LeftShift`, `Keyboard_KeypadEnter`, `Keyboard_Minus`), `Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_Button4`, `Mouse_Button5`, `Mouse_WheelUp`, `Mouse_WheelDown`, `Mouse_2D_Axis`, and the `Gamepad_*` names (`Gamepad_Face_Bottom`, `Gamepad_LeftTrigger`, `Gamepad_LeftAxis_2D`, ...).
 
 Actions (preferred over raw keys, since players can rebind them and they cover keyboard and gamepad):
 

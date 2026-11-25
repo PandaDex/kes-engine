@@ -24,6 +24,8 @@ public:
 
     bool Has(std::string_view section, std::string_view key) const;
     const std::string* Find(std::string_view section, std::string_view key) const;
+    // Keys of `section` in file order; empty when it doesn't exist.
+    std::vector<std::string> GetKeys(std::string_view section) const;
 
     std::string GetString(std::string_view section, std::string_view key, std::string_view fallback = {}) const;
     int GetInt(std::string_view section, std::string_view key, int fallback) const;
