@@ -68,6 +68,7 @@ Current fields:
 - `Version`
 - `AssetRoot`
 - `StartupMap`
+- `EntityDefPaths` (Forge only)
 
 Example:
 
@@ -89,6 +90,8 @@ Project
 `StartupMap` is stored as a project-relative asset path. In practice you should treat it as pointing into the map set under the asset root.
 
 `StartupMap` is also the map the game opens on start: `kes_add_game` reads it and bakes it into the exe (see [Tools and Pipeline](tools-and-pipeline.md)). It names the compiled map relative to the content folder, e.g. `maps/startup.fmapc`. Leave it empty (`StartupMap=""`) to use the engine default `ENGINE_STARTUP_MAP`.
+
+`EntityDefPaths` lists folders with the project's `.dec` entity definitions for Forge, relative to the `.kproject` folder and separated by `;`, e.g. `EntityDefPaths = "editor;tools/entities"`. Missing or empty means `editor`. Folders that don't exist are skipped. Their classes load after Forge's own `entities/` and the user's `user.dec`, so a project can add classes and override engine ones. The engine ignores this key. It can also be edited in Forge's File > Project Settings.
 
 ## Maps: `.fmap` and `.fmapc`
 

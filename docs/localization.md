@@ -160,9 +160,11 @@ In debug builds, F7 also re-reads the `.po` files.
 
 ## Localization Editor
 
-`tools/bin/kesLocalizationEditor.exe` (source in `tools/localizationEditor`) edits every
-language of a project at once. Open the project's `.kproject` (or drop any
-file or folder of the project on the window).
+The Localization tab in Forge (source in `tools/forgeMapEditor/src/modules/localization`)
+edits every language of a project at once. Open it with **Window > Localization**, or open
+any `.po` file of the project. It works on Forge's current project and reloads when you
+switch projects. Scan folders and the source language are under
+**Localization > Localization Settings**; **Add Key** is Ctrl+Shift+N.
 
 - **Table:** one row per key, one column per language. Pick the columns in
   **Languages** and drag the headers to reorder them, e.g. English, Polish,
@@ -184,7 +186,7 @@ file or folder of the project on the window).
   i.e. where the `.kproject` is, so content and C++ source alike:
   - C/C++ files: `Tr("#Key")`, `TrPlural("#Key", n)` and
     `LocalizationHasKey("#Key")` calls with a string literal key. Set more
-    function names in **Project > Project Settings**.
+    function names in **Localization > Localization Settings**.
   - `.rml`: text nodes and `<title>`s that are exactly `#Key`, the same rule the
     engine uses.
   - Other text files (maps, configs, scripts): `#Some.Key` with at least one
