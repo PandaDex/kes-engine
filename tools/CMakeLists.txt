@@ -6,6 +6,8 @@ set(KES_TOOLS_BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bin" CACHE PATH "Where built 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
 
 set(KES_ENGINE_BUILT_TOOLS pakTool modelImporter)
+# Ported into Forge as editor modules (forgeMapEditor/src/modules); no longer built on their own
+set(KES_RETIRED_TOOLS shaderGraph modelEditor inputMappingEditor localizationEditor)
 
 file(GLOB KES_TOOL_DIRS LIST_DIRECTORIES true "${CMAKE_CURRENT_SOURCE_DIR}/*")
 set(KES_TOOL_EXECUTABLES)
@@ -16,7 +18,7 @@ foreach(dir IN LISTS KES_TOOL_DIRS)
     endif()
     # Built by the engine build, they link the engine target
     get_filename_component(dir_name "${dir}" NAME)
-    if(dir_name IN_LIST KES_ENGINE_BUILT_TOOLS)
+    if(dir_name IN_LIST KES_ENGINE_BUILT_TOOLS OR dir_name IN_LIST KES_RETIRED_TOOLS)
         continue()
     endif()
     add_subdirectory("${dir}")
