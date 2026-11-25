@@ -989,9 +989,14 @@ void InputBeginFrame(InputState& input)
     }
 }
 
+bool InputCaptureEvent(InputState& input, const SDL_Event& e)
+{
+    return input.captureActive && CaptureKey(input, e);
+}
+
 void InputProcessEvent(InputState& input, const SDL_Event& e)
 {
-    if (input.captureActive && CaptureKey(input, e))
+    if (InputCaptureEvent(input, e))
         return;
 
     switch (e.type)

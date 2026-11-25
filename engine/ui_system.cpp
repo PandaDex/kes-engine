@@ -1332,8 +1332,8 @@ void UiSystem::Render()
         KES_ZONE(UI, "UI build draw list");
         impl.renderInterface.BeginFrame();
         impl.context->Render();
+        KES_ZONE_VALUE(UI, impl.renderInterface.drawList.commands.size());
     }
-    KES_ZONE_VALUE(UI, impl.renderInterface.drawList.commands.size());
     impl.renderer->RenderUi(impl.renderInterface.drawList);
 }
 
@@ -1406,6 +1406,10 @@ void UiSystem::ReloadDocuments()
     Rml::Factory::ClearStyleSheetCache();
     Rml::Factory::ClearTemplateCache();
 
+    Rml::Element* focus = impl.context->GetFocusElement();
+    Rml::ElementDocument* focusedDocument = focus ? focus->GetOwnerDocument() : nullptr;
+    Rml::ElementDocument* refocus = nullptr;
+
     std::vector<Impl::OpenDocument> previous = std::move(impl.documents);
     impl.documents.clear();
     for (Impl::OpenDocument& open : previous)
@@ -1416,10 +1420,29 @@ void UiSystem::ReloadDocuments()
             continue;
         }
         const bool visible = open.document->IsVisible();
+        const bool focused = open.document == focusedDocument;
         open.document->Close();
-        LoadDocument(open.path, visible);
+        // Shown without focus, so a reloaded HUD doesn't take it from a menu.
+        Rml::ElementDocument* document = LoadDocument(open.path, false);
+        if (document && visible)
+            document->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+        if (document && visible && focused)
+            refocus = document;
     }
+    if (refocus)
+        refocus->Focus();
     EngineLogf("[UI] Reloaded %zu document(s).", previous.size());
+}
+
+Rml::ElementDocument* UiSystem::GetDocument(const std::string& path) const
+{
+    const Impl& impl = *m_impl;
+    for (const Impl::OpenDocument& open : impl.documents)
+    {
+        if (open.path == path && impl.IsOpen(open.document))
+            return open.document;
+    }
+    return nullptr;
 }
 
 bool UiSystem::LoadFontFace(const std::string& path, bool fallback)

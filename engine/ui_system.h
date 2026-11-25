@@ -144,6 +144,9 @@ public:
     void CloseDocument(Rml::ElementDocument* document);
     void CloseAllDocuments();
     void ReloadDocuments();
+    // The open document loaded from `path` with LoadDocument, or null.
+    // ReloadDocuments replaces documents, so look them up again after it.
+    Rml::ElementDocument* GetDocument(const std::string& path) const;
 
     bool LoadFontFace(const std::string& path, bool fallback = false);
     void RegisterAction(const std::string& name, UiActionCallback callback);

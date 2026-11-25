@@ -490,9 +490,9 @@ bool EngineTick(EngineApp& app)
                 break;
             ++eventCount;
 
-            // UI first: a click on a button or typing into a text field
-            // doesn't also reach game input.
-            const bool uiConsumed = app.ui.ProcessEvent(event);
+            // A rebinding prompt's key capture first, then UI: a click on a
+            // button or typing into a text field doesn't also reach game input.
+            const bool uiConsumed = InputCaptureEvent(app.input, event) || app.ui.ProcessEvent(event);
             if (!uiConsumed)
                 InputProcessEvent(app.input, event);
 

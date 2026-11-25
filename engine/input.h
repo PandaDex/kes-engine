@@ -212,6 +212,9 @@ void InputBeginKeyCapture(InputState& input, InputDevice device);
 void InputCancelKeyCapture(InputState& input);
 bool InputIsCapturingKey(const InputState& input);
 bool InputGetCapturedKey(InputState& input, std::string& outKeyName);
+// True when the event was the press a key capture waited for. The engine
+// calls it before the UI sees events, so the press doesn't also click a menu.
+bool InputCaptureEvent(InputState& input, const SDL_Event& e);
 
 // Text for button prompts: keyboard keys follow the keyboard layout, gamepad
 // buttons the active pad (A / Cross, LB / L1 ...).

@@ -51,7 +51,7 @@
         "stripSources": true,
         "suffix": "-debug-pak",
         "symbols": "package",
-        "vcRuntime": true,
+        "vcRuntime": false,
         "version": ""
     },
     "platform": "Host"
