@@ -403,6 +403,129 @@ namespace render
         }
     }
 
+    // Bins the frame's point lights into the cluster grid. View space comes
+    // from the camera's own view matrix so it matches what the shader derives
+    // from uViewProj and the camera forward.
+    static void BuildClusters(FrameSetup& out, const CameraViewData& camera, const Scene& scene)
+    {
+        KES_ZONE_FN(RENDER);
+        out.clusterLights.clear();
+        out.clusterGrid.assign(static_cast<size_t>(kClusterGridUints), 0u);
+        const float nearZ = kCameraNearPlane;
+        const float farZ = kCameraFarPlane;
+        const float sliceScale = static_cast<float>(kClusterZ) / std::log(farZ / nearZ);
+        out.scene.clusterParams[0] = static_cast<float>(kClusterX);
+        out.scene.clusterParams[1] = static_cast<float>(kClusterY);
+        out.scene.clusterParams[2] = static_cast<float>(kClusterZ);
+        out.scene.clusterDepth[0] = nearZ;
+        out.scene.clusterDepth[1] = sliceScale;
+
+        const std::vector<ScenePointLight>& lights = scene.GetParticles().lights;
+        if (lights.empty())
+            return;
+
+        const float* v = camera.view;
+        const float xScale = camera.projection[0];
+        const float yScale = camera.projection[5];
+        auto slice = [&](float z)
+        { return std::clamp(static_cast<int>(std::floor(std::log(std::max(z, nearZ) / nearZ) * sliceScale)), 0, kClusterZ - 1); };
+        auto tile = [](float ndc, int count)
+        { return std::clamp(static_cast<int>(std::floor((ndc * 0.5f + 0.5f) * static_cast<float>(count))), 0, count - 1); };
+
+        struct Range
+        {
+            int x0, x1, y0, y1, z0, z1;
+        };
+        std::vector<Range> ranges;
+        ranges.reserve(std::min<size_t>(lights.size(), kMaxClusterLights));
+        for (const ScenePointLight& light : lights)
+        {
+            if (out.clusterLights.size() >= static_cast<size_t>(kMaxClusterLights))
+                break;
+            const Vector3 p(light.position[0], light.position[1], light.position[2]);
+            const float r = light.radius;
+            if (r <= 0.0f || !SphereInFrustum(out.frustum, p, r))
+                continue;
+            const float vx = p.x * v[0] + p.y * v[4] + p.z * v[8] + v[12];
+            const float vy = p.x * v[1] + p.y * v[5] + p.z * v[9] + v[13];
+            const float vz = p.x * v[2] + p.y * v[6] + p.z * v[10] + v[14];
+            const float zMin = std::max(vz - r, nearZ);
+            const float zMax = vz + r;
+            if (zMax < nearZ || zMin > farZ)
+                continue;
+
+            // x/z and y/z are monotonic in each variable for z > 0, so the
+            // box corners bound the projected sphere.
+            float nx0 = 1e30f, nx1 = -1e30f, ny0 = 1e30f, ny1 = -1e30f;
+            for (int iz = 0; iz < 2; ++iz)
+            {
+                const float z = iz ? zMax : zMin;
+                for (int i = 0; i < 2; ++i)
+                {
+                    const float x = (vx + (i ? r : -r)) * xScale / z;
+                    const float y = (vy + (i ? r : -r)) * yScale / z;
+                    nx0 = std::min(nx0, x);
+                    nx1 = std::max(nx1, x);
+                    ny0 = std::min(ny0, y);
+                    ny1 = std::max(ny1, y);
+                }
+            }
+            if (nx1 < -1.0f || nx0 > 1.0f || ny1 < -1.0f || ny0 > 1.0f)
+                continue;
+
+            ranges.push_back({ tile(nx0, kClusterX), tile(nx1, kClusterX), tile(ny0, kClusterY), tile(ny1, kClusterY), slice(zMin), slice(zMax) });
+            GPUClusterLight gpu = {};
+            gpu.positionRadius[0] = p.x;
+            gpu.positionRadius[1] = p.y;
+            gpu.positionRadius[2] = p.z;
+            gpu.positionRadius[3] = r;
+            for (int c = 0; c < 3; ++c)
+                gpu.color[c] = light.color[c] * 3.14159265f; // same radiance scale as regular lights
+            out.clusterLights.push_back(gpu);
+        }
+        out.scene.clusterParams[3] = static_cast<float>(out.clusterLights.size());
+        if (out.clusterLights.empty())
+            return;
+
+        uint32_t* grid = out.clusterGrid.data();
+        std::vector<uint32_t> counts(static_cast<size_t>(kClusterCount), 0u);
+        for (const Range& range : ranges)
+            for (int z = range.z0; z <= range.z1; ++z)
+                for (int y = range.y0; y <= range.y1; ++y)
+                    for (int x = range.x0; x <= range.x1; ++x)
+                    {
+                        uint32_t& count = counts[static_cast<size_t>((z * kClusterY + y) * kClusterX + x)];
+                        count = std::min(count + 1u, kMaxLightsPerCluster);
+                    }
+
+        uint32_t offset = 0;
+        for (int c = 0; c < kClusterCount; ++c)
+        {
+            uint32_t count = counts[static_cast<size_t>(c)];
+            if (offset + count > static_cast<uint32_t>(kMaxClusterIndices))
+                count = static_cast<uint32_t>(kMaxClusterIndices) - offset;
+            grid[c] = offset << 8; // count is filled in below
+            counts[static_cast<size_t>(c)] = count; // capacity
+            offset += count;
+        }
+
+        for (uint32_t li = 0; li < static_cast<uint32_t>(ranges.size()); ++li)
+        {
+            const Range& range = ranges[li];
+            for (int z = range.z0; z <= range.z1; ++z)
+                for (int y = range.y0; y <= range.y1; ++y)
+                    for (int x = range.x0; x <= range.x1; ++x)
+                    {
+                        const size_t c = static_cast<size_t>((z * kClusterY + y) * kClusterX + x);
+                        const uint32_t filled = grid[c] & 0xFFu;
+                        if (filled >= counts[c])
+                            continue;
+                        grid[kClusterCount + (grid[c] >> 8) + filled] = li;
+                        grid[c] += 1u;
+                    }
+        }
+    }
+
     void BuildFrameSetup(FrameSetup& out, const SceneState& state, const Camera& camera, const Scene& scene,
         float aspect, const GraphicsOptions& options)
     {
@@ -434,6 +557,7 @@ namespace render
         cb.cameraForward[0] = forward.x;
         cb.cameraForward[1] = forward.y;
         cb.cameraForward[2] = forward.z;
+        BuildClusters(out, cameraData, scene);
 
         // Lights: directional first, then visible local lights nearest first.
         std::vector<LightCandidate> candidates;
@@ -972,5 +1096,65 @@ namespace render
         out.params2[0] = std::min(post.autoExposureMin, post.autoExposureMax);
         out.params2[1] = std::max(post.autoExposureMin, post.autoExposureMax);
         return out;
+    }
+
+    void BuildParticleGeometry(const Scene& scene, const Camera& camera, ParticleGeometry& out)
+    {
+        KES_ZONE_FN(RENDER);
+        out.vertices.clear();
+        out.indices.clear();
+        out.draws.clear();
+        const SceneParticles& particles = scene.GetParticles();
+        if (particles.sprites.empty() && particles.ribbons.empty())
+            return;
+
+        ParticleCameraBasis basis;
+        basis.position = CameraGetPosition(camera);
+        basis.right = CameraGetRight(camera);
+        basis.up = CameraGetUp(camera);
+        basis.forward = CameraGetForward(camera);
+
+        thread_local std::vector<ParticleSpriteInstance> sprites;
+        for (const SceneParticleSprites& batch : particles.sprites)
+        {
+            ParticleDraw draw;
+            draw.material = batch.material;
+            draw.blend = batch.settings.blend;
+            draw.lit = batch.settings.lit;
+            draw.subImages = batch.settings.columns * batch.settings.rows > 1;
+            draw.sortOrder = batch.settings.sortOrder;
+            draw.firstIndex = static_cast<uint32_t>(out.indices.size());
+            draw.distanceSq = Vector3LengthSq(batch.center - basis.position);
+            sprites = batch.sprites;
+            BuildParticleSpriteGeometry(batch.settings, sprites, basis, out.vertices, out.indices);
+            draw.indexCount = static_cast<uint32_t>(out.indices.size()) - draw.firstIndex;
+            if (draw.indexCount > 0)
+                out.draws.push_back(draw);
+        }
+        for (const SceneParticleRibbon& batch : particles.ribbons)
+        {
+            ParticleDraw draw;
+            draw.material = batch.material;
+            draw.blend = batch.settings.blend;
+            draw.lit = batch.settings.lit;
+            draw.ribbon = true;
+            draw.sortOrder = batch.settings.sortOrder;
+            draw.firstIndex = static_cast<uint32_t>(out.indices.size());
+            draw.distanceSq = Vector3LengthSq(batch.center - basis.position);
+            BuildParticleRibbonGeometry(batch.settings, batch.points, basis, out.vertices, out.indices);
+            draw.indexCount = static_cast<uint32_t>(out.indices.size()) - draw.firstIndex;
+            if (draw.indexCount > 0)
+                out.draws.push_back(draw);
+        }
+        std::stable_sort(out.draws.begin(), out.draws.end(), [](const ParticleDraw& a, const ParticleDraw& b)
+            { return ParticleBatchDrawsBefore(a.sortOrder, a.blend, a.distanceSq, b.sortOrder, b.blend, b.distanceSq); });
+    }
+
+    void ParticleDrawFlags(const ParticleDraw& draw, float outSkinInfo[4])
+    {
+        outSkinInfo[0] = draw.ribbon ? 2.0f : (draw.subImages ? 0.0f : 1.0f);
+        outSkinInfo[1] = draw.lit ? 1.0f : 0.0f;
+        outSkinInfo[2] = draw.blend == ParticleBlend::Alpha ? 0.0f : 1.0f;
+        outSkinInfo[3] = draw.blend == ParticleBlend::Additive ? 1.0f : 0.0f;
     }
 }

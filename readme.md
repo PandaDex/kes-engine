@@ -1,7 +1,7 @@
 # KES Engine
 
 [![CI](https://github.com/PandaDex/kes-engine/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/PandaDex/kes-engine/actions/workflows/ci.yml) <br/>
-``` ⚠️ This engine isn't ready for any use. Very early work in progress. Things can and will be broken! ``` <br/>
+`⚠️ This engine isn't ready for any use. Very early work in progress. Things can and will be broken!` <br/>
 Lightweight game engine with modern forward rendering (per-pixel PBR, HDR with MSAA, cascaded and local shadow maps, image-based ambient light from the sky) built with modern C++ 20, SDL3 and Vulkan or DirectX 11 (selectable on Windows). Shaders are written once in Slang and compiled at build time for every renderer.
 <br />
 Documentation is located in `docs` directory.
@@ -25,13 +25,13 @@ Documentation is located in `docs` directory.
 - Fog
 - UI System (HTML/CSS via RmlUi: `.rml` documents, `.rcss` style sheets, data binding, no scripting; showcase sample in `samples/ui`)
 - Crash Reporting (Crashpad minidumps, optional upload with player consent; see `docs/crash-reporting.md`)
+- Particle system
+- Interface System
+- Packaging Tool
 
 ### Remaining to be implemented (random order):
 
 - LOD
-- Particle system
-- Interface System
-- Packaging Tool
 - Compression
 
 # Building

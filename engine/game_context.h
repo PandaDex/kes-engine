@@ -13,6 +13,7 @@ struct Camera;
 class Entity;
 class CameraEntity;
 class MapScriptSystem;
+class ParticleWorld;
 
 struct GameContext
 {
@@ -26,6 +27,7 @@ struct GameContext
     float fixedStepAlpha = 1.0f;
     EntityManager* entities = nullptr;
     MapScriptSystem* mapScript = nullptr;
+    ParticleWorld* particles = nullptr;
     InputState* input = nullptr;
     Camera* mainCamera = nullptr;
     bool animationDebugEnabled = false;

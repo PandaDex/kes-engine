@@ -1159,7 +1159,7 @@ namespace kes::vk
     static bool CreateDescriptorSetLayouts(Renderer& r)
     {
         // set 0 for mesh pipelines: SceneCB (fixed), ModelCB (dynamic), MaterialCB (dynamic)
-        VkDescriptorSetLayoutBinding bindings[3] = {};
+        VkDescriptorSetLayoutBinding bindings[5] = {};
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bindings[0].descriptorCount = 1;
@@ -1167,14 +1167,21 @@ namespace kes::vk
         bindings[1].binding = 1;
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         bindings[1].descriptorCount = 1;
-        bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT; // particle.slang reads uSkinInfo
         bindings[2].binding = 2;
         bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         bindings[2].descriptorCount = 1;
         bindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
         VkDescriptorSetLayoutCreateInfo uboLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-        uboLayoutInfo.bindingCount = 3;
+        for (uint32_t i = 3; i < 5; ++i)
+        {
+            bindings[i].binding = i; // cluster lights, cluster grid
+            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        uboLayoutInfo.bindingCount = 5;
         uboLayoutInfo.pBindings = bindings;
         VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &uboLayoutInfo, nullptr, &r.uboSetLayout), "vkCreateDescriptorSetLayout (ubo)", false);
 
@@ -1337,7 +1344,7 @@ namespace kes::vk
         poolSizes[3] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 32 };
         poolSizes[4] = { VK_DESCRIPTOR_TYPE_SAMPLER, 16 };
         poolSizes[5] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 }; // CMAA2
-        poolSizes[6] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32 }; // CMAA2, eye adaptation, tonemap
+        poolSizes[6] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32 + 2 * kMaxFramesInFlight }; // CMAA2, eye adaptation, tonemap, clusters
 
         VkDescriptorPoolCreateInfo poolInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
         poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -2180,6 +2187,95 @@ namespace kes::vk
         return program.pipelines[variant];
     }
 
+    // particle.slang: ParticleVertex input, depth test without writes, no culling, one pipeline per blend mode.
+    static VkPipeline GetParticlePipeline(Renderer& r, ParticleBlend blend)
+    {
+        GPUShaderProgram& program = r.particleProgram;
+        const uint32_t variant = static_cast<uint32_t>(blend);
+        if (!program.vertexShader || program.pipelines[variant] || (program.failedVariants & (1u << variant)) != 0)
+            return program.pipelines[variant];
+
+        VkPipelineShaderStageCreateInfo stages[2] = {};
+        stages[0] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = program.vertexShader;
+        stages[0].pName = "main";
+        stages[1] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = program.pixelShader;
+        stages[1].pName = "main";
+
+        VkVertexInputBindingDescription binding = { 0, sizeof(ParticleVertex), VK_VERTEX_INPUT_RATE_VERTEX };
+        const VkVertexInputAttributeDescription attrs[4] = {
+            { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(ParticleVertex, position) },
+            { 1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(ParticleVertex, uv) },
+            { 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(ParticleVertex, color) },
+            { 3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(ParticleVertex, normal) },
+        };
+        VkPipelineVertexInputStateCreateInfo vertexInput = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+        vertexInput.vertexBindingDescriptionCount = 1;
+        vertexInput.pVertexBindingDescriptions = &binding;
+        vertexInput.vertexAttributeDescriptionCount = 4;
+        vertexInput.pVertexAttributeDescriptions = attrs;
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo viewportState = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo rasterizer = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
+        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        rasterizer.lineWidth = 1.0f;
+        VkPipelineMultisampleStateCreateInfo multisample = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+        multisample.rasterizationSamples = r.msaaSamples;
+        VkPipelineDepthStencilStateCreateInfo depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_FALSE;
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+        VkPipelineColorBlendAttachmentState blendAttachment = {};
+        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        blendAttachment.blendEnable = VK_TRUE;
+        blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+        blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+        blendAttachment.srcColorBlendFactor = blend == ParticleBlend::Alpha ? VK_BLEND_FACTOR_SRC_ALPHA : VK_BLEND_FACTOR_ONE;
+        blendAttachment.dstColorBlendFactor = blend == ParticleBlend::Additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        blendAttachment.srcAlphaBlendFactor = blend == ParticleBlend::Additive ? VK_BLEND_FACTOR_ZERO : VK_BLEND_FACTOR_ONE;
+        blendAttachment.dstAlphaBlendFactor = blend == ParticleBlend::Additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        VkPipelineColorBlendStateCreateInfo colorBlend = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+        colorBlend.attachmentCount = 1;
+        colorBlend.pAttachments = &blendAttachment;
+
+        const VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+        VkPipelineDynamicStateCreateInfo dynamicState = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+        dynamicState.dynamicStateCount = 2;
+        dynamicState.pDynamicStates = dynamicStates;
+
+        VkGraphicsPipelineCreateInfo pipelineInfo = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+        pipelineInfo.stageCount = 2;
+        pipelineInfo.pStages = stages;
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamicState;
+        pipelineInfo.layout = r.meshPipelineLayout;
+        pipelineInfo.renderPass = r.sceneRenderPass;
+
+        if (vkCreateGraphicsPipelines(r.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &program.pipelines[variant]) != VK_SUCCESS)
+        {
+            EngineLogf("vkCreateGraphicsPipelines (particle blend %u) failed", variant);
+            program.pipelines[variant] = VK_NULL_HANDLE;
+            program.failedVariants |= 1u << variant;
+        }
+        return program.pipelines[variant];
+    }
+
     static void DestroyProgramPipelines(Renderer& r, GPUShaderProgram& program)
     {
         for (VkPipeline& pipeline : program.pipelines)
@@ -2214,6 +2310,8 @@ namespace kes::vk
                 return false;
         }
         r.shadowProgram.pipelines[0] = CreateMeshPipeline(r, r.shadowProgram, 0, true);
+        if (!CreateShaderProgram(r, kEngineShaderParticle, kEngineShaderParticle, r.particleProgram))
+            EngineLog("Particle shader unavailable; particles are not drawn.");
         return r.shadowProgram.pipelines[0] != VK_NULL_HANDLE;
     }
 
@@ -2921,6 +3019,8 @@ namespace kes::vk
         return true;
     }
 
+    static bool EnsureStreamBuffer(Renderer& r, GPUStreamBuffer& stream, VkDeviceSize requiredSize, VkBufferUsageFlags usage);
+
     static bool CreateConstantBuffers(Renderer& r)
     {
         for (FrameResources& frame : r.frames)
@@ -2943,6 +3043,26 @@ namespace kes::vk
             UpdateSceneAndSkyDescriptorBindings(r, frame);
             UpdateDynamicRingDescriptorBinding(r, frame.uboDescriptorSet, 1, frame.modelCBRing);
             UpdateDynamicRingDescriptorBinding(r, frame.uboDescriptorSet, 2, frame.materialCBRing);
+
+            const VkDeviceSize lightBytes = sizeof(render::GPUClusterLight) * render::kMaxClusterLights;
+            const VkDeviceSize gridBytes = sizeof(uint32_t) * render::kClusterGridUints;
+            if (!EnsureStreamBuffer(r, frame.clusterLights, lightBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) ||
+                !EnsureStreamBuffer(r, frame.clusterGrid, gridBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
+                return false;
+            std::memset(frame.clusterLights.mapped, 0, static_cast<size_t>(frame.clusterLights.size));
+            std::memset(frame.clusterGrid.mapped, 0, static_cast<size_t>(frame.clusterGrid.size));
+            VkDescriptorBufferInfo clusterInfos[2] = { { frame.clusterLights.buffer, 0, lightBytes }, { frame.clusterGrid.buffer, 0, gridBytes } };
+            VkWriteDescriptorSet clusterWrites[2] = {};
+            for (uint32_t i = 0; i < 2; ++i)
+            {
+                clusterWrites[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                clusterWrites[i].dstSet = frame.uboDescriptorSet;
+                clusterWrites[i].dstBinding = 3 + i;
+                clusterWrites[i].descriptorCount = 1;
+                clusterWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                clusterWrites[i].pBufferInfo = &clusterInfos[i];
+            }
+            vkUpdateDescriptorSets(r.device, 2, clusterWrites, 0, nullptr);
         }
         return true;
     }
@@ -3557,6 +3677,7 @@ namespace kes::vk
             // Every scene pipeline is tied to the render pass's sample count.
             DestroySceneTargets(r);
             DestroyProgramPipelines(r, r.meshDefaultProgram);
+            DestroyProgramPipelines(r, r.particleProgram);
             for (auto& [handle, program] : r.gpuShaders)
                 DestroyProgramPipelines(r, program);
             if (r.skyPipeline)
@@ -3881,6 +4002,9 @@ namespace kes::vk
             add(item, 1 + (CastsShadows(item.material) ? shadowViews : 0));
         for (const DrawItem& item : r.transparentDrawItems)
             add(item, 1);
+        const VkDeviceSize particleDraws = r.particleGeometry.draws.size();
+        modelBytes += particleDraws * AlignUp(ModelConstantsSize(0), frame.modelCBRing.alignment);
+        materialBytes += particleDraws * AlignUp(sizeof(render::MaterialCBData), frame.materialCBRing.alignment);
 
         if (EnsureDynamicRingCapacity(r, frame.modelCBRing, modelBytes, frame.uboDescriptorSet, 1) &&
             EnsureDynamicRingCapacity(r, frame.materialCBRing, materialBytes, frame.uboDescriptorSet, 2))
@@ -3889,6 +4013,60 @@ namespace kes::vk
         if (r.fatalError.empty())
             r.fatalError = "Out of memory for the per-draw constants";
         return false;
+    }
+
+    static bool UploadParticleGeometry(Renderer& r, const render::ParticleGeometry& geometry)
+    {
+        FrameResources& frame = r.frames[r.frameIndex];
+        const VkDeviceSize vertexBytes = geometry.vertices.size() * sizeof(ParticleVertex);
+        const VkDeviceSize indexBytes = geometry.indices.size() * sizeof(uint32_t);
+        if (!EnsureStreamBuffer(r, frame.particleVertices, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+            !EnsureStreamBuffer(r, frame.particleIndices, indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT))
+            return false;
+        std::memcpy(frame.particleVertices.mapped, geometry.vertices.data(), static_cast<size_t>(vertexBytes));
+        std::memcpy(frame.particleIndices.mapped, geometry.indices.data(), static_cast<size_t>(indexBytes));
+        return true;
+    }
+
+    // Inside the scene pass, after the transparent meshes; set 2 is already bound.
+    static void DrawParticles(Renderer& r, const AssetSystem& assets)
+    {
+        FrameResources& frame = r.frames[r.frameIndex];
+        const VkDeviceSize zero = 0;
+        vkCmdBindVertexBuffers(r.commandBuffer, 0, 1, &frame.particleVertices.buffer, &zero);
+        vkCmdBindIndexBuffer(r.commandBuffer, frame.particleIndices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        VkPipeline bound = VK_NULL_HANDLE;
+        for (const render::ParticleDraw& draw : r.particleGeometry.draws)
+        {
+            VkPipeline pipeline = GetParticlePipeline(r, draw.blend);
+            if (!pipeline)
+                continue;
+            if (pipeline != bound)
+            {
+                vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                bound = pipeline;
+            }
+            const MaterialData* material = assets.GetMaterial(draw.material);
+            const GPUMaterialSet& materialSet = GetMaterialSet(r, material);
+            if (!materialSet.set)
+                continue;
+            const VkDeviceSize materialOffset = WriteMaterialConstants(r, material, materialSet.textureFlags);
+
+            GPUDynamicRingBuffer& ring = frame.modelCBRing;
+            const VkDeviceSize modelOffset = AcquireDynamicSlot(ring, ModelConstantsSize(0));
+            uint8_t* dst = ring.mapped + modelOffset;
+            const Matrix4 identity = render::MatrixIdentity();
+            std::memcpy(dst + offsetof(render::ModelCBData, worldViewProj), r.frame.viewProj.m, sizeof(identity.m));
+            std::memcpy(dst + offsetof(render::ModelCBData, world), identity.m, sizeof(identity.m));
+            float skinInfo[4];
+            render::ParticleDrawFlags(draw, skinInfo);
+            std::memcpy(dst + offsetof(render::ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
+
+            const uint32_t dynamicOffsets[2] = { static_cast<uint32_t>(modelOffset), static_cast<uint32_t>(materialOffset) };
+            VkDescriptorSet sets[2] = { r.uboDescriptorSet, materialSet.set };
+            vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.meshPipelineLayout, 0, 2, sets, 2, dynamicOffsets);
+            vkCmdDrawIndexed(r.commandBuffer, draw.indexCount, 1, draw.firstIndex, 0, 0);
+        }
     }
 
     static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
@@ -3991,6 +4169,12 @@ namespace kes::vk
         if (!r.frameActive)
             return;
         std::memcpy(r.frames[r.frameIndex].sceneCBMapped, &r.frame.scene, sizeof(r.frame.scene));
+        if (!r.frame.clusterLights.empty())
+        {
+            FrameResources& frame = r.frames[r.frameIndex];
+            std::memcpy(frame.clusterLights.mapped, r.frame.clusterLights.data(), r.frame.clusterLights.size() * sizeof(render::GPUClusterLight));
+            std::memcpy(frame.clusterGrid.mapped, r.frame.clusterGrid.data(), r.frame.clusterGrid.size() * sizeof(uint32_t));
+        }
 
         // Draw lists (shared by shadow and scene passes).
         std::vector<DrawItem>& opaqueItems = r.opaqueDrawItems;
@@ -4000,10 +4184,10 @@ namespace kes::vk
         const Vector3 cameraPosition = CameraGetPosition(camera);
         {
             KES_ZONE(RENDER, "Build draw lists");
-            for (const SceneObject& obj : sceneObj.GetObjects())
+            const auto addObject = [&](const SceneObject& obj)
             {
                 if (!obj.active)
-                    continue;
+                    return;
                 DrawItem item = {};
                 item.object = &obj;
                 item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
@@ -4030,15 +4214,19 @@ namespace kes::vk
                         if (GPUMesh* mesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets))
                             addSections(mesh);
                     }
-                    continue;
+                    return;
                 }
                 GPUMesh* mesh = GetOrUploadMesh(r, obj.mesh, assets);
                 if (!mesh)
-                    continue;
+                    return;
                 render::TransformSphere(item.world, worldScale, mesh->boundsCenter, mesh->boundsRadius,
                     item.boundsCenter, item.boundsRadius);
                 addSections(mesh);
-            }
+            };
+            for (const SceneObject& obj : sceneObj.GetObjects())
+                addObject(obj);
+            for (const SceneObject& obj : sceneObj.GetParticles().meshObjects)
+                addObject(obj);
             // Opaque: group by material, near-to-far inside a group (early depth reject).
             std::sort(opaqueItems.begin(), opaqueItems.end(), [](const DrawItem& a, const DrawItem& b)
                 { return a.material != b.material ? a.material < b.material : a.distanceSq < b.distanceSq; });
@@ -4048,6 +4236,12 @@ namespace kes::vk
             KES_PROFILE_PLOT("Opaque draw items", static_cast<int64_t>(opaqueItems.size()));
             KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
         }
+
+        render::BuildParticleGeometry(sceneObj, camera, r.particleGeometry);
+        const bool drawParticles = !r.particleGeometry.draws.empty() && r.particleProgram.vertexShader &&
+            UploadParticleGeometry(r, r.particleGeometry);
+        if (!drawParticles)
+            r.particleGeometry.draws.clear();
 
         if (!ReserveDynamicConstants(r))
             return;
@@ -4089,6 +4283,12 @@ namespace kes::vk
             KES_VK_GPU_ZONE(r, "Transparent");
             for (const DrawItem& item : transparentItems)
                 DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, scene.wireframe, true);
+        }
+        if (drawParticles)
+        {
+            KES_ZONE(RENDER, "Draw particles");
+            KES_VK_GPU_ZONE(r, "Particles");
+            DrawParticles(r, assets);
         }
 
         vkCmdEndRenderPass(r.commandBuffer);
@@ -4480,6 +4680,10 @@ namespace kes::vk
         {
             DestroyStreamBuffer(r, frame.uiVertices);
             DestroyStreamBuffer(r, frame.uiIndices);
+            DestroyStreamBuffer(r, frame.clusterLights);
+            DestroyStreamBuffer(r, frame.clusterGrid);
+            DestroyStreamBuffer(r, frame.particleVertices);
+            DestroyStreamBuffer(r, frame.particleIndices);
             if (frame.inFlightFence)
             {
                 vkDestroyFence(r.device, frame.inFlightFence, nullptr);
@@ -4548,6 +4752,7 @@ namespace kes::vk
         }
         DestroyGPUShaderProgram(r, r.meshDefaultProgram);
         DestroyGPUShaderProgram(r, r.shadowProgram);
+        DestroyGPUShaderProgram(r, r.particleProgram);
 
         DestroyRenderTargets(r);
         DestroyPostAAPipelines(r);

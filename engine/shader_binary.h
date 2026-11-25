@@ -38,6 +38,7 @@ inline constexpr const char* kEngineShaderCmaa2Edges = "engine/shaders/cmaa2_edg
 inline constexpr const char* kEngineShaderCmaa2DispatchArgs = "engine/shaders/cmaa2_dispatch_args.slang";
 inline constexpr const char* kEngineShaderCmaa2ProcessCandidates = "engine/shaders/cmaa2_process_candidates.slang";
 inline constexpr const char* kEngineShaderCmaa2DeferredApply = "engine/shaders/cmaa2_deferred_apply.slang";
+inline constexpr const char* kEngineShaderParticle = "engine/shaders/particle.slang";
 
 // "shaders/foo.slang" + Vertex + Vulkan -> "shaders/foo.vs.spv"
 std::string BuildCompiledShaderPath(const std::string& sourcePath, ShaderStage stage, RendererBackend backend);

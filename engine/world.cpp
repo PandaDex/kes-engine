@@ -16,6 +16,7 @@
 #include "engine_configuration.h"
 #include "input.h"
 #include "ent_light.h"
+#include "ent_particle_system.h"
 #include "ent_logic.h"
 #include "ent_player.h"
 #include "ent_player_start.h"
@@ -140,9 +141,11 @@ void World::Update(float dt)
     {
         scene.GetFog() = {};
         scene.ClearSubmittedPostProcessLayers();
+        scene.ClearSubmittedPointLights();
         entities.Update(dt);
         mapScript.Update(dt);
         entities.DestroyPending();
+        particles.Update(dt);
     }
     scene.ResolvePostProcess();
     if (gameContext.mainCamera)
@@ -315,6 +318,7 @@ void World::ClearLevelState()
 {
     KES_ZONE_FN(WORLD);
     entities.DestroyAll();
+    particles.Clear();
     mapScript.Clear();
     collision.Clear();
     scene.Clear();
@@ -497,6 +501,7 @@ void World::RegisterBuiltInEntityClasses()
     RegisterBuiltInEntityClass<BrushEntity>(entityFactories, "BrushEntity");
     RegisterBuiltInEntityClass<LogicRelayEntity>(entityFactories, "LogicRelayEntity");
     RegisterBuiltInEntityClass<LogicAutoEntity>(entityFactories, "LogicAutoEntity");
+    RegisterBuiltInEntityClass<ParticleSystemEntity>(entityFactories, "ParticleSystemEntity");
 
     entityFactories.Register(kBuiltInPlayerClassName,
         [](EntityManager& manager, GameContext& context) -> Entity*
@@ -582,6 +587,8 @@ void World::SyncContext()
     gameContext.collision = &collision;
     gameContext.entities = &entities;
     gameContext.mapScript = &mapScript;
+    gameContext.particles = &particles;
+    particles.Init(&assets, &collision, &scene);
     mapScript.SetGameContext(&gameContext);
     scene.SetEntityManager(&entities);
 }

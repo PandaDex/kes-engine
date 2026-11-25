@@ -15,6 +15,7 @@ add_executable(kes_tests
     "test_pak.cpp"
     "test_physics_world.cpp"
     "test_scene.cpp"
+    "test_particles.cpp"
     "test_text_parse.cpp"
     "test_on_screen_debug.cpp"
 )

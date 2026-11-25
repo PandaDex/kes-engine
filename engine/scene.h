@@ -9,6 +9,7 @@
 #include "mesh.h"
 #include "kmodel.h"
 #include "material.h"
+#include "particle_sim.h"
 
 enum class LightType : uint32_t
 {
@@ -131,6 +132,46 @@ struct PostProcessLayer
 
 using PostProcessLayerId = uint32_t;
 
+// Shadowless point light for the clustered light list (particle lights,
+// muzzle flashes, sparks). Hundreds can be on screen; they don't use the 32
+// regular light slots. color is linear radiance before the pi scale regular
+// lights get, like Light::color * Light::intensity.
+using ScenePointLight = ParticleLightInstance;
+
+struct SceneParticleSprites
+{
+    ParticleSpriteSettings settings;
+    MaterialHandle material = 0;
+    std::vector<ParticleSpriteInstance> sprites;
+    Vector3 center; // for sorting against other particle batches
+};
+
+struct SceneParticleRibbon
+{
+    ParticleRibbonSettings settings;
+    MaterialHandle material = 0;
+    std::vector<ParticleRibbonPoint> points;
+    Vector3 center;
+};
+
+// Camera-independent particle render data, rebuilt every frame by
+// ParticleWorld; renderers expand it into quads and strips.
+struct SceneParticles
+{
+    std::vector<SceneParticleSprites> sprites;
+    std::vector<SceneParticleRibbon> ribbons;
+    std::vector<SceneObject> meshObjects; // mesh particles, drawn like scene objects
+    std::vector<ScenePointLight> lights;
+
+    void Clear()
+    {
+        sprites.clear();
+        ribbons.clear();
+        meshObjects.clear();
+        lights.clear();
+    }
+};
+
 // Blends `layers` (any order) over `base`.
 PostProcessSettings ResolvePostProcessLayers(const PostProcessSettings& base, const PostProcessLayer* const* layers, size_t count);
 
@@ -178,6 +219,16 @@ public:
     void ResetExposureAdaptation() { ++exposureResetSerial; }
     uint32_t GetExposureResetSerial() const { return exposureResetSerial; } // renderers snap when it changes
 
+    // Particles, rebuilt by ParticleWorld every frame.
+    SceneParticles& GetParticles() { return particles; }
+    const SceneParticles& GetParticles() const { return particles; }
+
+    // Shadowless point lights for this frame only (cleared at the start of
+    // every World::Update). Use for short flashes; Light/CreateLight for lasting lights.
+    void SubmitPointLight(const ScenePointLight& light) { submittedPointLights.push_back(light); }
+    void ClearSubmittedPointLights() { submittedPointLights.clear(); }
+    const std::vector<ScenePointLight>& GetSubmittedPointLights() const { return submittedPointLights; }
+
     // Keeps the post-process defaults and the code layers.
     void Clear();
 
@@ -215,6 +266,8 @@ private:
     PostProcessSettings postProcess; // resolved
     std::vector<std::pair<PostProcessLayerId, PostProcessLayer>> postProcessLayers;
     std::vector<PostProcessLayer> submittedPostProcessLayers;
+    SceneParticles particles;
+    std::vector<ScenePointLight> submittedPointLights;
     PostProcessLayerId nextPostProcessLayerId = 1;
     uint32_t exposureResetSerial = 0;
     EntityManager* entityManager = nullptr;

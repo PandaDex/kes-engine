@@ -196,6 +196,7 @@ Forge is the one editor for every asset type it can edit. Each open asset gets a
 | Model | `.kmodel`: sockets, colliders, child models, material slots, clip preview | |
 | Animation Graph | `.ag`, previewed on the model the graph names | File > New > Animation Graph |
 | Input Map | `.imap` | File > New > Input Map |
+| Particle System | `.kfx`: emitter stacks, renderers (incl. lights), value graphs, live preview ([Particles](particles.md)) | File > New > Particle System |
 | Localization | the project's `.po` files (opening any `.po` opens it) | Window > Localization |
 
 Editors are modules in `tools/forgeMapEditor/src/modules`, registered in `modules/BuiltinModules.cpp`. A module is an `EditorModule` (the extensions it opens) plus an `EditorTab` (a `QMainWindow` with its own docks); see `src/framework/EditorModule.h` and `EditorTab.h`. The graph editors share `src/framework/graph`. Module tests are built as `forge_<name>_test`.

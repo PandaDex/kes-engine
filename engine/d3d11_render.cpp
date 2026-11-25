@@ -84,6 +84,13 @@ namespace kes::d3d11
     };
 
     // ui.slang UiVertexInput, matches UiVertex (render_backend.h).
+    static const D3D11_INPUT_ELEMENT_DESC kParticleInputLayout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(ParticleVertex, position), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(ParticleVertex, uv), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(ParticleVertex, color), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(ParticleVertex, normal), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+
     static const D3D11_INPUT_ELEMENT_DESC kUiInputLayout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -1056,6 +1063,69 @@ namespace kes::d3d11
         return true;
     }
 
+    static bool CreateDynamicStructuredBuffer(Renderer& r, UINT elements, UINT stride, ID3D11Buffer** outBuffer, ID3D11ShaderResourceView** outSRV)
+    {
+        std::vector<uint8_t> zeros(static_cast<size_t>(elements) * stride, 0);
+        D3D11_BUFFER_DESC desc = {};
+        desc.ByteWidth = elements * stride;
+        desc.Usage = D3D11_USAGE_DYNAMIC;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        desc.StructureByteStride = stride;
+        D3D11_SUBRESOURCE_DATA init = { zeros.data(), 0, 0 };
+        return SUCCEEDED(r.device->CreateBuffer(&desc, &init, outBuffer)) &&
+            SUCCEEDED(r.device->CreateShaderResourceView(*outBuffer, nullptr, outSRV));
+    }
+
+    static bool CreateClusterBuffers(Renderer& r)
+    {
+        if (CreateDynamicStructuredBuffer(r, render::kMaxClusterLights, sizeof(render::GPUClusterLight), &r.clusterLightBuffer, &r.clusterLightSRV) &&
+            CreateDynamicStructuredBuffer(r, render::kClusterGridUints, sizeof(uint32_t), &r.clusterGridBuffer, &r.clusterGridSRV))
+            return true;
+        EngineLog("Create cluster light buffers failed");
+        return false;
+    }
+
+    static void CreateParticleResources(Renderer& r)
+    {
+        if (!CreateShaderPairFromBinaries(r, kEngineShaderParticle, kEngineShaderParticle, &r.particleVS, &r.particlePS, &r.particleLayout,
+                kParticleInputLayout, ARRAYSIZE(kParticleInputLayout)))
+        {
+            EngineLog("Particle shader unavailable; particles are not drawn.");
+            return;
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            const ParticleBlend blend = static_cast<ParticleBlend>(i);
+            D3D11_BLEND_DESC desc = {};
+            D3D11_RENDER_TARGET_BLEND_DESC& rt = desc.RenderTarget[0];
+            rt.BlendEnable = TRUE;
+            rt.SrcBlend = blend == ParticleBlend::Alpha ? D3D11_BLEND_SRC_ALPHA : D3D11_BLEND_ONE;
+            rt.DestBlend = blend == ParticleBlend::Additive ? D3D11_BLEND_ONE : D3D11_BLEND_INV_SRC_ALPHA;
+            rt.BlendOp = D3D11_BLEND_OP_ADD;
+            rt.SrcBlendAlpha = blend == ParticleBlend::Additive ? D3D11_BLEND_ZERO : D3D11_BLEND_ONE;
+            rt.DestBlendAlpha = blend == ParticleBlend::Additive ? D3D11_BLEND_ONE : D3D11_BLEND_INV_SRC_ALPHA;
+            rt.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+            rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+            if (FAILED(r.device->CreateBlendState(&desc, &r.particleBlendStates[i])))
+            {
+                EngineLog("Create particle blend state failed; particles are not drawn.");
+                SafeRelease(r.particleVS);
+                return;
+            }
+        }
+    }
+
+    static bool UploadParticleGeometry(Renderer& r, const render::ParticleGeometry& geometry)
+    {
+        if (!EnsureUiBuffer(r, r.particleVertexBuffer, r.particleVertexCapacity, geometry.vertices.size(), sizeof(ParticleVertex), D3D11_BIND_VERTEX_BUFFER) ||
+            !EnsureUiBuffer(r, r.particleIndexBuffer, r.particleIndexCapacity, geometry.indices.size(), sizeof(uint32_t), D3D11_BIND_INDEX_BUFFER))
+            return false;
+        return UploadDynamic(r, r.particleVertexBuffer, geometry.vertices.data(), geometry.vertices.size() * sizeof(ParticleVertex)) &&
+            UploadDynamic(r, r.particleIndexBuffer, geometry.indices.data(), geometry.indices.size() * sizeof(uint32_t));
+    }
+
     static bool CreateConstantBuffers(Renderer& r)
     {
         const struct
@@ -1526,12 +1596,13 @@ namespace kes::d3d11
         const bool ok = CreateSwapchainTargets(r) && CreateSceneTargets(r) && CreateShadowTargets(r) &&
             CreatePipelines(r) && CreateUiPipeline(r) && CreateConstantBuffers(r) &&
             CreateRasterizerStates(r) && CreateBlendStates(r) && CreateDepthStates(r) &&
-            CreateSamplers(r) && CreateWhiteTexture(r);
+            CreateSamplers(r) && CreateWhiteTexture(r) && CreateClusterBuffers(r);
         if (!ok)
         {
             RendererShutdown(r);
             return false;
         }
+        CreateParticleResources(r); // non-fatal: particles aren't drawn on failure
         CreatePostAAShaders(r); // non-fatal: post AA stays off on failure
         CreatePostAATargets(r);
         CreatePostProcessResources(r); // non-fatal as well
@@ -1823,6 +1894,45 @@ namespace kes::d3d11
         DrawGPUMesh(r, state, *item.mesh, item.firstIndex, item.indexCount);
     }
 
+    // In the scene pass after the transparent meshes (scene constants, samplers and globals bound).
+    static void DrawParticles(Renderer& r, const AssetSystem& assets)
+    {
+        ID3D11DeviceContext* ctx = r.context;
+        const UINT stride = sizeof(ParticleVertex);
+        const UINT offset = 0;
+        ctx->IASetVertexBuffers(0, 1, &r.particleVertexBuffer, &stride, &offset);
+        ctx->IASetIndexBuffer(r.particleIndexBuffer, DXGI_FORMAT_R32_UINT, 0);
+        ctx->IASetInputLayout(r.particleLayout);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ctx->VSSetShader(r.particleVS, nullptr, 0);
+        ctx->PSSetShader(r.particlePS, nullptr, 0);
+        ctx->PSSetConstantBuffers(1, 1, &r.modelCB);
+        ctx->RSSetState(r.solidNoCullRS);
+        ctx->OMSetDepthStencilState(r.depthReadState, 0);
+        const float blendFactor[4] = { 0, 0, 0, 0 };
+        const Matrix4 identity = render::MatrixIdentity();
+        for (const render::ParticleDraw& draw : r.particleGeometry.draws)
+        {
+            ctx->OMSetBlendState(r.particleBlendStates[static_cast<int>(draw.blend)], blendFactor, 0xFFFFFFFF);
+            const MaterialData* material = assets.GetMaterial(draw.material);
+            const uint32_t textureFlags = BindMaterialTextures(r, material);
+            const render::MaterialCBData cb = render::BuildMaterialConstants(material, textureFlags);
+            ctx->UpdateSubresource(r.materialCB, 0, nullptr, &cb, 0, 0);
+
+            D3D11_MAPPED_SUBRESOURCE mapped = {};
+            if (FAILED(ctx->Map(r.modelCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+                continue;
+            uint8_t* dst = static_cast<uint8_t*>(mapped.pData);
+            std::memcpy(dst + offsetof(render::ModelCBData, worldViewProj), r.frame.viewProj.m, sizeof(identity.m));
+            std::memcpy(dst + offsetof(render::ModelCBData, world), identity.m, sizeof(identity.m));
+            float skinInfo[4];
+            render::ParticleDrawFlags(draw, skinInfo);
+            std::memcpy(dst + offsetof(render::ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
+            ctx->Unmap(r.modelCB, 0);
+            ctx->DrawIndexed(draw.indexCount, draw.firstIndex, 0);
+        }
+    }
+
     static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
     {
         if (r.frame.shadowViews.empty())
@@ -1991,6 +2101,11 @@ namespace kes::d3d11
             r.frame.shadowViews.clear();
         }
         r.context->UpdateSubresource(r.sceneCB, 0, nullptr, &r.frame.scene, 0, 0);
+        if (!r.frame.clusterLights.empty())
+        {
+            UploadDynamic(r, r.clusterLightBuffer, r.frame.clusterLights.data(), r.frame.clusterLights.size() * sizeof(render::GPUClusterLight));
+            UploadDynamic(r, r.clusterGridBuffer, r.frame.clusterGrid.data(), r.frame.clusterGrid.size() * sizeof(uint32_t));
+        }
 
         // Draw lists (shared by shadow and scene passes).
         std::vector<DrawItem>& opaqueItems = r.opaqueDrawItems;
@@ -2000,10 +2115,10 @@ namespace kes::d3d11
         const Vector3 cameraPosition = CameraGetPosition(camera);
         {
             KES_ZONE(RENDER, "Build draw lists");
-            for (const SceneObject& obj : sceneObj.GetObjects())
+            const auto addObject = [&](const SceneObject& obj)
             {
                 if (!obj.active)
-                    continue;
+                    return;
                 DrawItem item = {};
                 item.object = &obj;
                 item.distanceSq = Vector3LengthSq(obj.transform.position - cameraPosition);
@@ -2030,15 +2145,19 @@ namespace kes::d3d11
                         if (GPUMesh* mesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets))
                             addSections(mesh);
                     }
-                    continue;
+                    return;
                 }
                 GPUMesh* mesh = GetOrUploadMesh(r, obj.mesh, assets);
                 if (!mesh)
-                    continue;
+                    return;
                 render::TransformSphere(item.world, worldScale, mesh->boundsCenter, mesh->boundsRadius,
                     item.boundsCenter, item.boundsRadius);
                 addSections(mesh);
-            }
+            };
+            for (const SceneObject& obj : sceneObj.GetObjects())
+                addObject(obj);
+            for (const SceneObject& obj : sceneObj.GetParticles().meshObjects)
+                addObject(obj);
             // Opaque: group by material, near-to-far inside a group (early depth reject).
             std::sort(opaqueItems.begin(), opaqueItems.end(), [](const DrawItem& a, const DrawItem& b)
                 { return a.material != b.material ? a.material < b.material : a.distanceSq < b.distanceSq; });
@@ -2076,8 +2195,8 @@ namespace kes::d3d11
         ID3D11SamplerState* samplers[7] = { r.materialSampler, r.materialSampler, r.materialSampler, r.materialSampler,
             r.materialSampler, r.linearClampSampler, r.shadowSampler };
         r.context->PSSetSamplers(0, 7, samplers);
-        ID3D11ShaderResourceView* globals[3] = { r.environmentMap.srv, r.cascadeShadows.srv, r.localShadows.srv };
-        r.context->PSSetShaderResources(5, 3, globals);
+        ID3D11ShaderResourceView* globals[5] = { r.environmentMap.srv, r.cascadeShadows.srv, r.localShadows.srv, r.clusterLightSRV, r.clusterGridSRV };
+        r.context->PSSetShaderResources(5, 5, globals);
 
         const float blendFactor[4] = { 0, 0, 0, 0 };
         DrawState state;
@@ -2096,6 +2215,13 @@ namespace kes::d3d11
             r.context->OMSetDepthStencilState(r.depthReadState, 0);
             for (const DrawItem& item : transparentItems)
                 DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, scene.wireframe);
+        }
+        render::BuildParticleGeometry(sceneObj, camera, r.particleGeometry);
+        if (!r.particleGeometry.draws.empty() && r.particleVS && UploadParticleGeometry(r, r.particleGeometry))
+        {
+            KES_ZONE(RENDER, "Draw particles");
+            KES_D3D11_GPU_ZONE(r, "Particles");
+            DrawParticles(r, assets);
         }
 
         if (r.msaaSamples > 1)
@@ -2425,6 +2551,18 @@ namespace kes::d3d11
         SafeRelease(r.meshLayout);
         SafeRelease(r.meshPS);
         SafeRelease(r.meshVS);
+        SafeRelease(r.particleVS);
+        SafeRelease(r.particlePS);
+        SafeRelease(r.particleLayout);
+        for (ID3D11BlendState*& state : r.particleBlendStates)
+            SafeRelease(state);
+        SafeRelease(r.particleVertexBuffer);
+        SafeRelease(r.particleIndexBuffer);
+        r.particleVertexCapacity = r.particleIndexCapacity = 0;
+        SafeRelease(r.clusterLightSRV);
+        SafeRelease(r.clusterLightBuffer);
+        SafeRelease(r.clusterGridSRV);
+        SafeRelease(r.clusterGridBuffer);
 
         DestroySceneTargets(r);
         DestroySwapchainTargets(r);

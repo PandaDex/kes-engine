@@ -88,6 +88,8 @@ void Scene::Clear()
     sky = {};
     fog = {};
     submittedPostProcessLayers.clear();
+    particles.Clear();
+    submittedPointLights.clear();
     ++exposureResetSerial;
     nextObjectId = 1;
     nextLightId = 1;

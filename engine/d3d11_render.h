@@ -257,6 +257,21 @@ namespace kes::d3d11
         // Per-frame scratch, kept to reuse its storage.
         std::vector<DrawItem> opaqueDrawItems;
         std::vector<DrawItem> transparentDrawItems;
+
+        // Particles (particle.slang) and clustered point lights (t8, t9).
+        ID3D11VertexShader* particleVS = nullptr;
+        ID3D11PixelShader* particlePS = nullptr;
+        ID3D11InputLayout* particleLayout = nullptr;
+        ID3D11BlendState* particleBlendStates[3] = {}; // by ParticleBlend
+        ID3D11Buffer* particleVertexBuffer = nullptr;
+        ID3D11Buffer* particleIndexBuffer = nullptr;
+        UINT particleVertexCapacity = 0;
+        UINT particleIndexCapacity = 0;
+        render::ParticleGeometry particleGeometry;
+        ID3D11Buffer* clusterLightBuffer = nullptr;
+        ID3D11ShaderResourceView* clusterLightSRV = nullptr;
+        ID3D11Buffer* clusterGridBuffer = nullptr;
+        ID3D11ShaderResourceView* clusterGridSRV = nullptr;
     };
 
     bool RendererInit(Renderer& renderer, SDL_Window* window, const AppConfig& config);

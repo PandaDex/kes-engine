@@ -11,6 +11,7 @@
 #include "engine_types.h"
 #include "material.h"
 #include "render_backend.h"
+#include "particle_sim.h"
 
 class Scene;
 struct SkySettings;
@@ -25,6 +26,18 @@ namespace render
     constexpr int kEnvironmentFaceSize = 128;
     constexpr int kEnvironmentMipCount = 6; // 128 .. 4; mip = roughness * (count - 1)
     constexpr int kMaterialTextureCount = 5; // base, normal, metallicRoughness, occlusion, emissive
+
+    // Clustered point lights (particle lights, Scene::SubmitPointLight): a
+    // froxel grid over the view, binned on the CPU. The grid buffer starts with
+    // one header per cluster ((first index << 8) | count), the light indices follow.
+    constexpr int kClusterX = 16;
+    constexpr int kClusterY = 9;
+    constexpr int kClusterZ = 24;
+    constexpr int kClusterCount = kClusterX * kClusterY * kClusterZ;
+    constexpr int kMaxClusterLights = 1024;
+    constexpr int kMaxClusterIndices = 96 * 1024;
+    constexpr int kClusterGridUints = kClusterCount + kMaxClusterIndices;
+    constexpr uint32_t kMaxLightsPerCluster = 255;
 
     // Row-major, multiplied as mul(vector, matrix) like the shaders.
     struct Matrix4
@@ -48,6 +61,12 @@ namespace render
         // z = shadow: directional 1 = sun cascades, local first slice; -1 none
     };
 
+    struct GPUClusterLight
+    {
+        float positionRadius[4];
+        float color[4]; // rgb = radiance
+    };
+
     struct SceneCBData
     {
         float viewProj[16];
@@ -64,6 +83,8 @@ namespace render
         float cascadeTexelSize[4]; // world size of one shadow texel per cascade (normal offset)
         float shadowParams[4]; // x = cascade count, y = 1 / cascade resolution, z = 1 / local resolution, w = enabled
         float localShadowViewProj[kMaxLocalShadowSlices][16];
+        float clusterParams[4]; // xyz = grid size, w = cluster light count
+        float clusterDepth[4]; // x = near, y = slices / log(far / near)
     };
 
     struct MaterialCBData
@@ -137,7 +158,9 @@ namespace render
     static_assert(offsetof(SceneCBData, cascadeViewProj) == 2352, "SceneCB layout");
     static_assert(offsetof(SceneCBData, shadowParams) == 2640, "SceneCB layout");
     static_assert(offsetof(SceneCBData, localShadowViewProj) == 2656, "SceneCB layout");
-    static_assert(sizeof(SceneCBData) == 3680, "SceneCB layout");
+    static_assert(offsetof(SceneCBData, clusterParams) == 3680, "SceneCB layout");
+    static_assert(sizeof(SceneCBData) == 3712, "SceneCB layout");
+    static_assert(sizeof(GPUClusterLight) == 32, "GPUClusterLight layout");
     static_assert(offsetof(ModelCBData, skinInfo) == 128, "ModelCB layout");
     static_assert(offsetof(ModelCBData, skinMatrices) == 144, "ModelCB layout");
     static_assert(sizeof(MaterialCBData) == 64, "MaterialCB layout");
@@ -181,6 +204,8 @@ namespace render
         Frustum frustum;
         std::vector<ShadowView> shadowViews;
         ShadowConfig shadows;
+        std::vector<GPUClusterLight> clusterLights; // at most kMaxClusterLights
+        std::vector<uint32_t> clusterGrid; // kClusterGridUints
     };
     void BuildFrameSetup(FrameSetup& out, const SceneState& state, const Camera& camera, const Scene& scene,
         float aspect, const GraphicsOptions& options);
@@ -228,4 +253,28 @@ namespace render
     MaterialHandle SectionMaterial(const SceneObject& object, int32_t materialSlot);
 
     uint16_t FloatToHalf(float value);
+
+    // Particle sprites and ribbons of a frame, expanded for the camera into one
+    // vertex/index stream. Draws are sorted back to front by batch center.
+    struct ParticleDraw
+    {
+        MaterialHandle material = 0;
+        ParticleBlend blend = ParticleBlend::Additive;
+        bool lit = false;
+        bool ribbon = false;
+        bool subImages = false; // sprite flipbook: no default disc per frame
+        int sortOrder = 0;
+        uint32_t firstIndex = 0;
+        uint32_t indexCount = 0;
+        float distanceSq = 0.0f;
+    };
+    struct ParticleGeometry
+    {
+        std::vector<ParticleVertex> vertices;
+        std::vector<uint32_t> indices;
+        std::vector<ParticleDraw> draws;
+    };
+    void BuildParticleGeometry(const Scene& scene, const Camera& camera, ParticleGeometry& out);
+    // ModelCB.uSkinInfo for particle.slang: x default shape, y lit, z premultiply, w additive.
+    void ParticleDrawFlags(const ParticleDraw& draw, float outSkinInfo[4]);
 }

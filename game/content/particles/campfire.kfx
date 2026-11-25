@@ -1,0 +1,433 @@
+// KES particle system: campfire. Fire and embers light their surroundings
+// (Light renderers); the fire light flickers through a noise graph.
+
+System
+{
+    Version = 1
+    Warmup = 1
+}
+
+Emitter
+{
+    Name = "Fire"
+    Enabled = true
+    LocalSpace = false
+    MaxParticles = 200
+    Duration = 0
+    Loop = true
+    LoopCount = 0
+    Delay = 0
+    Seed = 0
+}
+
+Module
+{
+    Emitter = 0
+    Stage = EmitterUpdate
+    Type = SpawnRate
+    Enabled = true
+    Param.Rate = "60"
+}
+
+Module
+{
+    Emitter = 0
+    Stage = ParticleSpawn
+    Type = InitializeParticle
+    Enabled = true
+    Param.Lifetime = "random uniform 0.6 ; 1.1"
+    Param.Color = "3 1.2 0.3 1"
+    Param.SpriteSize = "random uniform 0.35 0.35 ; 0.6 0.6"
+    Param.SpriteRotation = "random uniform 0 ; 360"
+    Param.Mass = "1"
+    Param.MeshScale = "1 1 1"
+}
+
+Module
+{
+    Emitter = 0
+    Stage = ParticleSpawn
+    Type = ShapeLocation
+    Enabled = true
+    Param.Shape = "Cylinder"
+    Param.Radius = "0.3"
+    Param.Height = "0.1"
+}
+
+Module
+{
+    Emitter = 0
+    Stage = ParticleSpawn
+    Type = AddVelocity
+    Enabled = true
+    Param.Mode = "Linear"
+    Param.Velocity = "random uniform 0 1.2 0 ; 0 2 0"
+}
+
+Module
+{
+    Emitter = 0
+    Stage = ParticleSpawn
+    Type = InitializeRotation
+    Enabled = true
+    Param.SpriteRotationRate = "random separate -60 ; 60"
+}
+
+Module
+{
+    Emitter = 0
+    Stage = ParticleUpdate
+    Type = CurlNoise
+    Enabled = true
+    Param.Strength = "1.5"
+    Param.Frequency = "1.2"
+    Param.Pan = "0 0.3 0"
+}
+
+Module
+{
+    Emitter = 0
+    Stage = ParticleUpdate
+    Type = ScaleColor
+    Enabled = true
+    Param.Scale = "gradient NormalizedAge ; 0 1 1 1 0 ; 0.15 1 1 1 1 ; 0.6 1 0.4 0.2 0.6 ; 1 0.3 0.1 0.05 0"
+}
+
+Module
+{
+    Emitter = 0
+    Stage = ParticleUpdate
+    Type = ScaleSize
+    Enabled = true
+    Param.Scale = "curve NormalizedAge 1 1 ; 0 0.6 ; 0.4 1 ; 1 0.3"
+}
+
+Renderer
+{
+    Emitter = 0
+    Type = Sprite
+    Enabled = true
+    Param.Blend = "Additive"
+}
+
+Renderer
+{
+    Emitter = 0
+    Type = Light
+    Enabled = true
+    Param.Radius = "4"
+    Param.Intensity = "graph 1"
+    Param.UseParticleColor = "true"
+    Param.Fraction = "0.25"
+    Param.MaxLights = "8"
+}
+
+Graph
+{
+    Emitter = 0
+    Id = 1
+}
+GraphNode
+{
+    Emitter = 0
+    Graph = 1
+    Id = 1
+    Type = Output
+    Pos = "520 0"
+}
+GraphNode
+{
+    Emitter = 0
+    Graph = 1
+    Id = 2
+    Type = Emitter
+    Pos = "-420 0"
+}
+GraphNode
+{
+    Emitter = 0
+    Graph = 1
+    Id = 3
+    Type = Multiply
+    Pos = "-220 0"
+    In.1 = "6"
+}
+GraphNode
+{
+    Emitter = 0
+    Graph = 1
+    Id = 4
+    Type = MakeVector
+    Pos = "-40 0"
+}
+GraphNode
+{
+    Emitter = 0
+    Graph = 1
+    Id = 5
+    Type = Noise
+    Pos = "140 0"
+}
+GraphNode
+{
+    Emitter = 0
+    Graph = 1
+    Id = 6
+    Type = Remap
+    Pos = "330 0"
+    In.1 = "-1"
+    In.2 = "1"
+    In.3 = "0.05"
+    In.4 = "0.12"
+}
+GraphLink
+{
+    Emitter = 0
+    Graph = 1
+    From = "2 0"
+    To = "3 0"
+}
+GraphLink
+{
+    Emitter = 0
+    Graph = 1
+    From = "3 0"
+    To = "4 0"
+}
+GraphLink
+{
+    Emitter = 0
+    Graph = 1
+    From = "4 0"
+    To = "5 0"
+}
+GraphLink
+{
+    Emitter = 0
+    Graph = 1
+    From = "5 0"
+    To = "6 0"
+}
+GraphLink
+{
+    Emitter = 0
+    Graph = 1
+    From = "6 0"
+    To = "1 0"
+}
+
+Emitter
+{
+    Name = "Embers"
+    Enabled = true
+    LocalSpace = false
+    MaxParticles = 120
+    Duration = 0
+    Loop = true
+    LoopCount = 0
+    Delay = 0
+    Seed = 0
+}
+
+Module
+{
+    Emitter = 1
+    Stage = EmitterUpdate
+    Type = SpawnRate
+    Enabled = true
+    Param.Rate = "random uniform 4 ; 14"
+}
+
+Module
+{
+    Emitter = 1
+    Stage = ParticleSpawn
+    Type = InitializeParticle
+    Enabled = true
+    Param.Lifetime = "random uniform 1.5 ; 3"
+    Param.Color = "5 1.8 0.4 1"
+    Param.SpriteSize = "0.04 0.04"
+}
+
+Module
+{
+    Emitter = 1
+    Stage = ParticleSpawn
+    Type = ShapeLocation
+    Enabled = true
+    Param.Shape = "Sphere"
+    Param.Radius = "0.25"
+    Param.Offset = "0 0.2 0"
+}
+
+Module
+{
+    Emitter = 1
+    Stage = ParticleSpawn
+    Type = AddVelocity
+    Enabled = true
+    Param.Mode = "Cone"
+    Param.Speed = "random uniform 1 ; 3"
+    Param.ConeAxis = "0 1 0"
+    Param.ConeAngle = "35"
+}
+
+Module
+{
+    Emitter = 1
+    Stage = ParticleUpdate
+    Type = CurlNoise
+    Enabled = true
+    Param.Strength = "3"
+    Param.Frequency = "0.8"
+}
+
+Module
+{
+    Emitter = 1
+    Stage = ParticleUpdate
+    Type = Drag
+    Enabled = true
+    Param.Drag = "0.6"
+}
+
+Module
+{
+    Emitter = 1
+    Stage = ParticleUpdate
+    Type = ScaleColor
+    Enabled = true
+    Param.Scale = "gradient NormalizedAge ; 0 1 1 1 1 ; 0.7 1 0.6 0.3 1 ; 1 0.5 0.1 0.05 0"
+}
+
+Renderer
+{
+    Emitter = 1
+    Type = Sprite
+    Enabled = true
+    Param.Blend = "Additive"
+    Param.Alignment = "Velocity"
+    Param.VelocityStretch = "0.03"
+    Param.Emissive = "2"
+}
+
+Renderer
+{
+    Emitter = 1
+    Type = Light
+    Enabled = true
+    Param.Radius = "curve NormalizedAge 1.5 ; 0 1 ; 1 0.2"
+    Param.Intensity = "0.15"
+    Param.UseParticleColor = "true"
+    Param.MaxLights = "64"
+}
+
+Emitter
+{
+    Name = "Smoke"
+    Enabled = true
+    LocalSpace = false
+    MaxParticles = 80
+    Duration = 0
+    Loop = true
+    LoopCount = 0
+    Delay = 0
+    Seed = 0
+}
+
+Module
+{
+    Emitter = 2
+    Stage = EmitterUpdate
+    Type = SpawnRate
+    Enabled = true
+    Param.Rate = "10"
+}
+
+Module
+{
+    Emitter = 2
+    Stage = ParticleSpawn
+    Type = InitializeParticle
+    Enabled = true
+    Param.Lifetime = "random uniform 3 ; 4.5"
+    Param.Color = "0.3 0.3 0.32 0.5"
+    Param.SpriteSize = "random uniform 0.6 0.6 ; 0.9 0.9"
+    Param.SpriteRotation = "random uniform 0 ; 360"
+}
+
+Module
+{
+    Emitter = 2
+    Stage = ParticleSpawn
+    Type = ShapeLocation
+    Enabled = true
+    Param.Shape = "Sphere"
+    Param.Radius = "0.3"
+    Param.Offset = "0 1.1 0"
+}
+
+Module
+{
+    Emitter = 2
+    Stage = ParticleSpawn
+    Type = AddVelocity
+    Enabled = true
+    Param.Mode = "Linear"
+    Param.Velocity = "random separate -0.2 0.6 -0.2 ; 0.2 1 0.2"
+}
+
+Module
+{
+    Emitter = 2
+    Stage = ParticleSpawn
+    Type = InitializeRotation
+    Enabled = true
+    Param.SpriteRotationRate = "random separate -20 ; 20"
+}
+
+Module
+{
+    Emitter = 2
+    Stage = ParticleUpdate
+    Type = Force
+    Enabled = true
+    Param.Force = "0.3 0 0"
+}
+
+Module
+{
+    Emitter = 2
+    Stage = ParticleUpdate
+    Type = Drag
+    Enabled = true
+    Param.Drag = "0.3"
+}
+
+Module
+{
+    Emitter = 2
+    Stage = ParticleUpdate
+    Type = ScaleColor
+    Enabled = true
+    Param.Scale = "gradient NormalizedAge ; 0 1 1 1 0 ; 0.2 1 1 1 1 ; 1 1 1 1 0"
+}
+
+Module
+{
+    Emitter = 2
+    Stage = ParticleUpdate
+    Type = ScaleSize
+    Enabled = true
+    Param.Scale = "curve NormalizedAge 1 1 ; 0 1 ; 1 3"
+}
+
+Renderer
+{
+    Emitter = 2
+    Type = Sprite
+    Enabled = true
+    Param.Blend = "Alpha"
+    Param.Sort = "BackToFront"
+    Param.Lit = "true"
+}

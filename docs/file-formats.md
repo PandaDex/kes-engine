@@ -232,6 +232,44 @@ Current condition types:
 
 Each state references a `.kanim` clip by asset path.
 
+## Particle System Files: `.kfx`
+
+Text-block files written by Forge's Particle System tab:
+
+```txt
+System
+{
+    Version = 1
+    Warmup = 0
+}
+
+Emitter
+{
+    Name = "Sparks"
+    MaxParticles = 400
+    Duration = 0
+    Loop = true
+}
+
+Module
+{
+    Emitter = 0
+    Stage = ParticleUpdate
+    Type = ScaleColor
+    Enabled = true
+    Param.Scale = "gradient NormalizedAge ; 0 1 1 1 1 ; 1 1 1 1 0"
+}
+
+Renderer
+{
+    Emitter = 0
+    Type = Light
+    Param.Radius = "curve NormalizedAge 2 ; 0 1 ; 1 0.3"
+}
+```
+
+`UserParam`, `Graph`, `GraphNode` and `GraphLink` blocks complete the format. Modules, values and graphs are described in [particles.md](particles.md).
+
 ## Editor Declaration Files: `.kdec`
 
 `.kdec` files are editor-only declaration assets used by the map editor to describe:

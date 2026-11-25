@@ -243,6 +243,7 @@ Responsibilities:
 - owns collision world
 - owns audio system
 - owns entity manager
+- owns the particle systems (`ParticleWorld`, ticked after the entities)
 - loads maps and prefabs
 - updates entities
 
@@ -267,6 +268,7 @@ Main accessors:
 - `AudioSystem& GetAudio();`
 - `GameContext& GetGameContext();`
 - `EntityManager& GetEntities();`
+- `ParticleWorld& GetParticles();` spawn, find and destroy particle systems ([particles.md](particles.md#from-code))
 
 ## `GameContext`
 
@@ -282,6 +284,7 @@ Available systems:
 - `audio`
 - `collision`
 - `entities`
+- `particles`
 - `input`
 - `mainCamera`
 
@@ -471,6 +474,7 @@ Stored scene state includes:
 - light list
 - sky settings
 - fog settings
+- particle render data (`GetParticles()`, rebuilt every frame by `ParticleWorld`) and per-frame point lights (`SubmitPointLight`, the clustered light list; see [particles.md](particles.md))
 - post processing: `GetPostProcessDefaults()`, layers (`AddPostProcessLayer`, `FindPostProcessLayer`, `RemovePostProcessLayer`, `SubmitPostProcessLayer`), the resolved `GetPostProcess()` and `ResetExposureAdaptation()`. See [rendering.md](rendering.md#post-processing).
 
 This is a runtime scene representation, not a full authored scene graph editor API.

@@ -11,6 +11,7 @@
 #include "entity_factory_registry.h"
 #include "map_file.h"
 #include "map_script.h"
+#include "particle_world.h"
 
 struct InputState;
 class CameraEntity;
@@ -50,6 +51,7 @@ public:
     const EntityManager& GetEntities() const;
 
     MapScriptSystem& GetMapScript() { return mapScript; }
+    ParticleWorld& GetParticles() { return particles; }
 
 private:
     void ClearLevelState();
@@ -69,6 +71,7 @@ private:
     GameContext gameContext;
     EntityManager entities;
     MapScriptSystem mapScript;
+    ParticleWorld particles;
     EntityFactoryRegistry entityFactories;
     std::vector<std::pair<std::string, EntityFactoryFunction>> customEntityFactories;
     std::string pendingMapLoad;

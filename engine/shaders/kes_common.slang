@@ -6,7 +6,7 @@
 // both D3D (register) and Vulkan (vk::binding) so the same source compiles to
 // DXBC and SPIR-V without per-backend edits.
 //
-//   set 0  b0 SceneCB, b1 ModelCB, b2 MaterialCB
+//   set 0  b0 SceneCB, b1 ModelCB, b2 MaterialCB, t8 cluster lights, t9 cluster grid
 //   set 1  t0-t4 material textures (base, normal, metallicRoughness, occlusion, emissive)
 //   set 2  t5 environment cube, t6 sun cascades, t7 local shadows, s5 linear clamp, s6 shadow compare
 //
@@ -45,6 +45,8 @@ cbuffer SceneCB : register(b0)
     float4 uCascadeTexelSize;
     float4 uShadowParams;          // x = cascade count, y = 1 / cascade res, z = 1 / local res, w = enabled
     row_major float4x4 uLocalShadowViewProj[kMaxLocalShadowSlices];
+    float4 uClusterParams;         // xyz = cluster grid size, w = cluster light count
+    float4 uClusterDepth;          // x = near, y = slices / log(far / near)
 };
 
 [[vk::binding(1, 0)]]
@@ -81,6 +83,42 @@ float KesTime()
 bool KesMaterialHas(uint flag)
 {
     return (uMaterialFlags.x & flag) != 0u;
+}
+
+// Clustered shadowless point lights (render_common.h BuildClusters). The grid
+// starts with a header per cluster: (first index << 8) | count.
+struct KesClusterLight
+{
+    float4 positionRadius;
+    float4 color;
+};
+[[vk::binding(3, 0)]] StructuredBuffer<KesClusterLight> uClusterLights : register(t8);
+[[vk::binding(4, 0)]] StructuredBuffer<uint> uClusterGrid : register(t9);
+
+uint KesClusterHeader(float3 worldPos)
+{
+    int3 dims = int3(uClusterParams.xyz);
+    float4 clip = mul(float4(worldPos, 1.0), uViewProj);
+    float2 ndc = clip.xy / max(clip.w, 1e-4);
+    float viewZ = dot(worldPos - uCameraPosition.xyz, uCameraForward.xyz);
+    int x = clamp(int(floor((ndc.x * 0.5 + 0.5) * dims.x)), 0, dims.x - 1);
+    int y = clamp(int(floor((ndc.y * 0.5 + 0.5) * dims.y)), 0, dims.y - 1);
+    int z = clamp(int(floor(log(max(viewZ, uClusterDepth.x) / uClusterDepth.x) * uClusterDepth.y)), 0, dims.z - 1);
+    return uClusterGrid[(z * dims.y + y) * dims.x + x];
+}
+
+uint KesClusterLightIndex(uint header, uint i)
+{
+    int3 dims = int3(uClusterParams.xyz);
+    return uClusterGrid[uint(dims.x * dims.y * dims.z) + (header >> 8) + i];
+}
+
+// Same falloff as the regular point lights.
+float KesPointAttenuation(float dist, float range)
+{
+    float x = dist / range;
+    float window = saturate(1.0 - x * x * x * x);
+    return window * window / (1.0 + 4.0 * x * x);
 }
 
 // Material textures: combined texture + sampler (set 1 on Vulkan, t0-t4/s0-s4 on D3D).
@@ -402,9 +440,7 @@ float4 KesShadeMaterial(SurfaceInput s, KesSurface m)
             float3 toLight = light.position.xyz - s.worldPosition;
             float dist = length(toLight);
             l = toLight / max(dist, 0.0001);
-            float x = dist / light.position.w;
-            float window = saturate(1.0 - x * x * x * x);
-            attenuation = window * window / (1.0 + 4.0 * x * x);
+            attenuation = KesPointAttenuation(dist, light.position.w);
             if (light.params.x > 1.5)
                 attenuation *= smoothstep(light.direction.w, light.params.y, dot(-l, normalize(light.direction.xyz)));
         }
@@ -431,6 +467,32 @@ float4 KesShadeMaterial(SurfaceInput s, KesSurface m)
         direct += (diffuse + specular) * light.color.rgb * (NoL * attenuation * shadow);
     }
 
+    if (uClusterParams.w > 0.5)
+    {
+        uint header = KesClusterHeader(s.worldPosition);
+        uint count = header & 0xFFu;
+        for (uint ci = 0; ci < count; ci++)
+        {
+            KesClusterLight light = uClusterLights[KesClusterLightIndex(header, ci)];
+            float3 toLight = light.positionRadius.xyz - s.worldPosition;
+            float dist = length(toLight);
+            if (dist >= light.positionRadius.w)
+                continue;
+            float3 l = toLight / max(dist, 0.0001);
+            float NoL = dot(n, l);
+            if (NoL <= 0.0)
+                continue;
+            float attenuation = KesPointAttenuation(dist, light.positionRadius.w);
+            float3 h = normalize(v + l);
+            float NoH = saturate(dot(n, h));
+            float VoH = saturate(dot(v, h));
+            float3 f = KesFresnelSchlick(f0, VoH);
+            float3 specular = KesDistributionGGX(NoH, a) * KesVisibilitySmithGGX(NoV, NoL, a) * f;
+            float3 diffuse = (1.0 - f) * diffuseColor / kPi;
+            direct += (diffuse + specular) * light.color.rgb * (NoL * attenuation);
+        }
+    }
+
     // Image-based ambient: SH irradiance for diffuse, the prefiltered sky cube for reflections.
     float3 r = reflect(-v, n);
     float mip = roughness * (uEnvironmentParams.x - 1.0);
@@ -446,4 +508,53 @@ float4 KesShadeMaterial(SurfaceInput s, KesSurface m)
 float4 KesShadeSurface(SurfaceInput s)
 {
     return KesShadeMaterial(s, KesMaterialSurface(s));
+}
+
+// Diffuse light arriving at a particle (wrapped Lambert so the side facing
+// away from a light still picks some of it up, as with thin smoke), without
+// shadows except the sun's cascades. Multiply by the particle's albedo.
+float3 KesParticleLighting(float3 worldPos, float3 normal)
+{
+    float3 n = normalize(normal);
+    float3 result = KesAmbientIrradiance(n) * uEnvironmentParams.y;
+    int lightCount = int(uLightCounts.x);
+    for (int i = 0; i < lightCount; i++)
+    {
+        GPULight light = uLights[i];
+        float3 l;
+        float attenuation = 1.0;
+        if (light.params.x < 0.5)
+        {
+            l = -normalize(light.direction.xyz);
+            if (uShadowParams.w > 0.5 && light.params.z >= 0.0)
+                attenuation = KesCascadeShadow(worldPos, n);
+        }
+        else
+        {
+            float3 toLight = light.position.xyz - worldPos;
+            float dist = length(toLight);
+            l = toLight / max(dist, 0.0001);
+            attenuation = KesPointAttenuation(dist, light.position.w);
+            if (light.params.x > 1.5)
+                attenuation *= smoothstep(light.direction.w, light.params.y, dot(-l, normalize(light.direction.xyz)));
+        }
+        float wrap = saturate((dot(n, l) + 0.5) / 1.5);
+        result += light.color.rgb * (wrap * attenuation / kPi);
+    }
+    if (uClusterParams.w > 0.5)
+    {
+        uint header = KesClusterHeader(worldPos);
+        uint count = header & 0xFFu;
+        for (uint ci = 0; ci < count; ci++)
+        {
+            KesClusterLight light = uClusterLights[KesClusterLightIndex(header, ci)];
+            float3 toLight = light.positionRadius.xyz - worldPos;
+            float dist = length(toLight);
+            if (dist >= light.positionRadius.w)
+                continue;
+            float wrap = saturate((dot(n, toLight / max(dist, 0.0001)) + 0.5) / 1.5);
+            result += light.color.rgb * (wrap * KesPointAttenuation(dist, light.positionRadius.w) / kPi);
+        }
+    }
+    return result;
 }

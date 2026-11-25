@@ -170,6 +170,12 @@ namespace kes::vk
 
         GPUStreamBuffer uiVertices;
         GPUStreamBuffer uiIndices;
+
+        // Clustered point lights (set 0 bindings 3, 4), fixed size, host visible.
+        GPUStreamBuffer clusterLights;
+        GPUStreamBuffer clusterGrid;
+        GPUStreamBuffer particleVertices;
+        GPUStreamBuffer particleIndices;
     };
 
     // Everything per object that doesn't depend on the view, computed once a frame.
@@ -268,6 +274,7 @@ namespace kes::vk
 
         GPUShaderProgram meshDefaultProgram;
         GPUShaderProgram shadowProgram; // pipelines[0] = the shadow pipeline
+        GPUShaderProgram particleProgram; // pipelines[ParticleBlend]
 
         VkShaderModule skyVS = VK_NULL_HANDLE;
         VkShaderModule skyPS = VK_NULL_HANDLE;
@@ -412,6 +419,7 @@ namespace kes::vk
         // Per-frame scratch, kept to reuse its storage.
         std::vector<DrawItem> opaqueDrawItems;
         std::vector<DrawItem> transparentDrawItems;
+        render::ParticleGeometry particleGeometry;
     };
 
     bool RendererInit(Renderer& renderer, SDL_Window* window, const AppConfig& config);

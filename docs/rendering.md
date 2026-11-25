@@ -99,6 +99,9 @@ Up to 32 lights per frame: all directional lights, then the visible point and sp
 - **Point and spot falloff:** smooth inverse-square-like, reaching 0 at `Range`: `window(d/range)² / (1 + 4 (d/range)²)`.
 - **Spot cone:** `SpotAngle` is the full cone. The soft edge starts at 75 % of it.
 - **`CastShadows`:** defaults to on for directional and spot lights, and off for point lights (a point light takes six shadow slices).
+- **Clustered point lights:** on top of those 32, up to 1024 shadowless point lights per frame (particle Light renderers and `Scene::SubmitPointLight`) are binned into a 16 × 9 × 24 cluster grid on the CPU and looked up per pixel. Same falloff as point lights. See [particles.md](particles.md#lights-and-the-clustered-light-list).
+
+Particles (sprites and ribbons) are drawn after the transparent meshes with `particle.slang`; mesh particles are drawn as scene objects. See [particles.md](particles.md).
 
 ## Shadows
 
