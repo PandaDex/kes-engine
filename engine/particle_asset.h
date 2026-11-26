@@ -4,7 +4,7 @@
 // renderer parameters are ParticleValues: a constant, a random range, a curve,
 // a gradient or a small node graph (particle_graph.h) owned by the emitter.
 //
-// Only depends on text_block_file and engine_types so the editor (Forge) can
+// Only depends on text_block_file and engine_types so the KES Editor can
 // compile it and preview exactly what the game simulates.
 
 #include <cstdint>

@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-// 128-bit identity of an entity. Map entities keep the GUID the Forge editor gave them when
+// 128-bit identity of an entity. Map entities keep the GUID the KES Editor gave them when
 // they were placed (stored in the .fmapc); entities created at runtime get a random one.
 // Byte order follows RFC 4122, so ToString() matches the editor's QUuid text.
 struct Guid

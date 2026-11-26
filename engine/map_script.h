@@ -9,7 +9,7 @@
 class Entity;
 struct GameContext;
 
-// MapScript: the editor's output -> input links (Outputs tab in Forge).
+// MapScript: the editor's output -> input links (Outputs tab in the KES Editor).
 //
 // An entity takes part by implementing IMapScriptable next to Entity:
 //

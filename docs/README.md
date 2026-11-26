@@ -9,7 +9,7 @@ The goal is to describe the current runtime, asset formats, and tool workflow in
 - [Asset and File Formats](file-formats.md)
 - [Engine API](engine-api.md)
 - [Rendering (PBR, shadows, settings)](rendering.md)
-- [Particles (.kfx, particle lights, Forge editor)](particles.md)
+- [Particles (.kfx, particle lights, editor)](particles.md)
 - [UI System (HTML/CSS, RmlUi)](ui-system.md)
 - [Localization (.po files)](localization.md)
 - [Tools and Asset Pipeline](tools-and-pipeline.md)
@@ -21,7 +21,7 @@ The goal is to describe the current runtime, asset formats, and tool workflow in
 - The default runtime content directory is `assets` via `ENGINE_CONTENT_DIRECTORY`.
 - A project now defines a single `AssetRoot`. The editor scans that root recursively and identifies assets by extension.
 - The runtime can load loose files and `.pak` archives from the content directory.
-- The main runtime asset extensions are `.kmodel`, `.ktex`, `.ksound`, `.kanim`, `.kagraph`, `.mat`, `.kfx` (particle systems) and `.fmapc` (compiled maps from the Forge editor).
+- The main runtime asset extensions are `.kmodel`, `.ktex`, `.ksound`, `.kanim`, `.kagraph`, `.mat`, `.kfx` (particle systems) and `.fmapc` (compiled maps from the KES Editor).
 
 ## Scope
 

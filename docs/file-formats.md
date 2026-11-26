@@ -14,7 +14,7 @@ The editor scans `Project.AssetRoot` recursively and classifies assets by extens
 | `.kanim`    | runtime animation clip                 | binary           |
 | `.ag`       | animation state graph                  | text block       |
 | `.mat`      | material graph and material settings   | text block       |
-| `.fmap`     | map source, edited in the Forge editor | JSON             |
+| `.fmap`     | map source, edited in the KES Editor | JSON             |
 | `.fmapc`    | compiled map loaded by the engine      | binary (chunked) |
 | `.shader`   | shader descriptor                      | text block       |
 | `.kproject` | project file                           | text block       |
@@ -68,7 +68,7 @@ Current fields:
 - `Version`
 - `AssetRoot`
 - `StartupMap`
-- `EntityDefPaths` (Forge only)
+- `EntityDefPaths` (editor only)
 
 Example:
 
@@ -85,20 +85,20 @@ Project
 
 `Name`, `Company` and `Version` are baked into the game by `kes_add_game`, like `StartupMap`. `Name` is the window title and the package name, `Name` and `Company` pick the player's data folder (`%APPDATA%\<Company>\<Name>\` on Windows), and `Version` (four numbers) is the build and package version. They default to `kes`, `KES` and `1.0.0.0`; the CMake variables `KES_PROJECT_NAME`, `KES_PROJECT_PUBLISHER` and `KES_PROJECT_VERSION` override them for one build folder.
 
-`AssetRoot` is the root scanned by the editor and used for content-relative paths. Project content uses fixed folders under it: `maps/`, `materials/` and `textures/`. The Forge map editor opens the `.kproject` to find them.
+`AssetRoot` is the root scanned by the editor and used for content-relative paths. Project content uses fixed folders under it: `maps/`, `materials/` and `textures/`. The KES Editor opens the `.kproject` to find them.
 
 `StartupMap` is stored as a project-relative asset path. In practice you should treat it as pointing into the map set under the asset root.
 
 `StartupMap` is also the map the game opens on start: `kes_add_game` reads it and bakes it into the exe (see [Tools and Pipeline](tools-and-pipeline.md)). It names the compiled map relative to the content folder, e.g. `maps/startup.fmapc`. Leave it empty (`StartupMap=""`) to use the engine default `ENGINE_STARTUP_MAP`.
 
-`EntityDefPaths` lists folders with the project's `.dec` entity definitions for Forge, relative to the `.kproject` folder and separated by `;`, e.g. `EntityDefPaths = "editor;tools/entities"`. Missing or empty means `editor`. Folders that don't exist are skipped. Their classes load after Forge's own `entities/` and the user's `user.dec`, so a project can add classes and override engine ones. The engine ignores this key. It can also be edited in Forge's File > Project Settings.
+`EntityDefPaths` lists folders with the project's `.dec` entity definitions for the editor, relative to the `.kproject` folder and separated by `;`, e.g. `EntityDefPaths = "editor;tools/entities"`. Missing or empty means `editor`. Folders that don't exist are skipped. Their classes load after the editor's own `entities/` and the user's `user.dec`, so a project can add classes and override engine ones. The engine ignores this key. It can also be edited in the editor's File > Project Settings.
 
 ## Maps: `.fmap` and `.fmapc`
 
-Maps are built in the Forge editor (`tools/forgeMapEditor`), a Hammer-style brush editor.
+Maps are built in the KES Editor (`tools/forgeMapEditor`), a Hammer-style brush editor.
 
 - `.fmap`: the editable source map (JSON). Keep it next to the compiled map; it isn't packaged.
-- `.fmapc`: the compiled map the engine loads (`World::LoadMap`, `map_file.h`). Build it with **F9** in the editor or `forge --compile in.fmap out.fmapc`.
+- `.fmapc`: the compiled map the engine loads (`World::LoadMap`, `map_file.h`). Build it with **F9** in the editor or `kes-editor --compile in.fmap out.fmapc`.
 
 `.fmapc` version 3 layout (little-endian): `FORGECMP`, u32 version, u32 flags, then chunks of `{char[4] id, u32 size, data}`. Readers skip unknown chunks, so new data can be added without breaking older engines.
 
@@ -234,7 +234,7 @@ Each state references a `.kanim` clip by asset path.
 
 ## Particle System Files: `.kfx`
 
-Text-block files written by Forge's Particle System tab:
+Text-block files written by the KES Editor's Particle System tab:
 
 ```txt
 System
@@ -323,7 +323,7 @@ The material table is a list of slots, each with a name and an optional `.mat` p
 
 A part's material, first match wins:
 
-1. the entity key `Material.<slot name>` (Forge lists one field per slot under _Material slots_)
+1. the entity key `Material.<slot name>` (the KES Editor lists one field per slot under _Material slots_)
 2. the slot's `.mat` in the `.kmodel`
 3. the entity `Material`
 4. the model's default material

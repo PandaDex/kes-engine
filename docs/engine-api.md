@@ -336,7 +336,7 @@ How entities are used today:
 
 ## MapScript
 
-The editor's output -> input links (Outputs tab in Forge). `map_script.h`, `World::GetMapScript()`, `game->mapScript`.
+The editor's output -> input links (Outputs tab in the KES Editor). `map_script.h`, `World::GetMapScript()`, `game->mapScript`.
 
 An entity takes part by also implementing `IMapScriptable`:
 

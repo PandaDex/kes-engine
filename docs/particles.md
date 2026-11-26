@@ -1,6 +1,6 @@
 # Particles
 
-Particle systems are `.kfx` files, edited in Forge's **Particle System** tab and simulated on the CPU by the engine. The editor preview runs the same simulation code as the game.
+Particle systems are `.kfx` files, edited in the KES Editor's **Particle System** tab and simulated on the CPU by the engine. The editor preview runs the same simulation code as the game.
 
 Particles can be lights: a **Light renderer** turns every particle (or a share of them) into a shadowless point light in the renderer's clustered light list. Up to 1024 such lights can be on screen; they don't use the 32 regular light slots.
 
@@ -37,7 +37,7 @@ Curve and gradient inputs: NormalizedAge (0 at birth, 1 at death), Age, Speed, R
 
 ## Graphs
 
-Set a value to **Graph** and Forge creates a small node graph for it, opened in the Graph panel under the preview. A graph has one Output node; its input is the value the parameter gets. Nodes (`engine/particle_graph.cpp`):
+Set a value to **Graph** and the KES Editor creates a small node graph for it, opened in the Graph panel under the preview. A graph has one Output node; its input is the value the parameter gets. Nodes (`engine/particle_graph.cpp`):
 
 - Inputs: Particle Attributes (position, velocity, color, size, age, normalized age, lifetime, random, mass, id, speed), Custom Attribute, Emitter (time, loop time, delta time, position), User Parameter
 - Constants: Float, Vector, Color
@@ -99,7 +99,7 @@ particles.Spawn("particles/explosion.kfx", hitPoint);
 
 User parameters are system-level floats declared in the System details of the editor and read in graphs with the User Parameter node.
 
-## Forge: Particle System tab
+## KES Editor: Particle System tab
 
 File > New > Particle System, Assets > New > Particle System, or open any `.kfx`.
 
@@ -124,6 +124,6 @@ Edit > Remove Unused Graphs deletes graphs no parameter uses any more.
 | `engine/particle_world.*` | `ParticleWorld`: the world's systems, asset cache, scene render data |
 | `engine/ent_particle_system.*` | `ParticleSystemEntity` |
 | `engine/shaders/particle.slang` | sprite and ribbon shader |
-| `tools/forgeMapEditor/src/modules/particles` | the Forge tab |
+| `tools/forgeMapEditor/src/modules/particles` | the editor tab |
 
-The simulation files depend only on `text_block_file` and the math types, so Forge compiles them directly (`forge_engine` in Forge's CMakeLists).
+The simulation files depend only on `text_block_file` and the math types, so the KES Editor compiles them directly (`forge_engine` in the editor's CMakeLists).

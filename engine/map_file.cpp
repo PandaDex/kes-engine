@@ -164,7 +164,7 @@ bool LoadCompiledMap(const char* path, CompiledMap& outMap, std::string* outErro
     char magic[8] = {};
     r.bytes(magic, sizeof(magic));
     if (!r.ok() || std::memcmp(magic, "FORGECMP", 8) != 0)
-        return fail("Not a Forge compiled map (bad magic)");
+        return fail("Not a KES compiled map (bad magic)");
 
     const uint32_t version = r.u32();
     if (version != kMapVersion)

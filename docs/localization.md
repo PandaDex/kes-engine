@@ -160,9 +160,9 @@ In debug builds, F7 also re-reads the `.po` files.
 
 ## Localization Editor
 
-The Localization tab in Forge (source in `tools/forgeMapEditor/src/modules/localization`)
+The Localization tab in the KES Editor (source in `tools/forgeMapEditor/src/modules/localization`)
 edits every language of a project at once. Open it with **Window > Localization**, or open
-any `.po` file of the project. It works on Forge's current project and reloads when you
+any `.po` file of the project. It works on the editor's current project and reloads when you
 switch projects. Scan folders and the source language are under
 **Localization > Localization Settings**; **Add Key** is Ctrl+Shift+N.
 

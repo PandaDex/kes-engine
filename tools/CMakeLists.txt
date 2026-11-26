@@ -6,7 +6,7 @@ set(KES_TOOLS_BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bin" CACHE PATH "Where built 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
 
 set(KES_ENGINE_BUILT_TOOLS pakTool modelImporter)
-# Ported into Forge as editor modules (forgeMapEditor/src/modules); no longer built on their own
+# Ported into the KES Editor (forgeMapEditor) as editor modules (forgeMapEditor/src/modules); no longer built on their own
 set(KES_RETIRED_TOOLS shaderGraph modelEditor inputMappingEditor localizationEditor)
 
 file(GLOB KES_TOOL_DIRS LIST_DIRECTORIES true "${CMAKE_CURRENT_SOURCE_DIR}/*")
@@ -51,7 +51,9 @@ endforeach()
 
 if(TARGET forge)
     list(APPEND copy_commands COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/forgeMapEditor/entities" "${KES_TOOLS_BIN_DIR}/entities")
+        "${CMAKE_CURRENT_SOURCE_DIR}/forgeMapEditor/entities" "${KES_TOOLS_BIN_DIR}/entities"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/../engine/assets/engine/ui" "${KES_TOOLS_BIN_DIR}/engine-assets/engine/ui")
 endif()
 
 if(WIN32)

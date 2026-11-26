@@ -175,7 +175,7 @@ Note: with Visual Studio generators, the first build after adding or removing a 
 
 ## Shader Graph
 
-Shader Graph is a node editor for Slang shaders with a live material preview. It is an editor tab in Forge (source in `tools/forgeMapEditor/src/modules/shaderGraph`): **File > New > Shader Graph**, or open a `.slangnodes` or `.mat`.
+Shader Graph is a node editor for Slang shaders with a live material preview. It is an editor tab in the KES Editor (source in `tools/forgeMapEditor/src/modules/shaderGraph`): **File > New > Shader Graph**, or open a `.slangnodes` or `.mat`.
 
 **Shader > Export Material** writes `materials/<name>.mat` and, when the graph drives the surface, `shaders/<name>.shader` and `shaders/<name>.slang` under the project's content folder. The shader is compiled by the next game build like any other. Graph sources (`.slangnodes`) are left out of paks.
 
@@ -183,11 +183,11 @@ Opening a `.mat` (File > Open, or double-click it in the Asset Browser) loads `<
 
 ## Localization Editor
 
-The Localization tab in Forge edits the `.po` files in `content/localization`. See [Localization](localization.md#localization-editor).
+The Localization tab in the KES Editor edits the `.po` files in `content/localization`. See [Localization](localization.md#localization-editor).
 
-## Forge editor tabs
+## KES Editor tabs
 
-Forge is the one editor for every asset type it can edit. Each open asset gets a tab with its own panels and toolbar; the menus of the current tab appear in Forge's menu bar, between File and Assets.
+The KES Editor is the one editor for every asset type it can edit. Each open asset gets a tab with its own panels and toolbar; the menus of the current tab appear in the editor's menu bar, between File and Assets.
 
 | Tab | Opens | New |
 |---|---|---|
@@ -198,12 +198,15 @@ Forge is the one editor for every asset type it can edit. Each open asset gets a
 | Input Map | `.imap` | File > New > Input Map |
 | Particle System | `.kfx`: emitter stacks, renderers (incl. lights), value graphs, live preview ([Particles](particles.md)) | File > New > Particle System |
 | Localization | the project's `.po` files (opening any `.po` opens it) | Window > Localization |
+| UI Preview | `.rml`, read-only: right-click > Preview in the Asset Browser (double-click still opens the text editor) | |
+
+The UI Preview renders the document with RmlUi like the game: fonts and `DensityScale` from the project's `config/DefaultUi.ini`, `/engine/...` paths from the engine's assets, `#Key` text from the chosen `.po`. It reloads when the document, any style sheet, template or image it loads, the config or the `.po` changes. Pick a game resolution (scaled to fit) or Fit; F5 reloads. RmlUi warnings and errors go to the Problems dock. `onclick` actions only show their name in the status bar, and data models are not bound (the game registers them in code), so `data-*` bindings stay empty.
 
 Editors are modules in `tools/forgeMapEditor/src/modules`, registered in `modules/BuiltinModules.cpp`. A module is an `EditorModule` (the extensions it opens) plus an `EditorTab` (a `QMainWindow` with its own docks); see `src/framework/EditorModule.h` and `EditorTab.h`. The graph editors share `src/framework/graph`. Module tests are built as `forge_<name>_test`.
 
-## Map Editor: Forge
+## Map Editor
 
-`tools/forgeMapEditor` is a Qt 6 brush editor in the style of Hammer. It produces the maps the engine loads.
+The KES Editor (`tools/forgeMapEditor`, `kes-editor.exe`) is a Qt 6 brush editor in the style of Hammer. It produces the maps the engine loads.
 
 Build it with Qt 6.4+ (it isn't part of the engine build):
 
@@ -214,7 +217,7 @@ cmake --build out/build/forge --config Release
 
 Workflow:
 
-1. **File > Open Project** (Ctrl+Shift+O) opens the game's `.kproject` (here `game/kes.kproject`). Forge asks for one on first start and reopens it automatically afterwards. Maps go in `<AssetRoot>/maps`, materials are listed from `<AssetRoot>/materials`, and textures resolve from `<AssetRoot>` (or `<AssetRoot>/textures`). *File > Set Content Directory* still works without a project.
+1. **File > Open Project** (Ctrl+Shift+O) opens the game's `.kproject` (here `game/kes.kproject`). The KES Editor asks for one on first start and reopens it automatically afterwards. Maps go in `<AssetRoot>/maps`, materials are listed from `<AssetRoot>/materials`, and textures resolve from `<AssetRoot>` (or `<AssetRoot>/textures`). *File > Set Content Directory* still works without a project.
 2. Build geometry with the Block tool and place engine entities (classes from `entities/kes.dec`).
 3. Apply materials from the **Asset Browser** (bottom dock; it shows material thumbnails and hides compiled `*_c.*` / `.fmapc` files):
    - drag a `.mat` onto a face in the 3D view (hold Shift for the whole object) or onto an object in a 2D view; drag it onto a material field in Properties to set that field
@@ -225,27 +228,28 @@ Workflow:
 4. Link entities on the **Outputs** tab of Properties: pick an output, a target entity and one of its inputs (MapScript, see [engine-api.md](engine-api.md#mapscript)). Links target the entity's GUID, which it gets when placed, so renaming entities keeps them.
 5. Save the `.fmap` into `content/maps/`, then **F9** to build the `.fmapc` next to it.
 
-### Forge as the asset hub
+### The editor as the asset hub
 
-Forge also imports, creates and opens every other asset type:
+The KES Editor also imports, creates and opens every other asset type:
 
-- **Import** (Assets > Import, Ctrl+Shift+I, the Asset Browser's *Import...* button, or drop source files on the window or the browser) runs `model-importer` in the background. Models go to `meshes/` (with a `<model>_<clip>.kanim` per glTF/FBX animation), textures to `textures/`, sounds to `sounds/`. When the Asset Browser shows a subfolder, imports go there instead. Progress and errors appear in the Console.
-- **New** (Assets > New, or the Asset Browser's *New* menu) creates assets from templates: material, material opened in Shader Graph, UI panel / menu / HUD with sample content, UI stylesheet, and an empty map.
-- **Open**: double-click an asset (or right-click > Open in ...) to open it: maps, materials, shader graphs, models, animation graphs, input maps and `.po` files in a Forge tab (see [Forge editor tabs](#forge-editor-tabs)); otherwise in the program set for its type: `.rml`/`.rcss`/shaders in VS Code with the game folder (the one holding `content/`) as the workspace (or Notepad), images and sounds in the system default app. Assets > Launch starts any of those programs on its own.
+- **Import** (Assets > Import, Ctrl+Shift+I, the Asset Browser's *Import* button, or drop source files on the window or the browser) runs `model-importer` in the background. Models go to `meshes/` (with a `<model>_<clip>.kanim` per glTF/FBX animation), textures to `textures/`, sounds to `sounds/`. When the Asset Browser shows a subfolder, imports go there instead. Progress and errors appear in the Console.
+- **New** (Assets > New, or the Asset Browser's *+ Add* menu) creates assets from templates: material, material opened in Shader Graph, UI panel / menu / HUD with sample content, UI stylesheet, and an empty map.
+- **Browse**: the Asset Browser's path bar shows the current folder as breadcrumbs; click a folder to go there, click the `›` after it for its subfolders, or click the empty part of the bar to type a path (`content/textures/env`). Back/forward: the arrow buttons, Alt+Left/Right or the mouse side buttons; Alt+Up goes to the parent. Right-click a folder (tree or grid) > *Set Color* to colour it; colours are per user and per project (stored in the editor's settings, not in the content) and follow renames and moves. Textures show their image as the thumbnail, materials their colour/texture; the slider in the bottom bar sets the tile size.
+- **Open**: double-click an asset (or right-click > Open in ...) to open it: maps, materials, shader graphs, models, animation graphs, input maps and `.po` files in an editor tab (see [KES Editor tabs](#kes-editor-tabs)); otherwise in the program set for its type: `.rml`/`.rcss`/shaders in VS Code with the game folder (the one holding `content/`) as the workspace (or Notepad), images and sounds in the system default app. Assets > Launch starts any of those programs on its own.
 
-Extensions claimed by a Forge editor module always open in Forge. For the rest, the type-to-program table is `kAssetEditors` in `tools/forgeMapEditor/src/assets/AssetTypeMap.cpp` (`{"extension", "program"}`), next to the folders searched for the programs and the import rules. Templates are in `src/assets/AssetTemplates.cpp`. A program Forge can't find is asked for once and remembered.
+Extensions claimed by an editor module always open in the editor. For the rest, the type-to-program table is `kAssetEditors` in `tools/forgeMapEditor/src/assets/AssetTypeMap.cpp` (`{"extension", "program"}`), next to the folders searched for the programs and the import rules. Templates are in `src/assets/AssetTemplates.cpp`. A program the editor can't find is asked for once and remembered.
 
 Materials are the engine's own `.mat` files under the content folder. The editor shows their `BaseColor` and `BaseTexture` (`.ktex`, `.bmp`, `.png`, `.jpg`) in the 3D view, so what you see matches the game.
 
 Headless build, for scripts (uses the nearest `.kproject` above the map):
 
 ```txt
-forge --compile game/content/maps/startup.fmap game/content/maps/startup.fmapc
+kes-editor --compile game/content/maps/startup.fmap game/content/maps/startup.fmapc
 ```
 
 ## Import Tool: `model-importer`
 
-`model-importer` is the current asset import CLI, built by the engine build as the `model-importer` target (Windows only, source in `tools/modelImporter`). Forge runs it for its Import command.
+`model-importer` is the current asset import CLI, built by the engine build as the `model-importer` target (Windows only, source in `tools/modelImporter`). The KES Editor runs it for its Import command.
 
 Usage:
 

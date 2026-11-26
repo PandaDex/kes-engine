@@ -5,7 +5,7 @@
 #include "engine_types.h"
 #include "guid.h"
 
-// Compiled map produced by the Forge editor (tools/forgeMapEditor, "Build Map" / forge --compile).
+// Compiled map produced by the KES Editor (tools/forgeMapEditor, "Build Map" / kes-editor --compile).
 //
 // File layout (.fmapc, version 3, little-endian):
 //   char[8] "FORGECMP", u32 version (3), u32 flags (0)
