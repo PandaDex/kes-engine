@@ -35,6 +35,9 @@ namespace kes::vk
     static constexpr VkFormat kSceneColorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     // Post AA input/output: tonemapped, sRGB encoded by the shader (UNORM for storage image use).
     static constexpr VkFormat kLdrColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    static constexpr VkFormat kPrepassNormalFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    static constexpr VkFormat kPrepassDepthFormat = VK_FORMAT_D32_SFLOAT;
+    static constexpr VkFormat kScreenLightingFormat = VK_FORMAT_R8G8_UNORM;
 
     struct RenderVertex
     {
@@ -1206,7 +1209,7 @@ namespace kes::vk
         VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &materialLayoutInfo, nullptr, &r.materialSetLayout), "vkCreateDescriptorSetLayout (material)", false);
 
         // set 2: environment cube, cascade + local shadow arrays, linear + compare samplers.
-        VkDescriptorSetLayoutBinding globalBindings[5] = {};
+        VkDescriptorSetLayoutBinding globalBindings[7] = {};
         for (uint32_t i = 0; i < 3; ++i)
         {
             globalBindings[i].binding = i;
@@ -1224,10 +1227,26 @@ namespace kes::vk
         globalBindings[4].descriptorCount = 1;
         globalBindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         globalBindings[4].pImmutableSamplers = &r.shadowSampler;
+        globalBindings[5] = globalBindings[0];
+        globalBindings[5].binding = 5; // screen-space lighting
+        globalBindings[6] = globalBindings[0];
+        globalBindings[6].binding = 6; // screen-space reflections
         VkDescriptorSetLayoutCreateInfo globalLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-        globalLayoutInfo.bindingCount = 5;
+        globalLayoutInfo.bindingCount = 7;
         globalLayoutInfo.pBindings = globalBindings;
         VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &globalLayoutInfo, nullptr, &r.globalSetLayout), "vkCreateDescriptorSetLayout (global)", false);
+
+        // Screen-space pass inputs: three images (depth, normal or raw input,
+        // history color) and the linear sampler.
+        VkDescriptorSetLayoutBinding sslBindings[4] = { globalBindings[0], globalBindings[0], globalBindings[0], globalBindings[3] };
+        sslBindings[1].binding = 1;
+        sslBindings[2].binding = 2;
+        sslBindings[3].binding = 3;
+        sslBindings[3].pImmutableSamplers = &r.linearSampler;
+        VkDescriptorSetLayoutCreateInfo sslLayoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        sslLayoutInfo.bindingCount = 4;
+        sslLayoutInfo.pBindings = sslBindings;
+        VK_CHECK_RET(vkCreateDescriptorSetLayout(r.device, &sslLayoutInfo, nullptr, &r.sslSetLayout), "vkCreateDescriptorSetLayout (ssl)", false);
 
         // Tonemap and UI: one combined image sampler, linear immutable sampler.
         VkDescriptorSetLayoutBinding texBinding = {};
@@ -1290,6 +1309,12 @@ namespace kes::vk
         meshLayoutInfo.pSetLayouts = meshSets;
         VK_CHECK_RET(vkCreatePipelineLayout(r.device, &meshLayoutInfo, nullptr, &r.meshPipelineLayout), "vkCreatePipelineLayout (mesh)", false);
 
+        VkDescriptorSetLayout sslSets[2] = { r.uboSetLayout, r.sslSetLayout };
+        VkPipelineLayoutCreateInfo sslLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        sslLayoutInfo.setLayoutCount = 2;
+        sslLayoutInfo.pSetLayouts = sslSets;
+        VK_CHECK_RET(vkCreatePipelineLayout(r.device, &sslLayoutInfo, nullptr, &r.sslPipelineLayout), "vkCreatePipelineLayout (ssl)", false);
+
         VkPipelineLayoutCreateInfo skyLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         skyLayoutInfo.setLayoutCount = 1;
         skyLayoutInfo.pSetLayouts = &r.skySetLayout;
@@ -1346,7 +1371,7 @@ namespace kes::vk
         poolSizes[0] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8 };
         poolSizes[1] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8 };
         poolSizes[2] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 };
-        poolSizes[3] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 32 };
+        poolSizes[3] = { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64 };
         poolSizes[4] = { VK_DESCRIPTOR_TYPE_SAMPLER, 16 };
         poolSizes[5] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 }; // CMAA2
         poolSizes[6] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32 + 2 * kMaxFramesInFlight }; // CMAA2, eye adaptation, tonemap, clusters
@@ -1408,7 +1433,8 @@ namespace kes::vk
                 return false;
         }
         r.globalDescriptorSet = AllocateDescriptorSet(r, r.globalSetLayout);
-        return r.globalDescriptorSet != VK_NULL_HANDLE;
+        r.globalNoSslDescriptorSet = AllocateDescriptorSet(r, r.globalSetLayout);
+        return r.globalDescriptorSet != VK_NULL_HANDLE && r.globalNoSslDescriptorSet != VK_NULL_HANDLE;
     }
 
     static void UpdateSceneAndSkyDescriptorBindings(Renderer& r, const FrameResources& frame)
@@ -1456,21 +1482,35 @@ namespace kes::vk
     {
         const GPUShadowArray& cascades = r.cascadeShadows.arrayView ? r.cascadeShadows : r.dummyShadows;
         const GPUShadowArray& locals = r.localShadows.arrayView ? r.localShadows : r.dummyShadows;
-        VkDescriptorImageInfo images[3] = {};
+        VkDescriptorImageInfo images[6] = {};
         images[0] = { VK_NULL_HANDLE, r.environmentMap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         images[1] = { VK_NULL_HANDLE, cascades.arrayView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
         images[2] = { VK_NULL_HANDLE, locals.arrayView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-        VkWriteDescriptorSet writes[3] = {};
-        for (uint32_t i = 0; i < 3; ++i)
+        images[3] = { VK_NULL_HANDLE, r.ssl.view ? r.ssl.view : r.whiteTexture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[4] = { VK_NULL_HANDLE, r.whiteTexture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[5] = { VK_NULL_HANDLE, r.ssrColor.view ? r.ssrColor.view : r.whiteTexture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet writes[10] = {};
+        uint32_t count = 0;
+        for (VkDescriptorSet set : { r.globalDescriptorSet, r.globalNoSslDescriptorSet })
         {
-            writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            writes[i].dstSet = r.globalDescriptorSet;
-            writes[i].dstBinding = i;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            writes[i].pImageInfo = &images[i];
+            const bool withSsl = set == r.globalDescriptorSet;
+            for (uint32_t i = 0; i < 5; ++i)
+            {
+                VkWriteDescriptorSet& write = writes[count++];
+                write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                write.dstSet = set;
+                write.dstBinding = i < 3 ? i : i + 2u;
+                write.descriptorCount = 1;
+                write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                if (i < 3)
+                    write.pImageInfo = &images[i];
+                else if (i == 3)
+                    write.pImageInfo = withSsl ? &images[3] : &images[4];
+                else
+                    write.pImageInfo = withSsl ? &images[5] : &images[4];
+            }
         }
-        vkUpdateDescriptorSets(r.device, 3, writes, 0, nullptr);
+        vkUpdateDescriptorSets(r.device, count, writes, 0, nullptr);
         r.globalSetDirty = false;
     }
 
@@ -1653,7 +1693,7 @@ namespace kes::vk
     static void CreatePostAATargets(Renderer& r)
     {
         const PostAntiAliasing mode = r.options.postAntiAliasing;
-        if (mode == PostAntiAliasing::Off || !r.postAAAvailable || r.ldrFramebuffer)
+        if (mode == PostAntiAliasing::Off || mode == PostAntiAliasing::TAA || !r.postAAAvailable || r.ldrFramebuffer)
             return;
 
         const uint32_t width = static_cast<uint32_t>(std::max(r.renderWidth, 1));
@@ -1821,8 +1861,159 @@ namespace kes::vk
         return set;
     }
 
+    static void DestroyScreenSpaceTargets(Renderer& r)
+    {
+        FreeDescriptorSet(r, r.sslDescriptorSet);
+        FreeDescriptorSet(r, r.sslBlurDescriptorSet);
+        FreeDescriptorSet(r, r.ssrDescriptorSet);
+        FreeDescriptorSet(r, r.dofDescriptorSet);
+        FreeDescriptorSet(r, r.taaDescriptorSet);
+        r.historyInitialized = false;
+        r.taaHistoryInitialized = false;
+        r.taaHistoryValid = false;
+        r.historyValid = false;
+        for (VkFramebuffer* fb : { &r.prepassFramebuffer, &r.sslRawFramebuffer, &r.sslFramebuffer, &r.ssrFramebuffer, &r.dofFramebuffer })
+        {
+            if (*fb)
+            {
+                vkDestroyFramebuffer(r.device, *fb, nullptr);
+                *fb = VK_NULL_HANDLE;
+            }
+        }
+        const bool had = r.ssl.view != VK_NULL_HANDLE;
+        for (GPUTexture* texture : { &r.prepassNormal, &r.prepassDepth, &r.sslRaw, &r.ssl, &r.ssrColor, &r.historyColor, &r.taaHistory })
+            DestroyGPUTexture(r, *texture);
+        if (had)
+            r.globalSetDirty = true;
+    }
+
+    static VkDescriptorSet AllocateSslDescriptorSet(Renderer& r, VkImageView first, VkImageView second, VkImageView third = VK_NULL_HANDLE)
+    {
+        VkDescriptorSet set = AllocateDescriptorSet(r, r.sslSetLayout);
+        if (!set)
+            return VK_NULL_HANDLE;
+        const VkDescriptorImageInfo images[3] = {
+            { VK_NULL_HANDLE, first, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+            { VK_NULL_HANDLE, second, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+            { VK_NULL_HANDLE, third ? third : r.whiteTexture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }
+        };
+        VkWriteDescriptorSet writes[3] = {};
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            writes[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            writes[i].dstSet = set;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            writes[i].pImageInfo = &images[i];
+        }
+        vkUpdateDescriptorSets(r.device, 3, writes, 0, nullptr);
+        return set;
+    }
+
+    static bool CreateFramebuffer(Renderer& r, VkRenderPass pass, const VkImageView* views, uint32_t count, uint32_t width, uint32_t height,
+        VkFramebuffer& out)
+    {
+        VkFramebufferCreateInfo fbInfo = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+        fbInfo.renderPass = pass;
+        fbInfo.attachmentCount = count;
+        fbInfo.pAttachments = views;
+        fbInfo.width = width;
+        fbInfo.height = height;
+        fbInfo.layers = 1;
+        return vkCreateFramebuffer(r.device, &fbInfo, nullptr, &out) == VK_SUCCESS;
+    }
+
+    // Non-fatal: on failure AO and contact shadows stay off. The global sets
+    // pick the new image up before the next frame (globalSetDirty).
+    static void CreateScreenSpaceTargets(Renderer& r)
+    {
+        if (!r.screenSpaceAvailable || r.ssl.view || !r.whiteTexture.view ||
+            (!r.options.ambientOcclusion && !r.options.contactShadows && !r.options.screenSpaceReflections && !r.options.depthOfField &&
+                !r.options.motionBlur && r.options.postAntiAliasing != PostAntiAliasing::TAA))
+            return;
+        const uint32_t width = static_cast<uint32_t>(std::max(r.renderWidth, 1));
+        const uint32_t height = static_cast<uint32_t>(std::max(r.renderHeight, 1));
+        const VkImageUsageFlags colorUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        bool ok = CreateColorImage(r, width, height, kPrepassNormalFormat, colorUsage, r.prepassNormal) &&
+            CreateColorImage(r, width, height, kScreenLightingFormat, colorUsage, r.sslRaw) &&
+            CreateColorImage(r, width, height, kScreenLightingFormat, colorUsage, r.ssl);
+        if (ok)
+        {
+            ImageDesc depth;
+            depth.width = width;
+            depth.height = height;
+            depth.format = kPrepassDepthFormat;
+            depth.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            ok = CreateImage(r, depth, r.prepassDepth.image, r.prepassDepth.memory);
+            if (ok)
+            {
+                r.prepassDepth.view = CreateImageView(r, r.prepassDepth.image, kPrepassDepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+                ok = r.prepassDepth.view != VK_NULL_HANDLE;
+            }
+        }
+        if (ok)
+        {
+            const VkImageView prepassViews[2] = { r.prepassNormal.view, r.prepassDepth.view };
+            ok = CreateFramebuffer(r, r.prepassRenderPass, prepassViews, 2, width, height, r.prepassFramebuffer) &&
+                CreateFramebuffer(r, r.sslRenderPass, &r.sslRaw.view, 1, width, height, r.sslRawFramebuffer) &&
+                CreateFramebuffer(r, r.sslRenderPass, &r.ssl.view, 1, width, height, r.sslFramebuffer);
+        }
+        if (ok)
+        {
+            r.sslDescriptorSet = AllocateSslDescriptorSet(r, r.prepassDepth.view, r.prepassNormal.view);
+            r.sslBlurDescriptorSet = AllocateSslDescriptorSet(r, r.prepassDepth.view, r.sslRaw.view);
+            ok = r.sslDescriptorSet && r.sslBlurDescriptorSet;
+        }
+        const bool reflections = r.options.screenSpaceReflections && r.ssrPipeline;
+        const bool dof = r.options.depthOfField && r.dofPipeline;
+        const bool taa = r.options.postAntiAliasing == PostAntiAliasing::TAA && r.taaPipeline;
+        const bool motionBlur = r.options.motionBlur && r.motionBlurPipeline;
+        const bool sceneColorPasses = dof || taa || motionBlur;
+        if (ok && (reflections || sceneColorPasses))
+            ok = CreateColorImage(r, width, height, kSceneColorFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                r.historyColor);
+        if (ok && reflections)
+        {
+            ok = CreateColorImage(r, width, height, kSceneColorFormat, colorUsage, r.ssrColor) &&
+                CreateFramebuffer(r, r.ssrRenderPass, &r.ssrColor.view, 1, width, height, r.ssrFramebuffer);
+            if (ok)
+            {
+                r.ssrDescriptorSet = AllocateSslDescriptorSet(r, r.prepassDepth.view, r.prepassNormal.view, r.historyColor.view);
+                ok = r.ssrDescriptorSet != VK_NULL_HANDLE;
+            }
+        }
+        if (ok && sceneColorPasses)
+        {
+            ok = CreateFramebuffer(r, r.ssrRenderPass, &r.sceneColorView, 1, width, height, r.dofFramebuffer);
+            if (ok)
+            {
+                r.dofDescriptorSet = AllocateSslDescriptorSet(r, r.prepassDepth.view, r.prepassNormal.view, r.historyColor.view);
+                ok = r.dofDescriptorSet != VK_NULL_HANDLE;
+            }
+        }
+        if (ok && taa)
+        {
+            ok = CreateColorImage(r, width, height, kSceneColorFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                r.taaHistory);
+            if (ok)
+            {
+                r.taaDescriptorSet = AllocateSslDescriptorSet(r, r.prepassDepth.view, r.taaHistory.view, r.historyColor.view);
+                ok = r.taaDescriptorSet != VK_NULL_HANDLE;
+            }
+        }
+        if (!ok)
+        {
+            EngineLog("Creating the screen-space targets failed; AO, contact shadows, reflections and depth of field are off.");
+            DestroyScreenSpaceTargets(r);
+            return;
+        }
+        r.globalSetDirty = true;
+    }
+
     static void DestroySceneTargets(Renderer& r)
     {
+        DestroyScreenSpaceTargets(r);
         DestroyPostAATargets(r);
         DestroyBloomTargets(r);
         FreeDescriptorSet(r, r.tonemapDescriptorSet);
@@ -1871,7 +2062,7 @@ namespace kes::vk
         color.width = static_cast<uint32_t>(std::max(r.renderWidth, 1));
         color.height = static_cast<uint32_t>(std::max(r.renderHeight, 1));
         color.format = kSceneColorFormat;
-        color.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        color.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         if (!CreateImage(r, color, r.sceneColorImage, r.sceneColorMemory))
             return false;
         r.sceneColorView = CreateImageView(r, r.sceneColorImage, kSceneColorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -1917,6 +2108,7 @@ namespace kes::vk
             return false;
         CreatePostAATargets(r);
         CreateBloomTargets(r);
+        CreateScreenSpaceTargets(r);
         return true;
     }
 
@@ -2073,8 +2265,10 @@ namespace kes::vk
         attrs[5] = { 5, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RenderVertex, boneWeights) };
     }
 
-    // Scene pipelines (variant bits) or, with shadowPipeline, the depth-only shadow pipeline.
-    static VkPipeline CreateMeshPipeline(Renderer& r, const GPUShaderProgram& program, uint32_t variant, bool shadowPipeline)
+    // Scene pipelines (variant bits) or, with shadowPipeline, the depth-only shadow
+    // pipeline; with prepassPipeline, the depth + normal prepass.
+    static VkPipeline CreateMeshPipeline(Renderer& r, const GPUShaderProgram& program, uint32_t variant, bool shadowPipeline,
+        bool prepassPipeline = false)
     {
         const bool wireframe = (variant & kVariantBit_Wireframe) != 0;
         const bool doubleSided = (variant & kVariantBit_DoubleSided) != 0;
@@ -2122,7 +2316,7 @@ namespace kes::vk
         }
 
         VkPipelineMultisampleStateCreateInfo multisample = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-        multisample.rasterizationSamples = shadowPipeline ? VK_SAMPLE_COUNT_1_BIT : r.msaaSamples;
+        multisample.rasterizationSamples = shadowPipeline || prepassPipeline ? VK_SAMPLE_COUNT_1_BIT : r.msaaSamples;
 
         VkPipelineDepthStencilStateCreateInfo depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
         depthStencil.depthTestEnable = VK_TRUE;
@@ -2163,7 +2357,7 @@ namespace kes::vk
         pipelineInfo.pColorBlendState = &colorBlend;
         pipelineInfo.pDynamicState = &dynamicState;
         pipelineInfo.layout = r.meshPipelineLayout;
-        pipelineInfo.renderPass = shadowPipeline ? r.shadowRenderPass : r.sceneRenderPass;
+        pipelineInfo.renderPass = shadowPipeline ? r.shadowRenderPass : prepassPipeline ? r.prepassRenderPass : r.sceneRenderPass;
         pipelineInfo.subpass = 0;
 
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -2638,10 +2832,10 @@ namespace kes::vk
     }
 
     // Bloom level pass: overwrite (downsample) or add onto (upsample) a level.
-    static bool CreateBloomRenderPass(Renderer& r, bool load, VkRenderPass& out)
+    static bool CreateBloomRenderPass(Renderer& r, bool load, VkRenderPass& out, VkFormat format = kSceneColorFormat)
     {
         VkAttachmentDescription color = {};
-        color.format = kSceneColorFormat;
+        color.format = format;
         color.samples = VK_SAMPLE_COUNT_1_BIT;
         color.loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -2680,6 +2874,149 @@ namespace kes::vk
         passInfo.pDependencies = dependencies;
         VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &out), "vkCreateRenderPass (bloom)", false);
         return true;
+    }
+
+    // Prepass: normal + roughness and depth, both left shader-readable.
+    static bool CreatePrepassRenderPass(Renderer& r)
+    {
+        VkAttachmentDescription attachments[2] = {};
+        attachments[0].format = kPrepassNormalFormat;
+        attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        attachments[1] = attachments[0];
+        attachments[1].format = kPrepassDepthFormat;
+
+        VkAttachmentReference colorRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+        VkAttachmentReference depthRef = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+        VkSubpassDescription subpass = {};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+        subpass.pDepthStencilAttachment = &depthRef;
+
+        VkSubpassDependency dependencies[2] = {};
+        // The previous frame's screen-space reads (WAR) and writes (WAW).
+        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass = 0;
+        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].srcSubpass = 0;
+        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        VkRenderPassCreateInfo passInfo = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+        passInfo.attachmentCount = 2;
+        passInfo.pAttachments = attachments;
+        passInfo.subpassCount = 1;
+        passInfo.pSubpasses = &subpass;
+        passInfo.dependencyCount = 2;
+        passInfo.pDependencies = dependencies;
+        VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &r.prepassRenderPass), "vkCreateRenderPass (prepass)", false);
+        return true;
+    }
+
+    static void DestroyScreenSpacePipelines(Renderer& r)
+    {
+        DestroyGPUShaderProgram(r, r.prepassProgram);
+        for (VkPipeline* pipeline : { &r.sslPipeline, &r.sslBlurPipeline, &r.ssrPipeline, &r.dofPipeline, &r.taaPipeline, &r.motionBlurPipeline })
+        {
+            if (*pipeline)
+            {
+                vkDestroyPipeline(r.device, *pipeline, nullptr);
+                *pipeline = VK_NULL_HANDLE;
+            }
+        }
+        for (VkShaderModule* module : { &r.sslVS, &r.sslPS, &r.sslBlurVS, &r.sslBlurPS, &r.ssrVS, &r.ssrPS, &r.dofVS, &r.dofPS, &r.taaVS, &r.taaPS,
+                 &r.motionBlurVS, &r.motionBlurPS })
+        {
+            if (*module)
+            {
+                vkDestroyShaderModule(r.device, *module, nullptr);
+                *module = VK_NULL_HANDLE;
+            }
+        }
+        for (VkRenderPass* pass : { &r.prepassRenderPass, &r.sslRenderPass, &r.ssrRenderPass })
+        {
+            if (*pass)
+            {
+                vkDestroyRenderPass(r.device, *pass, nullptr);
+                *pass = VK_NULL_HANDLE;
+            }
+        }
+        r.screenSpaceAvailable = false;
+    }
+
+    // Non-fatal: without them AO and contact shadows are off.
+    static void CreateScreenSpacePipelines(Renderer& r)
+    {
+        bool ok = CreatePrepassRenderPass(r) && CreateBloomRenderPass(r, false, r.sslRenderPass, kScreenLightingFormat) &&
+            CreateShaderProgram(r, kEngineShaderDepthNormal, kEngineShaderDepthNormal, r.prepassProgram);
+        if (ok)
+        {
+            r.prepassProgram.pipelines[0] = CreateMeshPipeline(r, r.prepassProgram, 0, false, true);
+            r.prepassProgram.pipelines[1] = CreateMeshPipeline(r, r.prepassProgram, kVariantBit_DoubleSided, false, true);
+            r.sslVS = CreateShaderModuleFromBinary(r, kEngineShaderScreenSpaceLighting, ShaderStage::Vertex);
+            r.sslPS = CreateShaderModuleFromBinary(r, kEngineShaderScreenSpaceLighting, ShaderStage::Pixel);
+            r.sslBlurVS = CreateShaderModuleFromBinary(r, kEngineShaderScreenSpaceLightingBlur, ShaderStage::Vertex);
+            r.sslBlurPS = CreateShaderModuleFromBinary(r, kEngineShaderScreenSpaceLightingBlur, ShaderStage::Pixel);
+            ok = r.prepassProgram.pipelines[0] && r.prepassProgram.pipelines[1] && r.sslVS && r.sslPS && r.sslBlurVS && r.sslBlurPS;
+        }
+        if (ok)
+        {
+            r.sslPipeline = CreateFullscreenTrianglePipeline(r, r.sslVS, r.sslPS, r.sslPipelineLayout, r.sslRenderPass, false, VK_SAMPLE_COUNT_1_BIT);
+            r.sslBlurPipeline = CreateFullscreenTrianglePipeline(r, r.sslBlurVS, r.sslBlurPS, r.sslPipelineLayout, r.sslRenderPass, false,
+                VK_SAMPLE_COUNT_1_BIT);
+            ok = r.sslPipeline && r.sslBlurPipeline;
+        }
+        if (!ok)
+        {
+            EngineLog("Screen-space lighting is unavailable on this device.");
+            DestroyScreenSpacePipelines(r);
+            return;
+        }
+        r.screenSpaceAvailable = true;
+
+        // Reflections and depth of field are optional on top; both draw into RGBA16F.
+        if (!CreateBloomRenderPass(r, false, r.ssrRenderPass, kSceneColorFormat))
+            return;
+        r.ssrVS = CreateShaderModuleFromBinary(r, kEngineShaderScreenSpaceReflections, ShaderStage::Vertex);
+        r.ssrPS = CreateShaderModuleFromBinary(r, kEngineShaderScreenSpaceReflections, ShaderStage::Pixel);
+        if (r.ssrVS && r.ssrPS)
+            r.ssrPipeline = CreateFullscreenTrianglePipeline(r, r.ssrVS, r.ssrPS, r.sslPipelineLayout, r.ssrRenderPass, false, VK_SAMPLE_COUNT_1_BIT);
+        if (!r.ssrPipeline)
+            EngineLog("Screen-space reflections are unavailable on this device.");
+        r.dofVS = CreateShaderModuleFromBinary(r, kEngineShaderDepthOfField, ShaderStage::Vertex);
+        r.dofPS = CreateShaderModuleFromBinary(r, kEngineShaderDepthOfField, ShaderStage::Pixel);
+        if (r.dofVS && r.dofPS)
+            r.dofPipeline = CreateFullscreenTrianglePipeline(r, r.dofVS, r.dofPS, r.sslPipelineLayout, r.ssrRenderPass, false, VK_SAMPLE_COUNT_1_BIT);
+        if (!r.dofPipeline)
+            EngineLog("Depth of field is unavailable on this device.");
+        r.taaVS = CreateShaderModuleFromBinary(r, kEngineShaderTemporalAA, ShaderStage::Vertex);
+        r.taaPS = CreateShaderModuleFromBinary(r, kEngineShaderTemporalAA, ShaderStage::Pixel);
+        if (r.taaVS && r.taaPS)
+            r.taaPipeline = CreateFullscreenTrianglePipeline(r, r.taaVS, r.taaPS, r.sslPipelineLayout, r.ssrRenderPass, false, VK_SAMPLE_COUNT_1_BIT);
+        if (!r.taaPipeline)
+            EngineLog("TAA is unavailable on this device.");
+        r.motionBlurVS = CreateShaderModuleFromBinary(r, kEngineShaderMotionBlur, ShaderStage::Vertex);
+        r.motionBlurPS = CreateShaderModuleFromBinary(r, kEngineShaderMotionBlur, ShaderStage::Pixel);
+        if (r.motionBlurVS && r.motionBlurPS)
+            r.motionBlurPipeline = CreateFullscreenTrianglePipeline(r, r.motionBlurVS, r.motionBlurPS, r.sslPipelineLayout, r.ssrRenderPass, false,
+                VK_SAMPLE_COUNT_1_BIT);
+        if (!r.motionBlurPipeline)
+            EngineLog("Motion blur is unavailable on this device.");
     }
 
     static VkPipeline CreateComputePipeline(Renderer& r, VkShaderModule module, VkPipelineLayout layout)
@@ -3593,6 +3930,8 @@ namespace kes::vk
             CreatePostAATargets(r);
             CreatePostProcessPipelines(r); // non-fatal as well
             CreateBloomTargets(r);
+            CreateScreenSpacePipelines(r); // non-fatal
+            CreateScreenSpaceTargets(r);
         }
         if (ok)
         {
@@ -3710,6 +4049,14 @@ namespace kes::vk
                 DestroyBloomTargets(r);
                 CreateBloomTargets(r);
             }
+            if (previous.ambientOcclusion != options.ambientOcclusion || previous.contactShadows != options.contactShadows ||
+                previous.screenSpaceReflections != options.screenSpaceReflections || previous.depthOfField != options.depthOfField ||
+                previous.motionBlur != options.motionBlur ||
+                (previous.postAntiAliasing == PostAntiAliasing::TAA) != (options.postAntiAliasing == PostAntiAliasing::TAA))
+            {
+                DestroyScreenSpaceTargets(r);
+                CreateScreenSpaceTargets(r);
+            }
         }
         if (previous.shadowQuality != options.shadowQuality)
             CreateShadowTargets(r);
@@ -3718,9 +4065,9 @@ namespace kes::vk
             DestroyMaterialSets(r);
             CreateMaterialSampler(r);
         }
-        static const char* const kPostAANames[] = { "off", "FXAA", "CMAA2" };
+        static const char* const kPostAANames[] = { "off", "FXAA", "CMAA2", "TAA" };
         EngineLogf("Graphics options: MSAA %dx, post AA %s, bloom %s, shadows %d, anisotropy %dx.", static_cast<int>(r.msaaSamples),
-            kPostAANames[static_cast<int>(r.postAA)], r.bloomLevelCount > 0 ? "on" : "off", static_cast<int>(options.shadowQuality),
+            kPostAANames[static_cast<int>(r.taaPipeline && options.postAntiAliasing == PostAntiAliasing::TAA ? PostAntiAliasing::TAA : r.postAA)], r.bloomLevelCount > 0 ? "on" : "off", static_cast<int>(options.shadowQuality),
             std::clamp(options.anisotropy, 1, 16));
     }
 
@@ -3943,15 +4290,24 @@ namespace kes::vk
     }
 
     // Draws one scene object with `viewProj` (camera or shadow view), culled against `frustum`.
+    enum class MeshPass
+    {
+        Scene,
+        Shadow,
+        Prepass,
+    };
+
     static void DrawSceneObject(Renderer& r, DrawState& state, const DrawItem& item, const Matrix4& viewProj, const render::Frustum& frustum,
-        const AssetSystem& assets, bool shadowPass, bool wireframe, bool transparent)
+        const AssetSystem& assets, MeshPass pass, bool wireframe, bool transparent)
     {
         if (!item.skinned && !render::SphereInFrustum(frustum, item.boundsCenter, item.boundsRadius))
             return;
         const SceneObject& obj = *item.object;
 
         VkPipeline pipeline = r.shadowProgram.pipelines[0];
-        if (!shadowPass)
+        if (pass == MeshPass::Prepass)
+            pipeline = r.prepassProgram.pipelines[IsDoubleSidedMaterial(item.material) ? 1 : 0];
+        else if (pass == MeshPass::Scene)
         {
             GPUShaderProgram* program = &r.meshDefaultProgram;
             if (item.material && item.material->shader != 0)
@@ -4005,8 +4361,9 @@ namespace kes::vk
             materialBytes += views * AlignUp(sizeof(render::MaterialCBData), frame.materialCBRing.alignment);
         };
         const VkDeviceSize shadowViews = r.frame.shadowViews.size();
+        const VkDeviceSize cameraViews = r.prepassThisFrame ? 2 : 1;
         for (const DrawItem& item : r.opaqueDrawItems)
-            add(item, 1 + (CastsShadows(item.material) ? shadowViews : 0));
+            add(item, cameraViews + (CastsShadows(item.material) ? shadowViews : 0));
         for (const DrawItem& item : r.transparentDrawItems)
             add(item, 1);
         const VkDeviceSize particleDraws = r.particleGeometry.draws.size();
@@ -4076,6 +4433,150 @@ namespace kes::vk
         }
     }
 
+    static void RecordScreenSpaceLightingPass(Renderer& r, VkPipeline pipeline, VkFramebuffer framebuffer, VkDescriptorSet inputs,
+        VkRenderPass renderPass = VK_NULL_HANDLE)
+    {
+        VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        passBegin.renderPass = renderPass ? renderPass : r.sslRenderPass;
+        passBegin.framebuffer = framebuffer;
+        passBegin.renderArea.extent = { static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight) };
+        vkCmdBeginRenderPass(r.commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+        const VkViewport viewport = BuildFlippedViewport(static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight));
+        vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
+        const VkRect2D scissor = { { 0, 0 }, passBegin.renderArea.extent };
+        vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
+        vkCmdBindPipeline(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        const uint32_t dynamicOffsets[2] = { 0, 0 };
+        const VkDescriptorSet sets[2] = { r.uboDescriptorSet, inputs };
+        vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.sslPipelineLayout, 0, 2, sets, 2, dynamicOffsets);
+        vkCmdDraw(r.commandBuffer, 3, 1, 0, 0);
+        vkCmdEndRenderPass(r.commandBuffer);
+    }
+
+    // Depth + normal prepass of the opaque draws, then AO / contact shadows into `ssl`.
+    static void RenderScreenSpaceLighting(Renderer& r, const AssetSystem& assets)
+    {
+        KES_ZONE(RENDER, "Screen-space lighting");
+        {
+            KES_VK_GPU_ZONE(r, "Depth prepass");
+            VkClearValue clearValues[2] = {};
+            clearValues[1].depthStencil = { 1.0f, 0 };
+            VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+            passBegin.renderPass = r.prepassRenderPass;
+            passBegin.framebuffer = r.prepassFramebuffer;
+            passBegin.renderArea.extent = { static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight) };
+            passBegin.clearValueCount = 2;
+            passBegin.pClearValues = clearValues;
+            vkCmdBeginRenderPass(r.commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+            const VkViewport viewport = BuildFlippedViewport(static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight));
+            vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
+            const VkRect2D scissor = { { 0, 0 }, passBegin.renderArea.extent };
+            vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
+            DrawState state;
+            for (const DrawItem& item : r.opaqueDrawItems)
+                DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, MeshPass::Prepass, false, false);
+            vkCmdEndRenderPass(r.commandBuffer);
+        }
+        {
+            KES_VK_GPU_ZONE(r, "AO + contact shadows");
+            RecordScreenSpaceLightingPass(r, r.sslPipeline, r.sslRawFramebuffer, r.sslDescriptorSet);
+            RecordScreenSpaceLightingPass(r, r.sslBlurPipeline, r.sslFramebuffer, r.sslBlurDescriptorSet);
+        }
+        if (r.ssrFramebuffer)
+        {
+            KES_VK_GPU_ZONE(r, "Reflections");
+            if (!r.historyInitialized)
+            {
+                // Never written yet; the frame's constants keep reflections off until it is.
+                const VkImageMemoryBarrier barrier = ColorImageBarrier(r.historyColor.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT);
+                vkCmdPipelineBarrier(r.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                    0, nullptr, 1, &barrier);
+                r.historyInitialized = true;
+            }
+            RecordScreenSpaceLightingPass(r, r.ssrPipeline, r.ssrFramebuffer, r.ssrDescriptorSet, r.ssrRenderPass);
+        }
+    }
+
+    // Scene color -> dst (history color, TAA history). Leaves both shader-readable.
+    static void CopySceneColor(Renderer& r, GPUTexture& dst, bool& initialized)
+    {
+        KES_VK_GPU_ZONE(r, "History copy");
+        VkImageMemoryBarrier before[2] = {
+            ColorImageBarrier(r.sceneColorImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT),
+            ColorImageBarrier(dst.image, initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT)
+        };
+        vkCmdPipelineBarrier(r.commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, before);
+        VkImageCopy region = {};
+        region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        region.dstSubresource = region.srcSubresource;
+        region.extent = { static_cast<uint32_t>(r.renderWidth), static_cast<uint32_t>(r.renderHeight), 1 };
+        vkCmdCopyImage(r.commandBuffer, r.sceneColorImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        VkImageMemoryBarrier after[2] = {
+            ColorImageBarrier(r.sceneColorImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT),
+            ColorImageBarrier(dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)
+        };
+        vkCmdPipelineBarrier(r.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, after);
+        initialized = true;
+    }
+
+    // An image sampled before its first write: UNDEFINED -> shader-readable once.
+    static void EnsureShaderReadable(Renderer& r, GPUTexture& texture, bool& initialized)
+    {
+        if (initialized)
+            return;
+        const VkImageMemoryBarrier barrier = ColorImageBarrier(texture.image, VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT);
+        vkCmdPipelineBarrier(r.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+            0, nullptr, 1, &barrier);
+        initialized = true;
+    }
+
+    // TAA, depth of field and motion blur, in that order, each on a fresh copy
+    // of the scene color. The first copy also feeds next frame's reflections.
+    static void RecordSceneColorPasses(Renderer& r, bool copyForReflections)
+    {
+        const render::SceneCBData& cb = r.frame.scene;
+        const bool taa = cb.taaParams[2] > 0.5f;
+        const bool dof = cb.dofParams[3] > 0.5f;
+        const bool motionBlur = cb.motionBlurParams[2] > 0.5f;
+        if (!copyForReflections && !taa && !dof && !motionBlur)
+            return;
+        CopySceneColor(r, r.historyColor, r.historyInitialized);
+        bool historyIsScene = true;
+        if (taa)
+        {
+            KES_VK_GPU_ZONE(r, "TAA");
+            EnsureShaderReadable(r, r.taaHistory, r.taaHistoryInitialized);
+            RecordScreenSpaceLightingPass(r, r.taaPipeline, r.dofFramebuffer, r.taaDescriptorSet, r.ssrRenderPass);
+            CopySceneColor(r, r.taaHistory, r.taaHistoryInitialized);
+            r.taaHistoryValid = true;
+            historyIsScene = false;
+        }
+        if (dof)
+        {
+            KES_VK_GPU_ZONE(r, "Depth of field");
+            if (!historyIsScene)
+                CopySceneColor(r, r.historyColor, r.historyInitialized);
+            RecordScreenSpaceLightingPass(r, r.dofPipeline, r.dofFramebuffer, r.dofDescriptorSet, r.ssrRenderPass);
+            historyIsScene = false;
+        }
+        if (motionBlur)
+        {
+            KES_VK_GPU_ZONE(r, "Motion blur");
+            if (!historyIsScene)
+                CopySceneColor(r, r.historyColor, r.historyInitialized);
+            RecordScreenSpaceLightingPass(r, r.motionBlurPipeline, r.dofFramebuffer, r.dofDescriptorSet, r.ssrRenderPass);
+        }
+    }
+
     static void RenderShadowMaps(Renderer& r, const AssetSystem& assets)
     {
         if (r.frame.shadowViews.empty())
@@ -4091,7 +4592,7 @@ namespace kes::vk
             for (const DrawItem& item : r.opaqueDrawItems)
             {
                 if (CastsShadows(item.material))
-                    DrawSceneObject(r, state, item, view.viewProj, frustum, assets, true, false, false);
+                    DrawSceneObject(r, state, item, view.viewProj, frustum, assets, MeshPass::Shadow, false, false);
             }
         };
 
@@ -4205,6 +4706,28 @@ namespace kes::vk
         const float aspect = static_cast<float>(r.renderWidth) / static_cast<float>(r.renderHeight);
         render::BuildFrameSetup(r.frame, scene, camera, sceneObj, aspect, r.options);
         render::ApplyEnvironment(r.environment, r.frame.scene);
+        float unjitteredViewProj[16];
+        std::memcpy(unjitteredViewProj, r.frame.scene.viewProj, sizeof(unjitteredViewProj));
+        const bool taaActive = r.options.postAntiAliasing == PostAntiAliasing::TAA && r.taaDescriptorSet && r.dofFramebuffer;
+        if (taaActive)
+            render::ApplyTemporalJitter(r.frame, r.taaFrameIndex++, r.renderWidth, r.renderHeight);
+        render::ScreenSpaceAvailability screenSpace;
+        screenSpace.lighting = r.ssl.view != VK_NULL_HANDLE && !r.globalSetDirty;
+        screenSpace.reflections = r.ssrFramebuffer != VK_NULL_HANDLE && r.historyValid;
+        screenSpace.depthOfField = r.dofFramebuffer && r.dofPipeline;
+        screenSpace.temporalAA = taaActive;
+        screenSpace.temporalHistory = r.taaHistoryValid;
+        screenSpace.motionBlur = r.dofFramebuffer && r.motionBlurPipeline;
+        screenSpace.prevViewProj = r.havePrevViewProj ? r.prevViewProj : nullptr;
+        render::SetScreenSpaceLighting(r.frame.scene, sceneObj.GetPostProcess(), r.options, r.renderWidth, r.renderHeight, screenSpace);
+        std::memcpy(r.prevViewProj, unjitteredViewProj, sizeof(r.prevViewProj));
+        r.havePrevViewProj = true;
+        // Reflections need a history first, so the prepass and the copy run before they show.
+        const PostProcessSettings& framePost = sceneObj.GetPostProcess();
+        const bool reflectionsWanted = r.ssrFramebuffer && render::WantsScreenReflections(framePost, r.options);
+        if (!reflectionsWanted)
+            r.historyValid = false;
+        r.prepassThisFrame = render::WantsDepthPrepass(r.frame.scene) || reflectionsWanted;
         if (!r.cascadeShadows.arrayView)
         {
             r.frame.scene.shadowParams[3] = 0.0f;
@@ -4299,6 +4822,8 @@ namespace kes::vk
             return;
 
         RenderShadowMaps(r, assets);
+        if (r.prepassThisFrame)
+            RenderScreenSpaceLighting(r, assets);
 
         KES_VK_GPU_ZONE(r, "Scene");
         float clearColor[4] = {};
@@ -4322,19 +4847,20 @@ namespace kes::vk
 
         RenderSkyBackground(r, camera, sceneObj);
 
-        vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.meshPipelineLayout, 2, 1, &r.globalDescriptorSet, 0, nullptr);
+        VkDescriptorSet globalSet = r.prepassThisFrame ? r.globalDescriptorSet : r.globalNoSslDescriptorSet;
+        vkCmdBindDescriptorSets(r.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r.meshPipelineLayout, 2, 1, &globalSet, 0, nullptr);
         DrawState state;
         {
             KES_ZONE(RENDER, "Draw opaque");
             KES_VK_GPU_ZONE(r, "Opaque");
             for (const DrawItem& item : opaqueItems)
-                DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, scene.wireframe, false);
+                DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, MeshPass::Scene, scene.wireframe, false);
         }
         {
             KES_ZONE(RENDER, "Draw transparent");
             KES_VK_GPU_ZONE(r, "Transparent");
             for (const DrawItem& item : transparentItems)
-                DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, scene.wireframe, true);
+                DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, MeshPass::Scene, scene.wireframe, true);
         }
         if (drawParticles)
         {
@@ -4344,6 +4870,11 @@ namespace kes::vk
         }
 
         vkCmdEndRenderPass(r.commandBuffer);
+        if (r.prepassThisFrame)
+            RecordSceneColorPasses(r, reflectionsWanted);
+        r.historyValid = r.prepassThisFrame && reflectionsWanted;
+        if (r.frame.scene.taaParams[2] < 0.5f)
+            r.taaHistoryValid = false;
 
         // Eye adaptation and bloom on the resolved scene.
         const PostProcessSettings& post = sceneObj.GetPostProcess();
@@ -4809,6 +5340,7 @@ namespace kes::vk
         DestroyRenderTargets(r);
         DestroyPostAAPipelines(r);
         DestroyPostProcessPipelines(r);
+        DestroyScreenSpacePipelines(r);
         DestroyBuffer(r, r.histogramBuffer, r.histogramMemory);
         DestroyBuffer(r, r.exposureStateBuffer, r.exposureStateMemory);
         for (VkRenderPass* pass : { &r.sceneRenderPass, &r.shadowRenderPass, &r.shadowAtlasRenderPass, &r.backbufferRenderPass })
@@ -4827,7 +5359,7 @@ namespace kes::vk
             vkDestroyDescriptorPool(r.device, r.descriptorPool, nullptr);
             r.descriptorPool = VK_NULL_HANDLE;
         }
-        for (VkPipelineLayout* layout : { &r.meshPipelineLayout, &r.skyPipelineLayout, &r.tonemapPipelineLayout, &r.blitPipelineLayout,
+        for (VkPipelineLayout* layout : { &r.meshPipelineLayout, &r.sslPipelineLayout, &r.skyPipelineLayout, &r.tonemapPipelineLayout, &r.blitPipelineLayout,
                  &r.exposurePipelineLayout, &r.uiPipelineLayout })
         {
             if (*layout)
@@ -4837,7 +5369,7 @@ namespace kes::vk
             }
         }
         for (VkDescriptorSetLayout* layout : { &r.uiTexSetLayout, &r.uboSetLayout, &r.materialSetLayout, &r.globalSetLayout, &r.texSetLayout,
-                 &r.tonemapSetLayout, &r.exposureSetLayout, &r.skySetLayout })
+                 &r.tonemapSetLayout, &r.exposureSetLayout, &r.skySetLayout, &r.sslSetLayout })
         {
             if (*layout)
             {

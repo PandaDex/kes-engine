@@ -127,6 +127,30 @@ PostProcessSettings ResolvePostProcessLayers(const PostProcessSettings& base, co
         blend(PostProcessOverride_VignetteSmoothness, out.vignetteSmoothness, in.vignetteSmoothness);
         for (int i = 0; i < 3; ++i)
             blend(PostProcessOverride_VignetteColor, out.vignetteColor[i], in.vignetteColor[i]);
+        if ((mask & PostProcessOverride_Tonemapper) && w > 0.5f)
+            out.tonemapper = in.tonemapper;
+        blend(PostProcessOverride_Temperature, out.temperature, in.temperature);
+        blend(PostProcessOverride_Tint, out.tint, in.tint);
+        blend(PostProcessOverride_Saturation, out.saturation, in.saturation);
+        blend(PostProcessOverride_Contrast, out.contrast, in.contrast);
+        for (int i = 0; i < 3; ++i)
+        {
+            blend(PostProcessOverride_ColorFilter, out.colorFilter[i], in.colorFilter[i]);
+            blend(PostProcessOverride_Lift, out.lift[i], in.lift[i]);
+            blend(PostProcessOverride_Gamma, out.gamma[i], in.gamma[i]);
+            blend(PostProcessOverride_Gain, out.gain[i], in.gain[i]);
+        }
+        blend(PostProcessOverride_Sharpen, out.sharpen, in.sharpen);
+        blend(PostProcessOverride_AmbientOcclusionIntensity, out.ambientOcclusionIntensity, in.ambientOcclusionIntensity);
+        blend(PostProcessOverride_AmbientOcclusionRadius, out.ambientOcclusionRadius, in.ambientOcclusionRadius);
+        blend(PostProcessOverride_ContactShadowLength, out.contactShadowLength, in.contactShadowLength);
+        blend(PostProcessOverride_ReflectionIntensity, out.reflectionIntensity, in.reflectionIntensity);
+        blend(PostProcessOverride_ReflectionMaxRoughness, out.reflectionMaxRoughness, in.reflectionMaxRoughness);
+        blend(PostProcessOverride_ReflectionMaxDistance, out.reflectionMaxDistance, in.reflectionMaxDistance);
+        blend(PostProcessOverride_DepthOfFieldFocusDistance, out.depthOfFieldFocusDistance, in.depthOfFieldFocusDistance);
+        blend(PostProcessOverride_DepthOfFieldFocusRange, out.depthOfFieldFocusRange, in.depthOfFieldFocusRange);
+        blend(PostProcessOverride_DepthOfFieldMaxBlur, out.depthOfFieldMaxBlur, in.depthOfFieldMaxBlur);
+        blend(PostProcessOverride_MotionBlurIntensity, out.motionBlurIntensity, in.motionBlurIntensity);
     }
     if (out.autoExposureMax < out.autoExposureMin)
         out.autoExposureMax = out.autoExposureMin;

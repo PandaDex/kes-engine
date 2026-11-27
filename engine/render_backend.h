@@ -39,6 +39,7 @@ enum class PostAntiAliasing
     Off = 0,
     FXAA = 1, // FXAA 3.11 quality, single fullscreen pass
     CMAA2 = 2, // Intel CMAA2 (compute), sharper and more conservative than FXAA
+    TAA = 3, // temporal, on the HDR scene with a jittered projection (needs the depth prepass)
 };
 
 // Player-facing quality options (GameSettings), applied with
@@ -51,10 +52,18 @@ struct GraphicsOptions
     int anisotropy = 8; // 1-16
     float shadowDistance = 60.0f; // meters covered by the sun cascades
     bool bloom = true; // off skips the bloom passes whatever the scene asks for
+    bool ambientOcclusion = true; // screen-space AO (depth + normal prepass)
+    bool contactShadows = true; // screen-space contact shadows of the sun (same prepass)
+    bool screenSpaceReflections = true; // same prepass, plus a copy of the scene color each frame
+    bool depthOfField = true; // off skips it whatever the scene asks for
+    bool motionBlur = true; // camera motion blur; off skips it whatever the scene asks for
 
     bool operator==(const GraphicsOptions& other) const
     {
         return msaaSamples == other.msaaSamples && postAntiAliasing == other.postAntiAliasing && bloom == other.bloom &&
+            ambientOcclusion == other.ambientOcclusion && contactShadows == other.contactShadows &&
+            screenSpaceReflections == other.screenSpaceReflections && depthOfField == other.depthOfField &&
+            motionBlur == other.motionBlur &&
             shadowQuality == other.shadowQuality &&
             anisotropy == other.anisotropy && shadowDistance == other.shadowDistance;
     }

@@ -103,6 +103,16 @@ public:
     float GetShadowDistance() const { return m_shadowDistance; }
     void SetBloom(bool enabled) { m_bloom = enabled; }
     bool GetBloom() const { return m_bloom; }
+    void SetAmbientOcclusion(bool enabled) { m_ambientOcclusion = enabled; }
+    bool GetAmbientOcclusion() const { return m_ambientOcclusion; }
+    void SetContactShadows(bool enabled) { m_contactShadows = enabled; }
+    bool GetContactShadows() const { return m_contactShadows; }
+    void SetScreenSpaceReflections(bool enabled) { m_screenSpaceReflections = enabled; }
+    bool GetScreenSpaceReflections() const { return m_screenSpaceReflections; }
+    void SetDepthOfField(bool enabled) { m_depthOfField = enabled; }
+    bool GetDepthOfField() const { return m_depthOfField; }
+    void SetMotionBlur(bool enabled) { m_motionBlur = enabled; }
+    bool GetMotionBlur() const { return m_motionBlur; }
     GraphicsOptions GetGraphicsOptions() const;
 
     // Look controls, applied live (multipliers on the player's base values,
@@ -224,6 +234,11 @@ private:
     int m_anisotropy = 8; // AnisotropicFiltering
     float m_shadowDistance = 60.0f; // ShadowDistance
     bool m_bloom = true; // bBloom
+    bool m_ambientOcclusion = true; // bAmbientOcclusion
+    bool m_contactShadows = true; // bContactShadows
+    bool m_screenSpaceReflections = true; // bScreenSpaceReflections
+    bool m_depthOfField = true; // bDepthOfField
+    bool m_motionBlur = true; // bMotionBlur
     float m_mouseSensitivity = 1.0f; // MouseSensitivity
     float m_gamepadLookSensitivity = 1.0f; // GamepadLookSensitivity
     bool m_invertLookY = false; // bInvertLookY

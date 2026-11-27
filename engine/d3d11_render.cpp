@@ -241,7 +241,7 @@ namespace kes::d3d11
     static void CreatePostAATargets(Renderer& r)
     {
         const PostAntiAliasing mode = r.options.postAntiAliasing;
-        if (mode == PostAntiAliasing::Off || !r.postAAAvailable || r.ldrColor)
+        if (mode == PostAntiAliasing::Off || mode == PostAntiAliasing::TAA || !r.postAAAvailable || r.ldrColor)
             return;
 
         const UINT width = static_cast<UINT>(std::max(r.renderWidth, 1));
@@ -313,8 +313,119 @@ namespace kes::d3d11
         r.bloomLevelCount = count;
     }
 
+    static void DestroyScreenSpaceTargets(Renderer& r)
+    {
+        if (r.context)
+        {
+            ID3D11ShaderResourceView* nullViews[5] = {};
+            r.context->PSSetShaderResources(10, 5, nullViews);
+        }
+        SafeRelease(r.sslSRV);
+        SafeRelease(r.sslRTV);
+        SafeRelease(r.ssl);
+        SafeRelease(r.ssrSRV);
+        SafeRelease(r.ssrRTV);
+        SafeRelease(r.ssrColor);
+        SafeRelease(r.historySRV);
+        SafeRelease(r.historyColor);
+        SafeRelease(r.taaHistorySRV);
+        SafeRelease(r.taaHistory);
+        r.historyValid = false;
+        r.taaHistoryValid = false;
+        SafeRelease(r.sslRawSRV);
+        SafeRelease(r.sslRawRTV);
+        SafeRelease(r.sslRaw);
+        SafeRelease(r.prepassDepthSRV);
+        SafeRelease(r.prepassDSV);
+        SafeRelease(r.prepassDepth);
+        SafeRelease(r.prepassNormalSRV);
+        SafeRelease(r.prepassNormalRTV);
+        SafeRelease(r.prepassNormal);
+    }
+
+    static bool CreateColorTarget(Renderer& r, UINT width, UINT height, DXGI_FORMAT format, ID3D11Texture2D** texture,
+        ID3D11RenderTargetView** rtv, ID3D11ShaderResourceView** srv)
+    {
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        return SUCCEEDED(r.device->CreateTexture2D(&desc, nullptr, texture)) &&
+            SUCCEEDED(r.device->CreateRenderTargetView(*texture, nullptr, rtv)) &&
+            SUCCEEDED(r.device->CreateShaderResourceView(*texture, nullptr, srv));
+    }
+
+    // Non-fatal: on failure AO and contact shadows stay off.
+    static void CreateScreenSpaceTargets(Renderer& r)
+    {
+        if (!r.screenSpaceAvailable || r.ssl ||
+            (!r.options.ambientOcclusion && !r.options.contactShadows && !r.options.screenSpaceReflections && !r.options.depthOfField &&
+                !r.options.motionBlur && r.options.postAntiAliasing != PostAntiAliasing::TAA))
+            return;
+        const UINT width = static_cast<UINT>(std::max(r.renderWidth, 1));
+        const UINT height = static_cast<UINT>(std::max(r.renderHeight, 1));
+        bool ok = CreateColorTarget(r, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, &r.prepassNormal, &r.prepassNormalRTV, &r.prepassNormalSRV) &&
+            CreateColorTarget(r, width, height, DXGI_FORMAT_R8G8_UNORM, &r.sslRaw, &r.sslRawRTV, &r.sslRawSRV) &&
+            CreateColorTarget(r, width, height, DXGI_FORMAT_R8G8_UNORM, &r.ssl, &r.sslRTV, &r.sslSRV);
+        if (ok)
+        {
+            D3D11_TEXTURE2D_DESC desc = {};
+            desc.Width = width;
+            desc.Height = height;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_R32_TYPELESS;
+            desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+            D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+            dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+            dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels = 1;
+            ok = SUCCEEDED(r.device->CreateTexture2D(&desc, nullptr, &r.prepassDepth)) &&
+                SUCCEEDED(r.device->CreateDepthStencilView(r.prepassDepth, &dsvDesc, &r.prepassDSV)) &&
+                SUCCEEDED(r.device->CreateShaderResourceView(r.prepassDepth, &srvDesc, &r.prepassDepthSRV));
+        }
+        const bool reflections = r.options.screenSpaceReflections && r.ssrPS;
+        if (ok && reflections)
+            ok = CreateColorTarget(r, width, height, kSceneColorFormat, &r.ssrColor, &r.ssrRTV, &r.ssrSRV);
+        const bool taa = r.options.postAntiAliasing == PostAntiAliasing::TAA && r.taaPS;
+        const bool sceneColorPasses = (r.options.depthOfField && r.dofPS) || taa || (r.options.motionBlur && r.motionBlurPS);
+        if (ok && (reflections || sceneColorPasses))
+        {
+            D3D11_TEXTURE2D_DESC desc = {};
+            desc.Width = width;
+            desc.Height = height;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = kSceneColorFormat;
+            desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            ok = SUCCEEDED(r.device->CreateTexture2D(&desc, nullptr, &r.historyColor)) &&
+                SUCCEEDED(r.device->CreateShaderResourceView(r.historyColor, nullptr, &r.historySRV));
+            if (ok && taa)
+                ok = SUCCEEDED(r.device->CreateTexture2D(&desc, nullptr, &r.taaHistory)) &&
+                    SUCCEEDED(r.device->CreateShaderResourceView(r.taaHistory, nullptr, &r.taaHistorySRV));
+        }
+        if (!ok)
+        {
+            EngineLog("Creating the screen-space targets failed; AO, contact shadows, reflections and depth of field are off.");
+            DestroyScreenSpaceTargets(r);
+        }
+    }
+
     static void DestroySceneTargets(Renderer& r)
     {
+        DestroyScreenSpaceTargets(r);
         DestroyPostAATargets(r);
         DestroyBloomTargets(r);
         SafeRelease(r.sceneColorSRV);
@@ -401,6 +512,7 @@ namespace kes::d3d11
         }
         CreatePostAATargets(r);
         CreateBloomTargets(r);
+        CreateScreenSpaceTargets(r);
         return true;
     }
 
@@ -845,6 +957,21 @@ namespace kes::d3d11
         SafeRelease(r.exposureStateBuffer);
         r.bloomAvailable = false;
         r.exposureAvailable = false;
+        SafeRelease(r.prepassVS);
+        SafeRelease(r.prepassPS);
+        SafeRelease(r.sslVS);
+        SafeRelease(r.sslPS);
+        SafeRelease(r.sslBlurVS);
+        SafeRelease(r.sslBlurPS);
+        SafeRelease(r.ssrVS);
+        SafeRelease(r.ssrPS);
+        SafeRelease(r.dofVS);
+        SafeRelease(r.dofPS);
+        SafeRelease(r.taaVS);
+        SafeRelease(r.taaPS);
+        SafeRelease(r.motionBlurVS);
+        SafeRelease(r.motionBlurPS);
+        r.screenSpaceAvailable = false;
     }
 
     static bool CreateComputeShaderFromBinary(Renderer& r, const char* source, ID3D11ComputeShader** out)
@@ -911,6 +1038,26 @@ namespace kes::d3d11
             CreateStructuredBuffer(r, render::kExposureStateFloats, 4, true, &r.exposureStateBuffer, &r.exposureStateUAV, &r.exposureStateSRV);
         if (!r.exposureAvailable)
             EngineLog("Auto exposure is unavailable; the manual exposure is used.");
+
+        r.screenSpaceAvailable =
+            CreateShaderPairFromBinaries(r, kEngineShaderDepthNormal, kEngineShaderDepthNormal, &r.prepassVS, &r.prepassPS, nullptr) &&
+            CreateShaderPairFromBinaries(r, kEngineShaderScreenSpaceLighting, kEngineShaderScreenSpaceLighting, &r.sslVS, &r.sslPS, nullptr) &&
+            CreateShaderPairFromBinaries(r, kEngineShaderScreenSpaceLightingBlur, kEngineShaderScreenSpaceLightingBlur, &r.sslBlurVS,
+                &r.sslBlurPS, nullptr);
+        if (!r.screenSpaceAvailable)
+            EngineLog("Screen-space lighting is unavailable.");
+        else
+        {
+            if (!CreateShaderPairFromBinaries(r, kEngineShaderScreenSpaceReflections, kEngineShaderScreenSpaceReflections, &r.ssrVS,
+                    &r.ssrPS, nullptr))
+                EngineLog("Screen-space reflections are unavailable.");
+            if (!CreateShaderPairFromBinaries(r, kEngineShaderDepthOfField, kEngineShaderDepthOfField, &r.dofVS, &r.dofPS, nullptr))
+                EngineLog("Depth of field is unavailable.");
+            if (!CreateShaderPairFromBinaries(r, kEngineShaderTemporalAA, kEngineShaderTemporalAA, &r.taaVS, &r.taaPS, nullptr))
+                EngineLog("TAA is unavailable.");
+            if (!CreateShaderPairFromBinaries(r, kEngineShaderMotionBlur, kEngineShaderMotionBlur, &r.motionBlurVS, &r.motionBlurPS, nullptr))
+                EngineLog("Motion blur is unavailable.");
+        }
     }
 
     // CMAA2 on ldrColor, in place. D3D11 unbinds an SRV whose resource is bound
@@ -1618,6 +1765,7 @@ namespace kes::d3d11
         CreatePostAATargets(r);
         CreatePostProcessResources(r); // non-fatal as well
         CreateBloomTargets(r);
+        CreateScreenSpaceTargets(r);
 
         EngineLogf("Renderer initialized successfully. window=%dx%d render=%dx%d, MSAA %dx.", r.windowWidth, r.windowHeight,
             r.renderWidth, r.renderHeight, r.msaaSamples);
@@ -1706,14 +1854,22 @@ namespace kes::d3d11
                 DestroyBloomTargets(r);
                 CreateBloomTargets(r);
             }
+            if (previous.ambientOcclusion != options.ambientOcclusion || previous.contactShadows != options.contactShadows ||
+                previous.screenSpaceReflections != options.screenSpaceReflections || previous.depthOfField != options.depthOfField ||
+                previous.motionBlur != options.motionBlur ||
+                (previous.postAntiAliasing == PostAntiAliasing::TAA) != (options.postAntiAliasing == PostAntiAliasing::TAA))
+            {
+                DestroyScreenSpaceTargets(r);
+                CreateScreenSpaceTargets(r);
+            }
         }
         if (previous.shadowQuality != options.shadowQuality)
             CreateShadowTargets(r);
         if (previous.anisotropy != options.anisotropy)
             CreateMaterialSampler(r);
-        static const char* const kPostAANames[] = { "off", "FXAA", "CMAA2" };
+        static const char* const kPostAANames[] = { "off", "FXAA", "CMAA2", "TAA" };
         EngineLogf("Graphics options: MSAA %dx, post AA %s, bloom %s, shadows %d, anisotropy %dx.", r.msaaSamples,
-            kPostAANames[static_cast<int>(r.postAA)], r.bloomLevelCount > 0 ? "on" : "off", static_cast<int>(options.shadowQuality),
+            kPostAANames[static_cast<int>(r.taaPS && options.postAntiAliasing == PostAntiAliasing::TAA ? PostAntiAliasing::TAA : r.postAA)], r.bloomLevelCount > 0 ? "on" : "off", static_cast<int>(options.shadowQuality),
             std::clamp(options.anisotropy, 1, 16));
     }
 
@@ -1845,7 +2001,7 @@ namespace kes::d3d11
     // Draws one scene object with `viewProj` (camera or shadow view), culled
     // against `frustum`. Shadow passes use the shadow program.
     static void DrawSceneObject(Renderer& r, DrawState& state, const DrawItem& item, const Matrix4& viewProj,
-        const render::Frustum& frustum, const AssetSystem& assets, bool shadowPass, bool wireframe)
+        const render::Frustum& frustum, const AssetSystem& assets, bool shadowPass, bool wireframe, bool prepass = false)
     {
         if (!item.skinned && !render::SphereInFrustum(frustum, item.boundsCenter, item.boundsRadius))
             return;
@@ -1853,12 +2009,12 @@ namespace kes::d3d11
 
         const bool doubleSided = IsDoubleSidedMaterial(item.material);
         ID3D11RasterizerState* rs = shadowPass ? r.shadowRS
-                                               : (wireframe ? (doubleSided ? r.wireNoCullRS : r.wireRS)
-                                                            : (doubleSided ? r.solidNoCullRS : r.solidRS));
+                                               : (wireframe && !prepass ? (doubleSided ? r.wireNoCullRS : r.wireRS)
+                                                                        : (doubleSided ? r.solidNoCullRS : r.solidRS));
         ID3D11InputLayout* layout = r.meshLayout;
-        ID3D11VertexShader* vs = shadowPass ? r.shadowVS : r.meshVS;
-        ID3D11PixelShader* ps = shadowPass ? r.shadowPS : r.meshPS;
-        if (!shadowPass && item.material && item.material->shader != 0)
+        ID3D11VertexShader* vs = shadowPass ? r.shadowVS : prepass ? r.prepassVS : r.meshVS;
+        ID3D11PixelShader* ps = shadowPass ? r.shadowPS : prepass ? r.prepassPS : r.meshPS;
+        if (!shadowPass && !prepass && item.material && item.material->shader != 0)
         {
             if (GPUShaderProgram* custom = GetOrCompileShaderProgram(r, item.material->shader, assets))
             {
@@ -1941,6 +2097,127 @@ namespace kes::d3d11
             std::memcpy(dst + offsetof(render::ModelCBData, skinInfo), skinInfo, sizeof(skinInfo));
             ctx->Unmap(r.modelCB, 0);
             ctx->DrawIndexed(draw.indexCount, draw.firstIndex, 0);
+        }
+    }
+
+    static void DrawScreenSpaceLightingPass(Renderer& r, ID3D11RenderTargetView* target, ID3D11VertexShader* vs, ID3D11PixelShader* ps,
+        ID3D11ShaderResourceView* second, ID3D11ShaderResourceView* third = nullptr)
+    {
+        ID3D11ShaderResourceView* nullViews[3] = {};
+        r.context->PSSetShaderResources(12, 3, nullViews);
+        r.context->OMSetRenderTargets(1, &target, nullptr);
+        r.context->VSSetShader(vs, nullptr, 0);
+        r.context->PSSetShader(ps, nullptr, 0);
+        ID3D11ShaderResourceView* inputs[3] = { r.prepassDepthSRV, second, third };
+        r.context->PSSetShaderResources(12, 3, inputs);
+        r.context->Draw(3, 0);
+    }
+
+    // Depth + normal prepass of the opaque draws, then AO / contact shadows into r.ssl.
+    static void RenderScreenSpaceLighting(Renderer& r, const AssetSystem& assets)
+    {
+        KES_ZONE(RENDER, "Screen-space lighting");
+        ID3D11DeviceContext* ctx = r.context;
+        ID3D11ShaderResourceView* nullViews[4] = {};
+        ctx->PSSetShaderResources(10, 4, nullViews);
+        {
+            KES_D3D11_GPU_ZONE(r, "Depth prepass");
+            ctx->OMSetRenderTargets(1, &r.prepassNormalRTV, r.prepassDSV);
+            const float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            ctx->ClearRenderTargetView(r.prepassNormalRTV, clear);
+            ctx->ClearDepthStencilView(r.prepassDSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
+            const D3D11_VIEWPORT vp = { 0.0f, 0.0f, static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight), 0.0f, 1.0f };
+            ctx->RSSetViewports(1, &vp);
+            const float blendFactor[4] = { 0, 0, 0, 0 };
+            ctx->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
+            ctx->OMSetDepthStencilState(r.depthWriteState, 0);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ctx->VSSetConstantBuffers(0, 1, &r.sceneCB);
+            ctx->VSSetConstantBuffers(1, 1, &r.modelCB);
+            ctx->VSSetConstantBuffers(2, 1, &r.materialCB);
+            ctx->PSSetConstantBuffers(0, 1, &r.sceneCB);
+            ctx->PSSetConstantBuffers(2, 1, &r.materialCB);
+            ID3D11SamplerState* materialSamplers[render::kMaterialTextureCount] = { r.materialSampler, r.materialSampler, r.materialSampler,
+                r.materialSampler, r.materialSampler };
+            ctx->PSSetSamplers(0, render::kMaterialTextureCount, materialSamplers);
+            DrawState state;
+            for (const DrawItem& item : r.opaqueDrawItems)
+                DrawSceneObject(r, state, item, r.frame.viewProj, r.frame.frustum, assets, false, false, true);
+        }
+        KES_D3D11_GPU_ZONE(r, "AO + contact shadows");
+        BindFullscreenTriangle(r);
+        ctx->RSSetState(r.solidNoCullRS);
+        ctx->OMSetDepthStencilState(nullptr, 0);
+        DrawScreenSpaceLightingPass(r, r.sslRawRTV, r.sslVS, r.sslPS, r.prepassNormalSRV);
+        DrawScreenSpaceLightingPass(r, r.sslRTV, r.sslBlurVS, r.sslBlurPS, r.sslRawSRV);
+        if (r.ssrRTV)
+        {
+            KES_D3D11_GPU_ZONE(r, "Reflections");
+            ctx->PSSetSamplers(0, 1, &r.linearClampSampler);
+            DrawScreenSpaceLightingPass(r, r.ssrRTV, r.ssrVS, r.ssrPS, r.prepassNormalSRV, r.historySRV);
+        }
+        ID3D11ShaderResourceView* nullInputs[3] = {};
+        ctx->PSSetShaderResources(12, 3, nullInputs);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+    }
+
+    // TAA, depth of field and motion blur, in that order, each on a fresh copy
+    // of the scene color. The first copy also feeds next frame's reflections.
+    static void RenderSceneColorPasses(Renderer& r, bool copyForReflections)
+    {
+        const render::SceneCBData& cb = r.frame.scene;
+        const bool taa = cb.taaParams[2] > 0.5f;
+        const bool dof = cb.dofParams[3] > 0.5f;
+        const bool motionBlur = cb.motionBlurParams[2] > 0.5f;
+        if (!copyForReflections && !taa && !dof && !motionBlur)
+            return;
+        ID3D11DeviceContext* ctx = r.context;
+        ctx->CopyResource(r.historyColor, r.sceneColor);
+        if (!taa && !dof && !motionBlur)
+            return;
+
+        BindFullscreenTriangle(r);
+        ctx->RSSetState(r.solidNoCullRS);
+        ctx->OMSetDepthStencilState(nullptr, 0);
+        const float blendFactor[4] = { 0, 0, 0, 0 };
+        ctx->OMSetBlendState(r.opaqueBlendState, blendFactor, 0xFFFFFFFF);
+        const D3D11_VIEWPORT vp = { 0.0f, 0.0f, static_cast<float>(r.renderWidth), static_cast<float>(r.renderHeight), 0.0f, 1.0f };
+        ctx->RSSetViewports(1, &vp);
+        ctx->PSSetConstantBuffers(0, 1, &r.sceneCB);
+        ctx->PSSetSamplers(0, 1, &r.linearClampSampler);
+        ID3D11ShaderResourceView* nullInputs[3] = {};
+        const auto finishPass = [&]()
+        {
+            ctx->PSSetShaderResources(12, 3, nullInputs);
+            ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        };
+
+        bool historyIsScene = true;
+        if (taa)
+        {
+            KES_D3D11_GPU_ZONE(r, "TAA");
+            DrawScreenSpaceLightingPass(r, r.sceneColorRTV, r.taaVS, r.taaPS, r.taaHistorySRV, r.historySRV);
+            finishPass();
+            ctx->CopyResource(r.taaHistory, r.sceneColor);
+            r.taaHistoryValid = true;
+            historyIsScene = false;
+        }
+        if (dof)
+        {
+            KES_D3D11_GPU_ZONE(r, "Depth of field");
+            if (!historyIsScene)
+                ctx->CopyResource(r.historyColor, r.sceneColor);
+            DrawScreenSpaceLightingPass(r, r.sceneColorRTV, r.dofVS, r.dofPS, nullptr, r.historySRV);
+            finishPass();
+            historyIsScene = false;
+        }
+        if (motionBlur)
+        {
+            KES_D3D11_GPU_ZONE(r, "Motion blur");
+            if (!historyIsScene)
+                ctx->CopyResource(r.historyColor, r.sceneColor);
+            DrawScreenSpaceLightingPass(r, r.sceneColorRTV, r.motionBlurVS, r.motionBlurPS, nullptr, r.historySRV);
+            finishPass();
         }
     }
 
@@ -2137,6 +2414,27 @@ namespace kes::d3d11
 
         render::BuildFrameSetup(r.frame, scene, camera, sceneObj, aspect, r.options);
         render::ApplyEnvironment(r.environment, r.frame.scene);
+        // Reflections need a history first, so the prepass and the copy run before they show.
+        const bool reflectionsWanted = r.ssrRTV && render::WantsScreenReflections(sceneObj.GetPostProcess(), r.options);
+        if (!reflectionsWanted)
+            r.historyValid = false;
+        float unjitteredViewProj[16];
+        std::memcpy(unjitteredViewProj, r.frame.scene.viewProj, sizeof(unjitteredViewProj));
+        const bool taaActive = r.options.postAntiAliasing == PostAntiAliasing::TAA && r.taaHistory && r.taaPS;
+        if (taaActive)
+            render::ApplyTemporalJitter(r.frame, r.taaFrameIndex++, r.renderWidth, r.renderHeight);
+        render::ScreenSpaceAvailability screenSpaceAvailability;
+        screenSpaceAvailability.lighting = r.sslSRV != nullptr;
+        screenSpaceAvailability.reflections = r.ssrRTV != nullptr && r.historyValid;
+        screenSpaceAvailability.depthOfField = r.historyColor && r.dofPS;
+        screenSpaceAvailability.temporalAA = taaActive;
+        screenSpaceAvailability.temporalHistory = r.taaHistoryValid;
+        screenSpaceAvailability.motionBlur = r.historyColor && r.motionBlurPS;
+        screenSpaceAvailability.prevViewProj = r.havePrevViewProj ? r.prevViewProj : nullptr;
+        render::SetScreenSpaceLighting(r.frame.scene, sceneObj.GetPostProcess(), r.options, r.renderWidth, r.renderHeight, screenSpaceAvailability);
+        std::memcpy(r.prevViewProj, unjitteredViewProj, sizeof(r.prevViewProj));
+        r.havePrevViewProj = true;
+        const bool prepass = render::WantsDepthPrepass(r.frame.scene) || reflectionsWanted;
         if (!r.cascadeShadows.srv)
         {
             r.frame.scene.shadowParams[3] = 0.0f;
@@ -2216,6 +2514,8 @@ namespace kes::d3d11
             render::UpdateLocalShadows(r.frame, r.shadowCasters);
         }
         RenderShadowMaps(r, assets);
+        if (prepass)
+            RenderScreenSpaceLighting(r, assets);
 
         // HDR scene pass
         ID3D11RenderTargetView* sceneRTV = r.msaaSamples > 1 ? r.sceneColorMSRTV : r.sceneColorRTV;
@@ -2244,6 +2544,9 @@ namespace kes::d3d11
         r.context->PSSetSamplers(0, 7, samplers);
         ID3D11ShaderResourceView* globals[5] = { r.environmentMap.srv, r.cascadeShadows.srv, r.localShadows.srv, r.clusterLightSRV, r.clusterGridSRV };
         r.context->PSSetShaderResources(5, 5, globals);
+        ID3D11ShaderResourceView* screenSpace[2] = { prepass ? r.sslSRV : r.whiteTexture.srv,
+            prepass && r.ssrSRV ? r.ssrSRV : r.whiteTexture.srv };
+        r.context->PSSetShaderResources(10, 2, screenSpace);
 
         const float blendFactor[4] = { 0, 0, 0, 0 };
         DrawState state;
@@ -2277,6 +2580,11 @@ namespace kes::d3d11
             r.context->ResolveSubresource(r.sceneColor, 0, r.sceneColorMS, 0, kSceneColorFormat);
         }
         r.context->OMSetRenderTargets(0, nullptr, nullptr);
+        if (prepass)
+            RenderSceneColorPasses(r, reflectionsWanted);
+        r.historyValid = prepass && reflectionsWanted;
+        if (r.frame.scene.taaParams[2] < 0.5f)
+            r.taaHistoryValid = false;
         RenderPostProcess(r, scene, sceneObj);
     }
 

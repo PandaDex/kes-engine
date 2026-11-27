@@ -232,6 +232,59 @@ Current condition types:
 
 Each state references a `.kanim` clip by asset path.
 
+This is the older format. New graphs are `.ag` files (below), which do the same with blending.
+
+## Animation Blend Trees: `.ag`
+
+Text-block files written by the KES Editor's Animation Graph tab and run by `AnimBlendTreeInstance`
+(`engine/anim_blend_tree.h`, which also holds the node catalogue). One `AnimBlendTree` header, then
+`Node` and `Link` blocks for a node graph that ends in an `Output` node.
+
+A `StateMachine` node adds `State` and `Transition` blocks. Each state has its own graph: nodes with
+`Graph = <state id>` belong to that state, and the state's `Output` node gives its pose. Nodes
+without `Graph` are in the top-level graph. Links only join nodes of the same graph.
+
+```txt
+Node {
+    Id = 1
+    Type = "StateMachine"
+    Name = "Locomotion"
+}
+
+State {
+    Id = 1
+    Machine = 1
+    Name = "Idle"
+    Entry = true
+}
+
+Node {
+    Id = 3
+    Graph = 1
+    Type = "Output"
+}
+
+Transition {
+    Machine = 1
+    From = 1          # or "Any" for Any State
+    To = 2
+    Duration = 0.2    # cross-fade seconds
+    ExitTime = 0.9    # optional: wait until the state's main clip is this far (0..1)
+    Condition = "Speed Greater 0.1"
+    Condition = "Jump Triggered"
+}
+```
+
+- Transitions are checked in file order and at most one fires per frame. All conditions must pass;
+  a transition with no conditions and no exit time never fires.
+- Condition ops: `IsTrue`, `IsFalse`, `Greater`, `Less`, `GreaterEqual`, `LessEqual`, `Equal`,
+  `NotEqual`, `Triggered`. Parameter names can't contain spaces.
+- Parameters used by conditions need no parameter node. A `Triggered` parameter is a trigger: game code
+  sets it with `SkinnedModelEntity::SetAnimTrigger` and it stays set until a transition using it fires.
+- Entering a state restarts its clips and nested state machines. A transition that interrupts a
+  cross-fade blends from the last pose.
+- A state machine can't be nested inside one of its own states.
+
 ## Particle System Files: `.kfx`
 
 Text-block files written by the KES Editor's Particle System tab:

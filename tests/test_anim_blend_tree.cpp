@@ -183,6 +183,182 @@ TEST_CASE("anim graph: select cross-fades and layer blend masks children")
     CHECK_NEAR(pose[1].translation[0], 0.0, 1e-4);
 }
 
+namespace
+{
+    AnimBlendTreeNode MakeStateNode(int32_t id, int32_t graph, const char* type, std::vector<std::pair<std::string, std::string>> values = {})
+    {
+        AnimBlendTreeNode node = MakeNode(id, type, std::move(values));
+        node.graph = graph;
+        return node;
+    }
+
+    AnimBlendTreeState MakeState(int32_t id, int32_t machine, const char* name, bool entry = false)
+    {
+        AnimBlendTreeState state;
+        state.id = id;
+        state.machine = machine;
+        state.name = name;
+        state.entry = entry;
+        return state;
+    }
+
+    AnimBlendTreeTransition MakeTransition(int32_t machine, int32_t from, int32_t to, float duration,
+        std::vector<AnimTransitionCondition> conditions, float exitTime = -1.0f)
+    {
+        AnimBlendTreeTransition transition;
+        transition.machine = machine;
+        transition.from = from;
+        transition.to = to;
+        transition.duration = duration;
+        transition.exitTime = exitTime;
+        transition.conditions = std::move(conditions);
+        return transition;
+    }
+
+    // Machine node 1 with Idle (state 10, bind pose) and Walk (state 11, the slide clip).
+    AnimBlendTreeData MakeLocomotion()
+    {
+        AnimBlendTreeData tree;
+        tree.nodes.push_back(MakeNode(1, "StateMachine"));
+        tree.nodes.push_back(MakeNode(2, "Output"));
+        tree.nodes.push_back(MakeStateNode(3, 10, "BindPose"));
+        tree.nodes.push_back(MakeStateNode(4, 10, "Output"));
+        tree.nodes.push_back(MakeStateNode(5, 11, "Clip", { { "Clip", "slide" } }));
+        tree.nodes.push_back(MakeStateNode(6, 11, "Output"));
+        tree.links = { { 1, "Pose", 2, "Pose" }, { 3, "Pose", 4, "Pose" }, { 5, "Pose", 6, "Pose" } };
+        tree.states = { MakeState(10, 1, "Idle", true), MakeState(11, 1, "Walk") };
+        tree.transitions = {
+            MakeTransition(1, 10, 11, 1.0f, { { "Speed", AnimConditionOp::Greater, 0.5f } }),
+            MakeTransition(1, 11, 10, 0.0f, { { "Stop", AnimConditionOp::Triggered, 0.0f } }),
+        };
+        return tree;
+    }
+}
+
+TEST_CASE("anim graph: state machine file round trip")
+{
+    kestest::TempDir dir;
+    const std::string path = dir.File("machine.ag");
+    AnimBlendTreeData tree = MakeLocomotion();
+    tree.states[1].position[0] = 250.0f;
+    tree.transitions.push_back(MakeTransition(1, AnimBlendTreeTransition::AnyState, 10, 0.3f,
+        { { "Dead", AnimConditionOp::IsTrue, 0.0f }, { "Hp", AnimConditionOp::LessEqual, 0.25f } }, 0.75f));
+    REQUIRE(SaveAnimBlendTreeFile(path.c_str(), tree));
+
+    AnimBlendTreeData loaded;
+    std::string error;
+    REQUIRE(LoadAnimBlendTreeFile(path.c_str(), loaded, &error));
+    REQUIRE(loaded.nodes.size() == tree.nodes.size());
+    CHECK(loaded.nodes[0].graph == 0);
+    CHECK(loaded.nodes[4].graph == 11);
+    REQUIRE(loaded.states.size() == 2);
+    CHECK(loaded.states[0].entry);
+    CHECK(!loaded.states[1].entry);
+    CHECK(loaded.states[1].name == "Walk");
+    CHECK_NEAR(loaded.states[1].position[0], 250.0, 1e-4);
+    REQUIRE(loaded.transitions.size() == 3);
+    const AnimBlendTreeTransition& any = loaded.transitions[2];
+    CHECK(any.from == AnimBlendTreeTransition::AnyState);
+    CHECK(any.to == 10);
+    CHECK_NEAR(any.duration, 0.3, 1e-5);
+    CHECK_NEAR(any.exitTime, 0.75, 1e-5);
+    REQUIRE(any.conditions.size() == 2);
+    CHECK(any.conditions[0].parameter == "Dead");
+    CHECK(any.conditions[0].op == AnimConditionOp::IsTrue);
+    CHECK(any.conditions[1].op == AnimConditionOp::LessEqual);
+    CHECK_NEAR(any.conditions[1].value, 0.25, 1e-5);
+    CHECK(loaded.transitions[0].exitTime < 0.0f);
+
+    AnimBlendTreeInstance instance;
+    CHECK(instance.Build(loaded, &error));
+}
+
+TEST_CASE("anim graph: state machine transitions, cross-fade and triggers")
+{
+    const KModelData model = MakeTwoNodeModel();
+    const AnimationClipData slide = MakeSlide(1, 2.0f);
+    const AnimBlendTreeInstance::ClipResolver clips = [&](const std::string&)
+    { return &slide; };
+
+    AnimBlendTreeInstance instance;
+    std::string error;
+    REQUIRE(instance.Build(MakeLocomotion(), &error));
+    REQUIRE(instance.Parameters().size() == 2);
+    CHECK(instance.Parameters()[0].name == "Speed");
+    CHECK(!instance.Parameters()[0].trigger);
+    CHECK(instance.Parameters()[1].name == "Stop");
+    CHECK(instance.Parameters()[1].trigger);
+
+    std::vector<AnimationTransform> pose;
+    REQUIRE(instance.Evaluate(model, 0.5f, clips, pose));
+    CHECK(instance.GetActiveState(1) == 10);
+    CHECK_NEAR(instance.GetStateWeight(10), 1.0, 1e-5);
+    CHECK_NEAR(pose[1].translation[0], 0.0, 1e-5);
+    CHECK_NEAR(instance.GetNodeWeight(5), 0.0, 1e-5);
+
+    instance.SetFloat("Speed", 1.0f);
+    REQUIRE(instance.Evaluate(model, 0.5f, clips, pose)); // the transition frame starts the fade at 0
+    CHECK(instance.GetActiveState(1) == 11);
+    CHECK_NEAR(pose[1].translation[0], 0.0, 1e-5);
+    CHECK_NEAR(instance.GetNodeTime(5), 0.5, 1e-5); // entering Walk restarted its clip
+    REQUIRE(instance.Evaluate(model, 0.25f, clips, pose)); // clip at 0.75 s (x 1.5), a quarter faded in
+    CHECK_NEAR(pose[1].translation[0], 0.375, 1e-4);
+    CHECK_NEAR(instance.GetStateWeight(11), 0.25, 1e-5);
+    CHECK_NEAR(instance.GetStateWeight(10), 0.75, 1e-5);
+
+    instance.SetFloat("Speed", 0.0f);
+    instance.SetTrigger("Stop");
+    REQUIRE(instance.Evaluate(model, 0.1f, clips, pose));
+    CHECK(instance.GetActiveState(1) == 10);
+    CHECK_NEAR(pose[1].translation[0], 0.0, 1e-5);
+    CHECK_NEAR(instance.GetValue("Stop"), 0.0, 1e-5);
+
+    instance.Reset();
+    REQUIRE(instance.Evaluate(model, 0.1f, clips, pose));
+    CHECK(instance.GetActiveState(1) == 10);
+}
+
+TEST_CASE("anim graph: state machine exit time and validation")
+{
+    const KModelData model = MakeTwoNodeModel();
+    const AnimationClipData slide = MakeSlide(1, 2.0f);
+    const AnimBlendTreeInstance::ClipResolver clips = [&](const std::string&)
+    { return &slide; };
+
+    AnimBlendTreeData tree = MakeLocomotion();
+    tree.states[0].entry = false;
+    tree.states[1].entry = true;
+    tree.nodes[4].Set("Loop", "false");
+    tree.transitions = { MakeTransition(1, 11, 10, 0.0f, {}, 1.0f), MakeTransition(1, 10, 11, 0.0f, {}) };
+
+    AnimBlendTreeInstance instance;
+    std::string error;
+    REQUIRE(instance.Build(tree, &error));
+    std::vector<AnimationTransform> pose;
+    REQUIRE(instance.Evaluate(model, 0.6f, clips, pose));
+    CHECK(instance.GetActiveState(1) == 11);
+    REQUIRE(instance.Evaluate(model, 0.6f, clips, pose)); // clip reaches its end this frame
+    CHECK(instance.GetActiveState(1) == 11);
+    REQUIRE(instance.Evaluate(model, 0.1f, clips, pose));
+    CHECK(instance.GetActiveState(1) == 10);
+    REQUIRE(instance.Evaluate(model, 0.1f, clips, pose)); // no conditions and no exit time never fires
+    CHECK(instance.GetActiveState(1) == 10);
+
+    AnimBlendTreeData crossing = MakeLocomotion();
+    crossing.links.push_back({ 3, "Pose", 6, "Pose" });
+    CHECK(!instance.Build(crossing, &error));
+
+    AnimBlendTreeData missing = MakeLocomotion();
+    missing.transitions.push_back(MakeTransition(1, 10, 99, 0.1f, { { "Speed", AnimConditionOp::Less, 0.1f } }));
+    CHECK(!instance.Build(missing, &error));
+
+    AnimBlendTreeData nested = MakeLocomotion();
+    nested.nodes[0].graph = 10;
+    nested.links.erase(nested.links.begin());
+    CHECK(!instance.Build(nested, &error));
+    CHECK(error.find("nested") != std::string::npos);
+}
+
 TEST_CASE("anim pose: decompose undoes build and sockets follow their bone")
 {
     const float t[3] = { 1.0f, 2.0f, 3.0f };

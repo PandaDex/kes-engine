@@ -151,6 +151,53 @@ namespace kes::d3d11
         ID3D11RenderTargetView* bloomRTVs[render::kBloomMaxLevels] = {};
         ID3D11ShaderResourceView* bloomSRVs[render::kBloomMaxLevels] = {};
 
+        // Depth + normal prepass (depth_normal.slang) and screen-space lighting
+        // (screen_space_lighting[_blur].slang: AO + contact shadows) at the
+        // render resolution, before the scene pass, which samples sslSRV (t10).
+        bool screenSpaceAvailable = false; // shaders loaded
+        ID3D11VertexShader* prepassVS = nullptr;
+        ID3D11PixelShader* prepassPS = nullptr;
+        ID3D11VertexShader* sslVS = nullptr;
+        ID3D11PixelShader* sslPS = nullptr;
+        ID3D11VertexShader* sslBlurVS = nullptr;
+        ID3D11PixelShader* sslBlurPS = nullptr;
+        ID3D11Texture2D* prepassNormal = nullptr; // RGBA16F: world normal, roughness
+        ID3D11RenderTargetView* prepassNormalRTV = nullptr;
+        ID3D11ShaderResourceView* prepassNormalSRV = nullptr;
+        ID3D11Texture2D* prepassDepth = nullptr; // R32 typeless
+        ID3D11DepthStencilView* prepassDSV = nullptr;
+        ID3D11ShaderResourceView* prepassDepthSRV = nullptr;
+        ID3D11Texture2D* sslRaw = nullptr; // RG8: AO, contact shadow (unfiltered)
+        ID3D11RenderTargetView* sslRawRTV = nullptr;
+        ID3D11ShaderResourceView* sslRawSRV = nullptr;
+        ID3D11Texture2D* ssl = nullptr; // RG8, filtered
+        ID3D11RenderTargetView* sslRTV = nullptr;
+        ID3D11ShaderResourceView* sslSRV = nullptr;
+        // Screen-space reflections (ssr.slang) from last frame's scene color.
+        ID3D11VertexShader* ssrVS = nullptr;
+        ID3D11PixelShader* ssrPS = nullptr;
+        ID3D11Texture2D* ssrColor = nullptr; // RGBA16F: radiance, weight
+        ID3D11RenderTargetView* ssrRTV = nullptr;
+        ID3D11ShaderResourceView* ssrSRV = nullptr;
+        ID3D11Texture2D* historyColor = nullptr; // copy of the scene color
+        ID3D11ShaderResourceView* historySRV = nullptr;
+        // Scene color passes (taa / dof / motion_blur.slang): each reads a copy of
+        // the scene color (historyColor) and writes the scene color. TAA also
+        // reads and then refreshes taaHistory.
+        ID3D11VertexShader* dofVS = nullptr;
+        ID3D11PixelShader* dofPS = nullptr;
+        ID3D11VertexShader* taaVS = nullptr;
+        ID3D11PixelShader* taaPS = nullptr;
+        ID3D11VertexShader* motionBlurVS = nullptr;
+        ID3D11PixelShader* motionBlurPS = nullptr;
+        ID3D11Texture2D* taaHistory = nullptr;
+        ID3D11ShaderResourceView* taaHistorySRV = nullptr;
+        bool taaHistoryValid = false;
+        uint32_t taaFrameIndex = 0;
+        bool historyValid = false;
+        float prevViewProj[16] = {};
+        bool havePrevViewProj = false;
+
         // Eye adaptation (exposure_histogram / exposure_adapt.slang). The state
         // buffer carries the adapted exposure from frame to frame.
         bool exposureAvailable = false;

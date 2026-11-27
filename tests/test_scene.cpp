@@ -1,9 +1,12 @@
 #include "test_framework.h"
+#include <cmath>
+#include <cstring>
 #include "camera.h"
 #include "ent_post_process_volume.h"
 #include "ent_trigger.h"
 #include "entity_manager.h"
 #include "game_context.h"
+#include "render_common.h"
 #include "scene.h"
 
 TEST_CASE("scene: objects stay findable after removals")
@@ -137,4 +140,91 @@ TEST_CASE("post process volume: fades in over the blend distance")
 
     volume->ApplyProperty("Unbound", "1");
     CHECK_NEAR(resolveAt(100.0f), 0.8f, 1e-5);
+}
+
+TEST_CASE("post process: grading fields blend and the volume parses them")
+{
+    PostProcessVolumeEntity volume;
+    CHECK(volume.ApplyProperty("Saturation", "0.5"));
+    CHECK(volume.ApplyProperty("Gain", "2 1 1"));
+    CHECK(volume.ApplyProperty("Tonemapper", "1"));
+    CHECK(volume.ApplyProperty("Sharpen", ""));
+    const PostProcessLayer& layer = volume.GetLayer();
+    CHECK(layer.overrides == (PostProcessOverride_Saturation | PostProcessOverride_Gain | PostProcessOverride_Tonemapper));
+
+    Scene scene;
+    PostProcessLayer half = layer;
+    half.weight = 0.5f;
+    scene.SubmitPostProcessLayer(half);
+    scene.ResolvePostProcess();
+    const PostProcessSettings& post = scene.GetPostProcess();
+    CHECK_NEAR(post.saturation, 0.75f, 1e-5);
+    CHECK_NEAR(post.gain[0], 1.5f, 1e-5);
+    CHECK_NEAR(post.gain[1], 1.0f, 1e-5);
+    CHECK(post.tonemapper == Tonemapper::ACES); // switches above 0.5
+    CHECK_NEAR(post.sharpen, 0.0f, 1e-5);
+}
+
+TEST_CASE("post process: neutral white balance is the identity")
+{
+    float lms[3];
+    render::ComputeWhiteBalanceLms(0.0f, 0.0f, lms);
+    CHECK_NEAR(lms[0], 1.0f, 1e-6);
+    render::ComputeWhiteBalanceLms(0.5f, 0.0f, lms);
+    CHECK(lms[2] < lms[0]); // warmer: less blue
+}
+
+TEST_CASE("screen-space lighting: inverse view-projection and the on/off rules")
+{
+    const float m[16] = { 1.3f, 0.0f, 0.2f, 0.0f, 0.1f, 1.7f, 0.0f, 0.0f, 0.0f, 0.3f, 1.001f, 1.0f, 0.5f, -2.0f, 3.0f, 0.0f };
+    float inv[16];
+    REQUIRE(render::InvertMatrix(m, inv));
+    for (int row = 0; row < 4; ++row)
+    {
+        for (int col = 0; col < 4; ++col)
+        {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; ++k)
+                sum += m[row * 4 + k] * inv[k * 4 + col];
+            CHECK_NEAR(sum, row == col ? 1.0f : 0.0f, 1e-4);
+        }
+    }
+
+    render::SceneCBData cb = {};
+    cb.contactShadowParams[2] = 0.0f; // a directional light exists
+    PostProcessSettings post;
+    GraphicsOptions options;
+    const float identity[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    render::ScreenSpaceAvailability all;
+    all.lighting = all.reflections = all.depthOfField = all.temporalAA = all.temporalHistory = all.motionBlur = true;
+    all.prevViewProj = identity;
+    render::SetScreenSpaceLighting(cb, post, options, 1280, 720, all);
+    CHECK(render::WantsDepthPrepass(cb));
+    CHECK(cb.ssaoParams[2] > 0.5f);
+    CHECK(cb.ssaoParams[3] > 0.5f);
+    CHECK(cb.ssrParams[2] > 0.5f);
+
+    options.ambientOcclusion = false;
+    post.contactShadowLength = 0.0f;
+    render::ScreenSpaceAvailability noHistory = all;
+    noHistory.prevViewProj = nullptr;
+    noHistory.temporalAA = false;
+    render::SetScreenSpaceLighting(cb, post, options, 1280, 720, noHistory);
+    CHECK(cb.ssrParams[2] < 0.5f);
+    CHECK(!render::WantsDepthPrepass(cb));
+
+    options = GraphicsOptions();
+    post = PostProcessSettings();
+    render::ScreenSpaceAvailability none;
+    none.prevViewProj = identity;
+    render::SetScreenSpaceLighting(cb, post, options, 1280, 720, none); // no targets
+    CHECK(!render::WantsDepthPrepass(cb));
+
+    // TAA jitter stays within half a pixel and changes the matrix the draws use.
+    render::FrameSetup frame;
+    std::memcpy(frame.viewProj.m, identity, sizeof(identity));
+    render::ApplyTemporalJitter(frame, 3, 1280, 720);
+    CHECK(std::fabs(frame.scene.taaParams[0]) <= 0.5f / 1280.0f + 1e-7f);
+    CHECK(std::fabs(frame.scene.taaParams[1]) <= 0.5f / 720.0f + 1e-7f);
+    CHECK(frame.viewProj.m[12] != 0.0f);
 }

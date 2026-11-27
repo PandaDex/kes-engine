@@ -58,6 +58,8 @@ namespace
             return "FXAA";
         case PostAntiAliasing::CMAA2:
             return "CMAA2";
+        case PostAntiAliasing::TAA:
+            return "TAA";
         default:
             return "Off";
         }
@@ -71,6 +73,8 @@ namespace
             return PostAntiAliasing::FXAA;
         if (SDL_strcasecmp(text.c_str(), "CMAA2") == 0 || text == "2")
             return PostAntiAliasing::CMAA2;
+        if (SDL_strcasecmp(text.c_str(), "TAA") == 0 || text == "3")
+            return PostAntiAliasing::TAA;
         return fallback;
     }
 
@@ -224,6 +228,11 @@ GraphicsOptions GameSettings::GetGraphicsOptions() const
     options.anisotropy = m_anisotropy;
     options.shadowDistance = m_shadowDistance;
     options.bloom = m_bloom;
+    options.ambientOcclusion = m_ambientOcclusion;
+    options.contactShadows = m_contactShadows;
+    options.screenSpaceReflections = m_screenSpaceReflections;
+    options.depthOfField = m_depthOfField;
+    options.motionBlur = m_motionBlur;
     return options;
 }
 
@@ -389,6 +398,11 @@ void GameSettings::SetToDefaults()
     m_anisotropy = 8;
     m_shadowDistance = 60.0f;
     m_bloom = true;
+    m_ambientOcclusion = true;
+    m_contactShadows = true;
+    m_screenSpaceReflections = true;
+    m_depthOfField = true;
+    m_motionBlur = true;
 }
 
 void GameSettings::ValidateSettings()
@@ -435,7 +449,7 @@ void GameSettings::ValidateSettings()
     m_msaaSamples = m_msaaSamples >= 8 ? 8 : m_msaaSamples >= 4 ? 4
         : m_msaaSamples >= 2                                    ? 2
                                                                 : 1;
-    m_postAntiAliasing = static_cast<PostAntiAliasing>(std::clamp(static_cast<int>(m_postAntiAliasing), 0, 2));
+    m_postAntiAliasing = static_cast<PostAntiAliasing>(std::clamp(static_cast<int>(m_postAntiAliasing), 0, static_cast<int>(PostAntiAliasing::TAA)));
     m_anisotropy = std::clamp(m_anisotropy, 1, 16);
     if (!std::isfinite(m_shadowDistance))
         m_shadowDistance = 60.0f;
@@ -483,6 +497,11 @@ void GameSettings::ReadFromIni(const IniFile& ini)
     m_anisotropy = ini.GetInt(kSection, "AnisotropicFiltering", m_anisotropy);
     m_shadowDistance = ini.GetFloat(kSection, "ShadowDistance", m_shadowDistance);
     m_bloom = ini.GetBool(kSection, "bBloom", m_bloom);
+    m_ambientOcclusion = ini.GetBool(kSection, "bAmbientOcclusion", m_ambientOcclusion);
+    m_contactShadows = ini.GetBool(kSection, "bContactShadows", m_contactShadows);
+    m_screenSpaceReflections = ini.GetBool(kSection, "bScreenSpaceReflections", m_screenSpaceReflections);
+    m_depthOfField = ini.GetBool(kSection, "bDepthOfField", m_depthOfField);
+    m_motionBlur = ini.GetBool(kSection, "bMotionBlur", m_motionBlur);
     m_mouseSensitivity = ini.GetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     m_gamepadLookSensitivity = ini.GetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     m_invertLookY = ini.GetBool(kSection, "bInvertLookY", m_invertLookY);
@@ -519,6 +538,11 @@ void GameSettings::WriteToIni(IniFile& ini) const
     ini.SetInt(kSection, "AnisotropicFiltering", m_anisotropy);
     ini.SetFloat(kSection, "ShadowDistance", m_shadowDistance);
     ini.SetBool(kSection, "bBloom", m_bloom);
+    ini.SetBool(kSection, "bAmbientOcclusion", m_ambientOcclusion);
+    ini.SetBool(kSection, "bContactShadows", m_contactShadows);
+    ini.SetBool(kSection, "bScreenSpaceReflections", m_screenSpaceReflections);
+    ini.SetBool(kSection, "bDepthOfField", m_depthOfField);
+    ini.SetBool(kSection, "bMotionBlur", m_motionBlur);
     ini.SetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     ini.SetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     ini.SetBool(kSection, "bInvertLookY", m_invertLookY);

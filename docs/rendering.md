@@ -5,17 +5,20 @@ Both renderer backends (Vulkan and D3D11) draw the same way. The backend-indepen
 ## Frame
 
 1. **Shadow maps**: depth passes for the sun cascades and the local shadow atlas tiles that need drawing this frame (see below).
-2. **Scene**: HDR (RGBA16F) with MSAA, at the internal render resolution (window size × `ResolutionScale`). The sky draws first, then opaque objects grouped by material and front to back, then transparent objects back to front. Objects outside the view are culled by bounding sphere. Animated (skinned) models are not culled.
-3. **Resolve**: the multisampled scene into a single-sample HDR image.
-4. **Eye adaptation** (compute, when auto exposure is on): a log2 luminance histogram of that image and the adapted exposure (see Post processing).
-5. **Bloom** (when on): a downsample / upsample chain of the HDR image (see Post processing).
-6. **Tonemap** (`engine/shaders/blit.slang`): bloom, exposure, vignette, the ACES filmic curve, sRGB encoding and a slight dither, drawn into the backbuffer. With post anti-aliasing it draws into an RGBA8 image at the render resolution instead.
-7. **Post anti-aliasing** (optional, see below): CMAA2 on that image, then `engine/shaders/present.slang` draws it into the backbuffer, either as a plain copy or with FXAA.
-8. **UI**: drawn in display space on top.
+2. **Depth prepass** (when a screen-space effect is on, see Screen-space effects): the opaque objects into a depth buffer and a normal + roughness image, without MSAA.
+3. **Screen-space lighting**: ambient occlusion and the sun's contact shadows from the prepass (`screen_space_lighting.slang`, then a 4x4 depth-aware blur), and screen-space reflections (`ssr.slang`).
+4. **Scene**: HDR (RGBA16F) with MSAA, at the internal render resolution (window size × `ResolutionScale`). The sky draws first, then opaque objects grouped by material and front to back, then transparent objects back to front. Objects outside the view are culled by bounding sphere. Animated (skinned) models are not culled. Opaque surfaces read the AO, contact shadow and reflection images at their pixel.
+5. **Resolve**: the multisampled scene into a single-sample HDR image.
+6. **Scene color passes** (each optional): TAA, depth of field, motion blur. Each reads a copy of the scene color and writes the result back.
+7. **Eye adaptation** (compute, when auto exposure is on): a log2 luminance histogram of that image and the adapted exposure (see Post processing).
+8. **Bloom** (when on): a downsample / upsample chain of the HDR image (see Post processing).
+9. **Tonemap** (`engine/shaders/blit.slang`): sharpening, bloom, exposure, vignette, colour grading, the tonemap curve, lift/gamma/gain, sRGB encoding and a slight dither, drawn into the backbuffer. With post anti-aliasing it draws into an RGBA8 image at the render resolution instead.
+10. **Post anti-aliasing** (FXAA / CMAA2, see below): CMAA2 on that image, then `engine/shaders/present.slang` draws it into the backbuffer, either as a plain copy or with FXAA.
+11. **UI**: drawn in display space on top.
 
 ## Post processing
 
-Exposure, bloom and vignette come from `PostProcessSettings` (`engine/scene.h`). The renderer reads `Scene::GetPostProcess()`, which `World::Update` resolves once a frame from:
+Exposure, bloom, vignette, colour grading, the tonemapper and sharpening come from `PostProcessSettings` (`engine/scene.h`). The renderer reads `Scene::GetPostProcess()`, which `World::Update` resolves once a frame from:
 
 1. `Scene::GetPostProcessDefaults()`: the base values. Game code may change them.
 2. Layers (`PostProcessLayer`): settings, an `overrides` mask (`PostProcessOverride_*`, only those fields are applied), a `priority` and a `weight` (0-1). Layers are applied over the defaults in ascending priority, each blending its fields in by weight. Booleans (`autoExposure`) switch once the weight passes 0.5.
@@ -55,18 +58,56 @@ game->scene->RemovePostProcessLayer(id);
 - `vignetteSmoothness` sets the falloff.
 - The shape is a circle, corrected for the aspect ratio.
 
+**Colour grading.** Before the tonemap, in scene linear:
+- White balance: `temperature` and `tint` (-1..1), scaled in LMS space like Unity's.
+- `colorFilter` (RGB multiply).
+- `contrast` around middle grey (0.18), in log space.
+- `saturation` (0 = grey).
+
+After the tonemap, in display linear (0-1): `lift` (added to the shadows), `gamma` (above 1 brightens the midtones) and `gain` (scales the highlights).
+
+**Tonemapper.** `tonemapper` picks the curve: `ACES` (Hill's fit, default), `AgX`, `Neutral` (Khronos PBR Neutral), `Reinhard` or `None` (clamp). Volumes switch it once their weight passes 0.5.
+
+**Sharpening.** `sharpen` (0-1, 0 = off) runs AMD's contrast adaptive sharpening on a 5-tap cross of the scene at the render resolution. It runs inside the tonemap pass, on exposed HDR behind a reversible tonemap. It is most useful with `ResolutionScale` below 100.
+
+### Screen-space effects
+
+They share one depth + normal prepass (`depth_normal.slang`) of the opaque objects. The prepass runs when at least one of them is on. It uses the `.mat` surface, so what a material shader changes about the surface itself (normals, roughness) is not seen there. Transparent objects and particles are not in the prepass and get none of the lighting effects. Each effect can be switched off for the player with a `GameSettings` option and per scene with its `PostProcessSettings` value.
+
+**Ambient occlusion** (`bAmbientOcclusion`). It takes 12 samples over the normal's hemisphere within `ambientOcclusionRadius` (meters, default 0.5). The result, raised to `ambientOcclusionIntensity` (default 1, 0 = off), darkens the ambient light and the environment reflection. It does not darken direct light.
+
+**Contact shadows** (`bContactShadows`). A 12-step ray towards the sun, `contactShadowLength` meters long (default 0.3, 0 = off), catches the small shadows the shadow maps miss. It applies to the shadowed sun, or else to the first directional light.
+
+**Reflections** (`bScreenSpaceReflections`):
+- A ray march against the prepass depth, up to `reflectionMaxDistance` (default 30 m), for surfaces smoother than `reflectionMaxRoughness` (default 0.5).
+- The hit is shaded from last frame's scene color: a copy taken after the scene pass, reprojected with last frame's camera.
+- The reflection replaces the environment reflection by its weight, scaled by `reflectionIntensity` (default 1). The weight fades at the screen edges, with distance, near the roughness limit and for rays towards the camera.
+- Reflections need one frame of history, so they show from the second frame after they are turned on.
+
+**Depth of field** (`bDepthOfField`). It is off until `depthOfFieldMaxBlur` (percent of the screen height, up to 5) is above 0:
+- The scene is sharp at `depthOfFieldFocusDistance` and fully blurred `depthOfFieldFocusRange` meters nearer or further away.
+- It uses a single-pass golden-angle gather (after Dennis Gustafsson) on the HDR scene, before bloom.
+
+**Motion blur** (`bMotionBlur`). It is off until `motionBlurIntensity` is above 0 (1 = the motion of a whole frame). It blurs along the camera's motion since last frame, at most 5% of the screen. Moving objects don't blur on their own.
+
+**TAA** (`PostAntiAliasing=TAA`):
+- The projection is jittered every frame (Halton 2,3, 8 phases).
+- `taa.slang` blends the frame into the reprojected history: bicubic history, variance clipping in YCoCg, current weight 0.1.
+- The history is reprojected from camera motion only. Moving objects rely on the clipping, so they can blur or ghost slightly.
+- TAA softens the image, and `sharpen` (around 0.3-0.5) pairs well with it.
+
 ### `PostProcessVolumeEntity`
 
 A brush volume, like `FogVolumeEntity`. It applies while the camera is inside, fading in over `BlendDistance` meters outside, or everywhere with `Unbound`.
 - `Priority` and `Weight` work as for layers.
 - A setting the map leaves empty is not overridden.
-- Settings: `ExposureCompensation`, `AutoExposure`, `AutoExposureMin`, `AutoExposureMax`, `AdaptationSpeedUp`, `AdaptationSpeedDown`, `BloomIntensity`, `BloomRadius`, `VignetteIntensity`, `VignetteSmoothness`, `VignetteColor`.
+- Settings: `ExposureCompensation`, `AutoExposure`, `AutoExposureMin`, `AutoExposureMax`, `AdaptationSpeedUp`, `AdaptationSpeedDown`, `BloomIntensity`, `BloomRadius`, `VignetteIntensity`, `VignetteSmoothness`, `VignetteColor`, `Tonemapper` (0 ACES, 1 AgX, 2 Neutral, 3 Reinhard, 4 None), `Temperature`, `Tint`, `Saturation`, `Contrast`, `ColorFilter`, `Lift`, `Gamma`, `Gain`, `Sharpen`, `AmbientOcclusionIntensity`, `AmbientOcclusionRadius`, `ContactShadowLength`, `ReflectionIntensity`, `ReflectionMaxRoughness`, `ReflectionMaxDistance`, `DepthOfFieldFocusDistance`, `DepthOfFieldFocusRange`, `DepthOfFieldMaxBlur`, `MotionBlurIntensity`.
 - Inputs: `Enable`, `Disable`, `Toggle`, `SetWeight(float)`.
 - From code, `GetLayer()` gives the layer it submits.
 
 ## Anti-aliasing
 
-`AntiAliasing` sets the MSAA sample count. `PostAntiAliasing` (`Off`, `FXAA`, `CMAA2`) works on the final tonemapped image. It is independent of MSAA, and the two can be combined. Both post modes run at the render resolution before the upscale to the window, and the UI is not affected.
+`AntiAliasing` sets the MSAA sample count. `PostAntiAliasing` (`Off`, `FXAA`, `CMAA2`, `TAA`) picks the post mode. FXAA and CMAA2 work on the final tonemapped image. TAA works on the HDR scene before the post effects (see Screen-space effects). It is independent of MSAA, and the two can be combined. Both post modes run at the render resolution before the upscale to the window, and the UI is not affected.
 
 - **FXAA**: FXAA 3.11 quality (preset 29), one fullscreen pass that also writes the backbuffer. It is cheap and smooths every high-contrast edge, but it softens texture detail and text in the scene a little.
 - **CMAA2**: Intel's Conservative Morphological AA 2.3 (`engine/shaders/cmaa2.slang`, Apache 2.0, ported with small changes listed in its header). It runs as four compute shaders with indirect dispatch: edges, shape candidates, blending and the deferred color apply. It changes far fewer pixels than FXAA and keeps the image sharper. It needs compute on the graphics queue; otherwise, and if its shaders fail to load, post AA stays off and a message is logged.
@@ -132,7 +173,7 @@ The source is the `SkyboxEntity` gradient (without the sun disc, which a directi
 
 ## Settings
 
-`config/DefaultGameSettings.ini` / `GameSettings`: `ShadowQuality`, `AntiAliasing` (MSAA samples 1/2/4/8), `PostAntiAliasing` (`Off` / `FXAA` / `CMAA2`, `GameSettings::SetPostAntiAliasing`), `bBloom` (`GameSettings::SetBloom`), `AnisotropicFiltering` (1-16), `ShadowDistance`, `ResolutionScale`. They are applied live with `ApplySettings` (`IRenderer::SetGraphicsOptions`). Unsupported values are clamped to what the GPU supports.
+`config/DefaultGameSettings.ini` / `GameSettings`: `ShadowQuality`, `AntiAliasing` (MSAA samples 1/2/4/8), `PostAntiAliasing` (`Off` / `FXAA` / `CMAA2` / `TAA`, `GameSettings::SetPostAntiAliasing`), `bBloom` (`GameSettings::SetBloom`), `bAmbientOcclusion`, `bContactShadows`, `bScreenSpaceReflections`, `bDepthOfField`, `bMotionBlur` (`GameSettings::Set...`), `AnisotropicFiltering` (1-16), `ShadowDistance`, `ResolutionScale`. They are applied live with `ApplySettings` (`IRenderer::SetGraphicsOptions`). Unsupported values are clamped to what the GPU supports.
 
 ## Custom material shaders
 

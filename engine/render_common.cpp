@@ -979,6 +979,11 @@ namespace render
         CameraBuildMatrices(camera, aspect, cameraData);
         std::memcpy(out.viewProj.m, cameraData.viewProjection, sizeof(out.viewProj.m));
         CopyMatrix(out.viewProj, cb.viewProj);
+        if (!InvertMatrix(cb.viewProj, cb.invViewProj))
+            std::memset(cb.invViewProj, 0, sizeof(cb.invViewProj));
+        cb.depthParams[0] = kCameraNearPlane;
+        cb.depthParams[1] = kCameraFarPlane;
+        cb.contactShadowParams[2] = -1.0f;
         out.frustum = ExtractFrustum(out.viewProj);
 
         const Vector3 eye = CameraGetPosition(camera);
@@ -1071,6 +1076,17 @@ namespace render
             cb.shadowParams[0] = static_cast<float>(count);
         }
         cb.lightCounts[0] = static_cast<float>(lightCount);
+        // Contact shadows follow the shadowed sun, else the first directional light.
+        if (lightCount > 0)
+            cb.contactShadowParams[2] = 0.0f;
+        for (int i = 0; i < lightCount; ++i)
+        {
+            if (cb.lights[i].params[2] > 0.5f)
+            {
+                cb.contactShadowParams[2] = static_cast<float>(i);
+                break;
+            }
+        }
 
         for (const ScenePointLight& light : pointLights)
         {
@@ -1486,6 +1502,151 @@ namespace render
         return count;
     }
 
+    bool InvertMatrix(const float m[16], float out[16])
+    {
+        float inv[16];
+        inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+        inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+        inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+        inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+        inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+        inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+        inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+        inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+        inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+        inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+        inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+        inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+        inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+        inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+        inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+        inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+        const float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+        if (std::fabs(det) < 1e-20f)
+            return false;
+        const float invDet = 1.0f / det;
+        for (int i = 0; i < 16; ++i)
+            out[i] = inv[i] * invDet;
+        return true;
+    }
+
+    void SetScreenSpaceLighting(SceneCBData& cb, const PostProcessSettings& post, const GraphicsOptions& options,
+        int renderWidth, int renderHeight, const ScreenSpaceAvailability& availability)
+    {
+        const bool available = availability.lighting;
+        const float* prevViewProj = availability.prevViewProj;
+        cb.screenParams[0] = static_cast<float>(renderWidth);
+        cb.screenParams[1] = static_cast<float>(renderHeight);
+        cb.screenParams[2] = renderWidth > 0 ? 1.0f / static_cast<float>(renderWidth) : 0.0f;
+        cb.screenParams[3] = renderHeight > 0 ? 1.0f / static_cast<float>(renderHeight) : 0.0f;
+        const bool ao = available && options.ambientOcclusion && post.ambientOcclusionIntensity > 0.0f &&
+            post.ambientOcclusionRadius > 0.0f;
+        const bool contact = available && options.contactShadows && post.contactShadowLength > 0.0f &&
+            cb.contactShadowParams[2] >= 0.0f;
+        cb.ssaoParams[0] = std::clamp(post.ambientOcclusionRadius, 0.01f, 10.0f);
+        cb.ssaoParams[1] = std::clamp(post.ambientOcclusionIntensity, 0.0f, 8.0f);
+        cb.ssaoParams[2] = ao ? 1.0f : 0.0f;
+        cb.ssaoParams[3] = contact ? 1.0f : 0.0f;
+        cb.contactShadowParams[0] = std::clamp(post.contactShadowLength, 0.0f, 5.0f);
+        cb.contactShadowParams[1] = 0.15f;
+
+        const bool reflections = availability.reflections && WantsScreenReflections(post, options) && prevViewProj;
+        if (prevViewProj)
+            std::memcpy(cb.prevViewProj, prevViewProj, sizeof(cb.prevViewProj));
+        cb.ssrParams[0] = std::clamp(post.reflectionMaxDistance, 1.0f, 200.0f);
+        cb.ssrParams[1] = std::clamp(post.reflectionMaxRoughness, 0.0f, 1.0f);
+        cb.ssrParams[2] = reflections ? 1.0f : 0.0f;
+        cb.ssrParams[3] = std::clamp(post.reflectionIntensity, 0.0f, 1.0f);
+
+        const bool dof = availability.depthOfField && WantsDepthOfField(post, options);
+        cb.dofParams[0] = std::max(post.depthOfFieldFocusDistance, 0.0f);
+        cb.dofParams[1] = std::max(post.depthOfFieldFocusRange, 0.01f);
+        cb.dofParams[2] = std::clamp(post.depthOfFieldMaxBlur, 0.0f, 5.0f) * 0.01f * static_cast<float>(renderHeight);
+        cb.dofParams[3] = dof && cb.dofParams[2] >= 1.0f ? 1.0f : 0.0f;
+
+        // Jitter (xy) is written by ApplyTemporalJitter.
+        cb.taaParams[2] = availability.temporalAA ? 1.0f : 0.0f;
+        cb.taaParams[3] = availability.temporalAA && availability.temporalHistory && prevViewProj ? 1.0f : 0.0f;
+
+        const bool motionBlur = availability.motionBlur && WantsMotionBlur(post, options) && prevViewProj;
+        cb.motionBlurParams[0] = std::clamp(post.motionBlurIntensity, 0.0f, 2.0f);
+        cb.motionBlurParams[1] = 0.05f;
+        cb.motionBlurParams[2] = motionBlur ? 1.0f : 0.0f;
+    }
+
+    void ApplyTemporalJitter(FrameSetup& out, uint32_t frameIndex, int renderWidth, int renderHeight)
+    {
+        const auto halton = [](uint32_t index, uint32_t base)
+        {
+            float f = 1.0f;
+            float result = 0.0f;
+            while (index > 0)
+            {
+                f /= static_cast<float>(base);
+                result += f * static_cast<float>(index % base);
+                index /= base;
+            }
+            return result;
+        };
+        const uint32_t phase = frameIndex % 8u + 1u;
+        // Clip-space offset: clip.xy += jitter * clip.w.
+        const float jx = (halton(phase, 2) - 0.5f) * 2.0f / static_cast<float>(std::max(renderWidth, 1));
+        const float jy = (halton(phase, 3) - 0.5f) * 2.0f / static_cast<float>(std::max(renderHeight, 1));
+        for (int row = 0; row < 4; ++row)
+        {
+            out.viewProj.m[row * 4 + 0] += jx * out.viewProj.m[row * 4 + 3];
+            out.viewProj.m[row * 4 + 1] += jy * out.viewProj.m[row * 4 + 3];
+        }
+        SceneCBData& cb = out.scene;
+        CopyMatrix(out.viewProj, cb.viewProj);
+        if (!InvertMatrix(cb.viewProj, cb.invViewProj))
+            std::memset(cb.invViewProj, 0, sizeof(cb.invViewProj));
+        cb.taaParams[0] = 0.5f * jx;
+        cb.taaParams[1] = -0.5f * jy;
+    }
+
+    bool WantsMotionBlur(const PostProcessSettings& post, const GraphicsOptions& options)
+    {
+        return options.motionBlur && post.motionBlurIntensity > 0.0f;
+    }
+
+    bool WantsDepthOfField(const PostProcessSettings& post, const GraphicsOptions& options)
+    {
+        return options.depthOfField && post.depthOfFieldMaxBlur > 0.0f;
+    }
+
+    bool WantsScreenReflections(const PostProcessSettings& post, const GraphicsOptions& options)
+    {
+        return options.screenSpaceReflections && post.reflectionIntensity > 0.0f && post.reflectionMaxRoughness > 0.0f;
+    }
+
+    bool WantsDepthPrepass(const SceneCBData& cb)
+    {
+        return cb.ssaoParams[2] > 0.5f || cb.ssaoParams[3] > 0.5f || cb.ssrParams[2] > 0.5f || cb.dofParams[3] > 0.5f ||
+            cb.taaParams[2] > 0.5f || cb.motionBlurParams[2] > 0.5f;
+    }
+
+    void ComputeWhiteBalanceLms(float temperature, float tint, float out[3])
+    {
+        const float t1 = std::clamp(temperature, -1.0f, 1.0f) * (100.0f / 65.0f);
+        const float t2 = std::clamp(tint, -1.0f, 1.0f) * (100.0f / 65.0f);
+        if (t1 == 0.0f && t2 == 0.0f)
+        {
+            out[0] = out[1] = out[2] = 1.0f;
+            return;
+        }
+        const float x = 0.31271f - t1 * (t1 < 0.0f ? 0.1f : 0.05f);
+        const float y = 2.87f * x - 3.0f * x * x - 0.27509507f + t2 * 0.05f;
+        const float X = x / y;
+        const float Z = (1.0f - x - y) / y;
+        const float L = 0.7328f * X + 0.4296f - 0.1624f * Z;
+        const float M = -0.7036f * X + 1.6975f + 0.0061f * Z;
+        const float S = 0.0030f * X + 0.0136f + 0.9834f * Z;
+        out[0] = 0.949237f / L;
+        out[1] = 1.03542f / M;
+        out[2] = 1.08728f / S;
+    }
+
     TonemapCBData BuildTonemapConstants(const SceneState& state, const PostProcessSettings& post, bool autoExposure,
         int bloomLevels, int renderWidth, int renderHeight)
     {
@@ -1500,6 +1661,21 @@ namespace render
         out.vignette[3] = bloomLevels > 0 ? 1.0f / static_cast<float>(bloomLevels) : 0.0f;
         for (int i = 0; i < 3; ++i)
             out.vignetteColor[i] = std::max(post.vignetteColor[i], 0.0f);
+        out.vignetteColor[3] = static_cast<float>(std::clamp(static_cast<int>(post.tonemapper), 0, static_cast<int>(Tonemapper::Count) - 1));
+
+        ComputeWhiteBalanceLms(post.temperature, post.tint, out.whiteBalance);
+        out.whiteBalance[3] = std::max(post.saturation, 0.0f);
+        for (int i = 0; i < 3; ++i)
+        {
+            out.colorFilter[i] = std::max(post.colorFilter[i], 0.0f);
+            out.lift[i] = std::clamp(post.lift[i], -1.0f, 1.0f);
+            out.gamma[i] = 1.0f / std::max(post.gamma[i], 0.01f);
+            out.gain[i] = std::max(post.gain[i], 0.0f);
+        }
+        out.colorFilter[3] = std::max(post.contrast, 0.0f);
+        out.lift[3] = std::clamp(post.sharpen, 0.0f, 1.0f);
+        out.gamma[3] = renderWidth > 0 ? 1.0f / static_cast<float>(renderWidth) : 0.0f;
+        out.gain[3] = renderHeight > 0 ? 1.0f / static_cast<float>(renderHeight) : 0.0f;
         return out;
     }
 

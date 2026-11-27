@@ -3,6 +3,8 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <sstream>
 #include "kmodel.h"
 #include "text_block_file.h"
 #include "text_parse_utils.h"
@@ -18,6 +20,7 @@ enum class AnimBlendTreeInstance::Kind
     LayerBlend,
     SelectBool,
     SelectInt,
+    StateMachine,
     FloatParam,
     BoolParam,
     IntParam,
@@ -81,6 +84,9 @@ namespace
             "Picks P0..P3 by Index and cross-fades over BlendTime seconds when it changes.",
             { IntPort("Index"), PosePort("P0"), PosePort("P1"), PosePort("P2"), PosePort("P3") },
             { PosePort("Pose") }, { { "BlendTime", AnimParamKind::Float, "0.2", {} } } });
+        c.push_back({ "StateMachine", "State Machine", "State",
+            "Plays one state at a time and cross-fades when a transition fires. Each state has its own graph.",
+            {}, { PosePort("Pose") }, { { "Name", AnimParamKind::Name, "Locomotion", {} } } });
         c.push_back({ "FloatParam", "Float Parameter", "Parameter", "A float set by game code (SetAnimFloat).",
             {}, { FloatPort("Value") },
             { { "Name", AnimParamKind::Name, "Speed", {} }, { "Default", AnimParamKind::Float, "0", {} } } });
@@ -167,6 +173,53 @@ namespace
     {
         return std::clamp(value, 0.0f, 1.0f);
     }
+
+    const char* const kConditionOpNames[] = { "IsTrue", "IsFalse", "Greater", "Less", "GreaterEqual", "LessEqual",
+        "Equal", "NotEqual", "Triggered" };
+
+    bool OpTakesValue(AnimConditionOp op)
+    {
+        return op != AnimConditionOp::IsTrue && op != AnimConditionOp::IsFalse && op != AnimConditionOp::Triggered;
+    }
+
+    std::string FormatCondition(const AnimTransitionCondition& condition)
+    {
+        std::ostringstream text;
+        text << condition.parameter << " " << AnimConditionOpName(condition.op);
+        if (OpTakesValue(condition.op))
+            text << " " << condition.value;
+        return text.str();
+    }
+
+    bool ParseCondition(const std::string& text, AnimTransitionCondition& out)
+    {
+        std::istringstream stream(text);
+        std::string op;
+        if (!(stream >> out.parameter >> op) || !ParseAnimConditionOp(op, out.op))
+            return false;
+        std::string value;
+        out.value = (stream >> value) ? textparse::ParseFloat(value, 0.0f) : 0.0f;
+        return true;
+    }
+}
+
+const char* AnimConditionOpName(AnimConditionOp op)
+{
+    const size_t index = (size_t)op;
+    return index < std::size(kConditionOpNames) ? kConditionOpNames[index] : "IsTrue";
+}
+
+bool ParseAnimConditionOp(const std::string& name, AnimConditionOp& outOp)
+{
+    for (size_t i = 0; i < std::size(kConditionOpNames); ++i)
+    {
+        if (name == kConditionOpNames[i])
+        {
+            outOp = (AnimConditionOp)i;
+            return true;
+        }
+    }
+    return false;
 }
 
 int AnimNodeInfo::InputIndex(const std::string& name) const
@@ -271,6 +324,8 @@ bool LoadAnimBlendTreeFile(const char* path, AnimBlendTreeData& outTree, std::st
             {
                 if (property.key == "Id")
                     node.id = (int32_t)textparse::ParseFloat(property.value, 0.0f);
+                else if (property.key == "Graph")
+                    node.graph = (int32_t)textparse::ParseFloat(property.value, 0.0f);
                 else if (property.key == "Type")
                     node.type = textparse::ParseString(property.value);
                 else if (property.key == "Position")
@@ -296,6 +351,59 @@ bool LoadAnimBlendTreeFile(const char* path, AnimBlendTreeData& outTree, std::st
             if (const std::string* value = FindTextBlockProperty(block, "ToPort"))
                 link.toPort = textparse::ParseString(*value);
             outTree.links.push_back(std::move(link));
+        }
+        else if (block.type == "State")
+        {
+            AnimBlendTreeState state;
+            if (const std::string* value = FindTextBlockProperty(block, "Id"))
+                state.id = (int32_t)textparse::ParseFloat(*value, 0.0f);
+            if (const std::string* value = FindTextBlockProperty(block, "Machine"))
+                state.machine = (int32_t)textparse::ParseFloat(*value, 0.0f);
+            if (const std::string* value = FindTextBlockProperty(block, "Name"))
+                state.name = textparse::ParseString(*value);
+            if (const std::string* value = FindTextBlockProperty(block, "Position"))
+            {
+                const Vector2 position = textparse::ParseVector2(*value, {});
+                state.position[0] = position.x;
+                state.position[1] = position.y;
+            }
+            if (const std::string* value = FindTextBlockProperty(block, "Entry"))
+                state.entry = textparse::ParseBool(*value, false);
+            outTree.states.push_back(std::move(state));
+        }
+        else if (block.type == "Transition")
+        {
+            AnimBlendTreeTransition transition;
+            for (const TextBlockProperty& property : block.properties)
+            {
+                if (property.key == "Machine")
+                    transition.machine = (int32_t)textparse::ParseFloat(property.value, 0.0f);
+                else if (property.key == "From")
+                {
+                    const std::string from = textparse::ParseString(property.value);
+                    transition.from = from == "Any" ? AnimBlendTreeTransition::AnyState : (int32_t)textparse::ParseFloat(from, 0.0f);
+                }
+                else if (property.key == "To")
+                    transition.to = (int32_t)textparse::ParseFloat(property.value, 0.0f);
+                else if (property.key == "Duration")
+                    transition.duration = textparse::ParseFloat(property.value, 0.2f);
+                else if (property.key == "ExitTime")
+                    transition.exitTime = textparse::ParseFloat(property.value, -1.0f);
+                else if (property.key == "Condition")
+                {
+                    AnimTransitionCondition condition;
+                    const std::string text = textparse::ParseString(property.value);
+                    if (!ParseCondition(text, condition))
+                    {
+                        if (outError)
+                            *outError = "Bad transition condition '" + text + "' (line " + std::to_string(block.line) + ")";
+                        outTree = {};
+                        return false;
+                    }
+                    transition.conditions.push_back(std::move(condition));
+                }
+            }
+            outTree.transitions.push_back(std::move(transition));
         }
     }
     return true;
@@ -323,7 +431,7 @@ bool SaveAnimBlendTreeFile(const char* path, const AnimBlendTreeData& tree, std:
     }
 
     file << "AnimBlendTree {\n";
-    file << "    Version = 1\n";
+    file << "    Version = 2\n";
     if (!tree.name.empty())
         file << "    Name = " << textparse::Quote(tree.name) << "\n";
     if (!tree.modelPath.empty())
@@ -334,6 +442,8 @@ bool SaveAnimBlendTreeFile(const char* path, const AnimBlendTreeData& tree, std:
     {
         file << "\nNode {\n";
         file << "    Id = " << node.id << "\n";
+        if (node.graph != 0)
+            file << "    Graph = " << node.graph << "\n";
         file << "    Type = " << textparse::Quote(node.type) << "\n";
         file << "    Position = \"" << node.position[0] << "," << node.position[1] << "\"\n";
         for (const auto& value : node.values)
@@ -348,6 +458,35 @@ bool SaveAnimBlendTreeFile(const char* path, const AnimBlendTreeData& tree, std:
         file << "    FromPort = " << textparse::Quote(link.fromPort) << "\n";
         file << "    To = " << link.toNode << "\n";
         file << "    ToPort = " << textparse::Quote(link.toPort) << "\n";
+        file << "}\n";
+    }
+
+    for (const AnimBlendTreeState& state : tree.states)
+    {
+        file << "\nState {\n";
+        file << "    Id = " << state.id << "\n";
+        file << "    Machine = " << state.machine << "\n";
+        file << "    Name = " << textparse::Quote(state.name) << "\n";
+        file << "    Position = \"" << state.position[0] << "," << state.position[1] << "\"\n";
+        if (state.entry)
+            file << "    Entry = true\n";
+        file << "}\n";
+    }
+
+    for (const AnimBlendTreeTransition& transition : tree.transitions)
+    {
+        file << "\nTransition {\n";
+        file << "    Machine = " << transition.machine << "\n";
+        if (transition.from == AnimBlendTreeTransition::AnyState)
+            file << "    From = \"Any\"\n";
+        else
+            file << "    From = " << transition.from << "\n";
+        file << "    To = " << transition.to << "\n";
+        file << "    Duration = " << transition.duration << "\n";
+        if (transition.exitTime >= 0.0f)
+            file << "    ExitTime = " << transition.exitTime << "\n";
+        for (const AnimTransitionCondition& condition : transition.conditions)
+            file << "    Condition = " << textparse::Quote(FormatCondition(condition)) << "\n";
         file << "}\n";
     }
 
@@ -381,6 +520,7 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
         { "LayerBlend", Kind::LayerBlend },
         { "SelectBool", Kind::SelectBool },
         { "SelectInt", Kind::SelectInt },
+        { "StateMachine", Kind::StateMachine },
         { "FloatParam", Kind::FloatParam },
         { "BoolParam", Kind::BoolParam },
         { "IntParam", Kind::IntParam },
@@ -390,7 +530,17 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
         { "MapRange", Kind::MapRange },
     };
 
+    std::unordered_map<int32_t, const AnimBlendTreeState*> stateById;
+    for (const AnimBlendTreeState& state : tree.states)
+    {
+        if (state.id <= 0 || stateById.count(state.id))
+            return fail("Animation graph state has a missing or duplicate id " + std::to_string(state.id));
+        stateById[state.id] = &state;
+    }
+
     std::unordered_map<int32_t, int32_t> indexById;
+    std::unordered_map<int32_t, int32_t> stateOutput;
+    std::vector<int32_t> graphOf;
     for (const AnimBlendTreeNode& source : tree.nodes)
     {
         const AnimNodeInfo* info = FindAnimNodeInfo(source.type);
@@ -399,6 +549,8 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
             return fail("Unknown animation graph node type '" + source.type + "'");
         if (indexById.count(source.id))
             return fail("Duplicate animation graph node id " + std::to_string(source.id));
+        if (source.graph != 0 && !stateById.count(source.graph))
+            return fail("Animation graph node " + std::to_string(source.id) + " is in a missing state");
 
         Node node;
         node.id = source.id;
@@ -441,11 +593,23 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
         }
         node.flag = node.kind == Kind::Clip ? node.params[1] > 0.5f : node.params[0] > 0.5f;
 
-        if (node.kind == Kind::Output)
+        if (node.kind == Kind::Output && source.graph == 0)
         {
             if (outputNode >= 0)
                 return fail("Animation graph has more than one Output node");
             outputNode = (int32_t)nodes.size();
+        }
+        else if (node.kind == Kind::Output)
+        {
+            if (stateOutput.count(source.graph))
+                return fail("State '" + stateById[source.graph]->name + "' has more than one Output node");
+            stateOutput[source.graph] = (int32_t)nodes.size();
+        }
+        if (node.kind == Kind::StateMachine)
+        {
+            node.machine = (int32_t)machines.size();
+            machines.emplace_back();
+            machines.back().node = (int32_t)nodes.size();
         }
 
         if (node.kind == Kind::FloatParam || node.kind == Kind::BoolParam || node.kind == Kind::IntParam)
@@ -461,11 +625,92 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
         }
 
         indexById[node.id] = (int32_t)nodes.size();
+        graphOf.push_back(source.graph);
         nodes.push_back(std::move(node));
     }
 
     if (outputNode < 0)
         return fail("Animation graph has no Output node");
+
+    // state id -> (machine, index of the state in it)
+    std::unordered_map<int32_t, std::pair<int32_t, int32_t>> stateSlot;
+    for (const AnimBlendTreeState& source : tree.states)
+    {
+        const auto machineNode = indexById.find(source.machine);
+        if (machineNode == indexById.end() || nodes[(size_t)machineNode->second].kind != Kind::StateMachine)
+            return fail("State '" + source.name + "' belongs to a missing state machine");
+        const int32_t machineIndex = nodes[(size_t)machineNode->second].machine;
+        Machine& machine = machines[(size_t)machineIndex];
+        State state;
+        state.id = source.id;
+        const auto output = stateOutput.find(source.id);
+        state.output = output == stateOutput.end() ? -1 : output->second;
+        stateSlot[source.id] = { machineIndex, (int32_t)machine.states.size() };
+        const bool firstEntry = source.entry
+            && std::none_of(tree.states.begin(), tree.states.end(), [&](const AnimBlendTreeState& other)
+                { return &other < &source && other.machine == source.machine && other.entry; });
+        if (firstEntry)
+            machine.entry = (int32_t)machine.states.size();
+        machine.states.push_back(std::move(state));
+    }
+    for (size_t i = 0; i < nodes.size(); ++i)
+    {
+        if (graphOf[i] == 0)
+            continue;
+        const auto slot = stateSlot.find(graphOf[i]);
+        if (slot == stateSlot.end())
+            return fail("Animation graph node " + std::to_string(nodes[i].id) + " is in a missing state");
+        machines[(size_t)slot->second.first].states[(size_t)slot->second.second].nodes.push_back((int32_t)i);
+    }
+
+    // A state machine inside one of its own states would evaluate itself.
+    for (const Machine& machine : machines)
+    {
+        int32_t graph = graphOf[(size_t)machine.node];
+        size_t guard = 0;
+        while (graph != 0)
+        {
+            if (++guard > tree.states.size())
+                return fail("A state machine is nested inside itself");
+            const auto slot = stateSlot.find(graph);
+            graph = graphOf[(size_t)machines[(size_t)slot->second.first].node];
+        }
+    }
+
+    for (const AnimBlendTreeTransition& source : tree.transitions)
+    {
+        const auto machineNode = indexById.find(source.machine);
+        if (machineNode == indexById.end() || nodes[(size_t)machineNode->second].kind != Kind::StateMachine)
+            return fail("Transition belongs to a missing state machine");
+        const int32_t machineIndex = nodes[(size_t)machineNode->second].machine;
+        const auto stateIn = [&](int32_t id)
+        {
+            const auto slot = stateSlot.find(id);
+            return slot != stateSlot.end() && slot->second.first == machineIndex ? slot->second.second : -1;
+        };
+        Transition transition;
+        transition.from = source.from == AnimBlendTreeTransition::AnyState ? -1 : stateIn(source.from);
+        transition.to = stateIn(source.to);
+        if ((source.from != AnimBlendTreeTransition::AnyState && transition.from < 0) || transition.to < 0)
+            return fail("Transition references a state outside its state machine");
+        transition.duration = std::max(source.duration, 0.0f);
+        transition.exitTime = source.exitTime;
+        for (const AnimTransitionCondition& condition : source.conditions)
+        {
+            transition.conditions.push_back({ condition.parameter, condition.op, condition.value });
+            if (condition.parameter.empty())
+                continue;
+            const bool trigger = condition.op == AnimConditionOp::Triggered;
+            const bool isBool = trigger || condition.op == AnimConditionOp::IsTrue || condition.op == AnimConditionOp::IsFalse;
+            auto known = std::find_if(parameters.begin(), parameters.end(), [&](const AnimBlendTreeParameter& p)
+                { return p.name == condition.parameter; });
+            if (known == parameters.end())
+                parameters.push_back({ condition.parameter, isBool ? AnimPortType::Bool : AnimPortType::Float, 0.0f, trigger });
+            else if (trigger)
+                known->trigger = true;
+        }
+        machines[(size_t)machineIndex].transitions.push_back(std::move(transition));
+    }
 
     for (const AnimBlendTreeLink& link : tree.links)
     {
@@ -473,6 +718,8 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
         const auto to = indexById.find(link.toNode);
         if (from == indexById.end() || to == indexById.end())
             return fail("Animation graph link references a missing node");
+        if (graphOf[(size_t)from->second] != graphOf[(size_t)to->second])
+            return fail("Animation graph link connects nodes in different graphs");
         const AnimNodeInfo* fromInfo = FindAnimNodeInfo(tree.nodes[(size_t)from->second].type);
         const AnimNodeInfo* toInfo = FindAnimNodeInfo(tree.nodes[(size_t)to->second].type);
         const int fromPort = fromInfo->OutputIndex(link.fromPort);
@@ -500,6 +747,14 @@ bool AnimBlendTreeInstance::Build(const AnimBlendTreeData& tree, std::string* ou
         {
             if (input.node >= 0 && !visit(input.node))
                 return false;
+        }
+        if (nodes[(size_t)index].machine >= 0)
+        {
+            for (const State& machineState : machines[(size_t)nodes[(size_t)index].machine].states)
+            {
+                if (machineState.output >= 0 && !visit(machineState.output))
+                    return false;
+            }
         }
         state[(size_t)index] = 2;
         return true;
@@ -529,7 +784,53 @@ void AnimBlendTreeInstance::Reset()
         node.fade = 1.0f;
         node.weight = 0.0f;
     }
+    for (Machine& machine : machines)
+        ResetMachine(machine);
     frame = 0;
+}
+
+void AnimBlendTreeInstance::ResetMachine(Machine& machine)
+{
+    machine.current = -1;
+    machine.previous = -1;
+    machine.fade = 1.0f;
+    machine.duration = 0.0f;
+    machine.frozen = false;
+    for (State& state : machine.states)
+    {
+        state.progress = 0.0f;
+        state.weight = 0.0f;
+    }
+}
+
+void AnimBlendTreeInstance::SetTrigger(const std::string& name)
+{
+    values[name] = 1.0f;
+}
+
+float AnimBlendTreeInstance::GetStateWeight(int32_t stateId) const
+{
+    for (const Machine& machine : machines)
+    {
+        if (nodes[(size_t)machine.node].stamp != frame)
+            continue;
+        for (const State& state : machine.states)
+        {
+            if (state.id == stateId)
+                return state.weight;
+        }
+    }
+    return 0.0f;
+}
+
+int32_t AnimBlendTreeInstance::GetActiveState(int32_t machineNodeId) const
+{
+    for (const Machine& machine : machines)
+    {
+        if (nodes[(size_t)machine.node].id == machineNodeId)
+            return machine.current >= 0 ? machine.states[(size_t)machine.current].id : 0;
+    }
+    return 0;
 }
 
 void AnimBlendTreeInstance::SetFloat(const std::string& name, float value)
@@ -734,6 +1035,172 @@ void AnimBlendTreeInstance::EvalSelect(Node& node, int32_t target, size_t firstP
     BlendPoses(from, to, node.fade, node.pose);
 }
 
+bool AnimBlendTreeInstance::TransitionPasses(const Machine& machine, const Transition& transition) const
+{
+    if (transition.conditions.empty() && transition.exitTime < 0.0f)
+        return false;
+    if (transition.exitTime >= 0.0f && machine.states[(size_t)machine.current].progress < transition.exitTime)
+        return false;
+    for (const Condition& condition : transition.conditions)
+    {
+        const float v = GetValue(condition.parameter);
+        bool pass = false;
+        switch (condition.op)
+        {
+        case AnimConditionOp::IsTrue:
+        case AnimConditionOp::Triggered:    pass = v > 0.5f; break;
+        case AnimConditionOp::IsFalse:      pass = v <= 0.5f; break;
+        case AnimConditionOp::Greater:      pass = v > condition.value; break;
+        case AnimConditionOp::Less:         pass = v < condition.value; break;
+        case AnimConditionOp::GreaterEqual: pass = v >= condition.value; break;
+        case AnimConditionOp::LessEqual:    pass = v <= condition.value; break;
+        case AnimConditionOp::Equal:        pass = std::fabs(v - condition.value) <= 1e-5f; break;
+        case AnimConditionOp::NotEqual:     pass = std::fabs(v - condition.value) > 1e-5f; break;
+        }
+        if (!pass)
+            return false;
+    }
+    return true;
+}
+
+void AnimBlendTreeInstance::EnterState(Machine& machine, const Node& node, int32_t state, float duration)
+{
+    if (machine.current >= 0 && duration > 0.0f)
+    {
+        // Interrupting a blend (or restarting the same state) blends from the last output pose.
+        const bool midBlend = machine.fade < 1.0f && (machine.frozen || machine.previous >= 0);
+        if (midBlend || state == machine.current)
+        {
+            machine.frozenPose = node.pose;
+            machine.frozen = true;
+            machine.previous = -1;
+        }
+        else
+        {
+            machine.frozen = false;
+            machine.previous = machine.current;
+        }
+        machine.fade = 0.0f;
+    }
+    else
+    {
+        machine.frozen = false;
+        machine.previous = -1;
+        machine.fade = 1.0f;
+    }
+    machine.current = state;
+    machine.duration = duration;
+
+    State& entered = machine.states[(size_t)state];
+    entered.progress = 0.0f;
+    for (int32_t index : entered.nodes)
+    {
+        Node& n = nodes[(size_t)index];
+        n.time = 0.0f;
+        n.progress = 0.0f;
+        n.active = -1;
+        n.previous = -1;
+        n.fade = 1.0f;
+        if (n.machine >= 0)
+            ResetMachine(machines[(size_t)n.machine]);
+    }
+}
+
+const std::vector<AnimationTransform>& AnimBlendTreeInstance::EvalState(Machine& machine, int32_t stateIndex, float weight)
+{
+    State& state = machine.states[(size_t)stateIndex];
+    if (state.output < 0)
+    {
+        state.progress = 1.0f;
+        return bindPose;
+    }
+    const Pose& pose = InputPose(nodes[(size_t)state.output], 0, weight);
+    Node& output = nodes[(size_t)state.output];
+    if (output.stamp == frame)
+        output.weight += weight;
+    else
+    {
+        output.stamp = frame;
+        output.weight = weight;
+    }
+
+    // Exit times follow the clip with the most weight in the state.
+    float best = -1.0f;
+    for (int32_t index : state.nodes)
+    {
+        const Node& n = nodes[(size_t)index];
+        if (n.kind == Kind::Clip && n.stamp == frame && n.clip && n.weight > best)
+        {
+            best = n.weight;
+            state.progress = n.progress;
+        }
+    }
+    if (best < 0.0f)
+        state.progress = 1.0f;
+    return pose;
+}
+
+void AnimBlendTreeInstance::EvalMachine(Node& node, float weight)
+{
+    Machine& machine = machines[(size_t)node.machine];
+    if (machine.states.empty())
+    {
+        node.pose = bindPose;
+        return;
+    }
+
+    bool fired = false;
+    if (machine.current < 0)
+        EnterState(machine, node, machine.entry, 0.0f);
+    else
+    {
+        for (const Transition& transition : machine.transitions)
+        {
+            if (transition.from < 0 ? transition.to == machine.current : transition.from != machine.current)
+                continue;
+            if (!TransitionPasses(machine, transition))
+                continue;
+            for (const Condition& condition : transition.conditions)
+            {
+                if (condition.op == AnimConditionOp::Triggered)
+                    values[condition.parameter] = 0.0f;
+            }
+            EnterState(machine, node, transition.to, transition.duration);
+            fired = true;
+            break;
+        }
+    }
+    if (!fired && machine.fade < 1.0f)
+        machine.fade = machine.duration > 0.0f ? Clamp01(machine.fade + frameDt / machine.duration) : 1.0f;
+
+    for (State& state : machine.states)
+        state.weight = 0.0f;
+    const float fade = machine.fade;
+    if (fade >= 1.0f || (!machine.frozen && machine.previous < 0))
+    {
+        machine.previous = -1;
+        machine.frozen = false;
+        machine.states[(size_t)machine.current].weight = 1.0f;
+        node.pose = EvalState(machine, machine.current, weight);
+        return;
+    }
+
+    machine.states[(size_t)machine.current].weight = fade;
+    if (machine.frozen)
+    {
+        const Pose& to = EvalState(machine, machine.current, weight * fade);
+        if (machine.frozenPose.size() == to.size())
+            BlendPoses(machine.frozenPose, to, fade, node.pose);
+        else
+            node.pose = to;
+        return;
+    }
+    machine.states[(size_t)machine.previous].weight = 1.0f - fade;
+    const Pose& from = EvalState(machine, machine.previous, weight * (1.0f - fade));
+    const Pose& to = EvalState(machine, machine.current, weight * fade);
+    BlendPoses(from, to, fade, node.pose);
+}
+
 const std::vector<AnimationTransform>& AnimBlendTreeInstance::EvalPose(int32_t nodeIndex, float weight)
 {
     Node& node = nodes[(size_t)nodeIndex];
@@ -900,6 +1367,9 @@ const std::vector<AnimationTransform>& AnimBlendTreeInstance::EvalPose(int32_t n
         break;
     case Kind::SelectInt:
         EvalSelect(node, (int32_t)std::lround(InputScalar(node, 0)), 1, 4, weight);
+        break;
+    case Kind::StateMachine:
+        EvalMachine(node, weight);
         break;
     case Kind::BindPose:
     default:

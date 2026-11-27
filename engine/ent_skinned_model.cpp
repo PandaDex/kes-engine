@@ -426,6 +426,14 @@ void SkinnedModelEntity::SetAnimInt(const std::string& name, int value)
         SetAnimFloat(name, (float)value);
 }
 
+void SkinnedModelEntity::SetAnimTrigger(const std::string& name)
+{
+    if (ResolveBlendTree())
+        blendTree.SetTrigger(name);
+    else if (const AnimationGraphData* graph = ResolveAnimationGraph())
+        FireAnimatorTrigger(*graph, animator, name.c_str());
+}
+
 bool SkinnedModelEntity::GetSocketModelMatrix(const std::string& name, float outMatrix[16]) const
 {
     const KModelData* model = game && game->assets ? game->assets->GetModel(modelHandle) : nullptr;
@@ -760,6 +768,14 @@ bool SkinnedModelEntity::SetChildAnimInt(const std::string& child, const std::st
         {
                                  LoadChildAnimation(part);
                                  part.blendTree.SetInt(name, value); });
+}
+
+bool SkinnedModelEntity::SetChildAnimTrigger(const std::string& child, const std::string& name)
+{
+    return ForEachChildNamed(child, [&](ChildPart& part)
+        {
+                                 LoadChildAnimation(part);
+                                 part.blendTree.SetTrigger(name); });
 }
 
 void SkinnedModelEntity::OnDestroy()

@@ -39,6 +39,13 @@ inline constexpr const char* kEngineShaderCmaa2DispatchArgs = "engine/shaders/cm
 inline constexpr const char* kEngineShaderCmaa2ProcessCandidates = "engine/shaders/cmaa2_process_candidates.slang";
 inline constexpr const char* kEngineShaderCmaa2DeferredApply = "engine/shaders/cmaa2_deferred_apply.slang";
 inline constexpr const char* kEngineShaderParticle = "engine/shaders/particle.slang";
+inline constexpr const char* kEngineShaderDepthNormal = "engine/shaders/depth_normal.slang";
+inline constexpr const char* kEngineShaderScreenSpaceLighting = "engine/shaders/screen_space_lighting.slang";
+inline constexpr const char* kEngineShaderScreenSpaceLightingBlur = "engine/shaders/screen_space_lighting_blur.slang";
+inline constexpr const char* kEngineShaderScreenSpaceReflections = "engine/shaders/ssr.slang";
+inline constexpr const char* kEngineShaderDepthOfField = "engine/shaders/dof.slang";
+inline constexpr const char* kEngineShaderTemporalAA = "engine/shaders/taa.slang";
+inline constexpr const char* kEngineShaderMotionBlur = "engine/shaders/motion_blur.slang";
 
 // "shaders/foo.slang" + Vertex + Vulkan -> "shaders/foo.vs.spv"
 std::string BuildCompiledShaderPath(const std::string& sourcePath, ShaderStage stage, RendererBackend backend);

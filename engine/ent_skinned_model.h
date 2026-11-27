@@ -54,6 +54,8 @@ public:
     void SetAnimFloat(const std::string& name, float value);
     void SetAnimBool(const std::string& name, bool value);
     void SetAnimInt(const std::string& name, int value);
+    // Stays set until a state machine transition that waits for it fires.
+    void SetAnimTrigger(const std::string& name);
     // Socket transform in model space (before the entity transform) for the current pose.
     bool GetSocketModelMatrix(const std::string& name, float outMatrix[16]) const;
 
@@ -63,6 +65,7 @@ public:
     bool SetChildAnimFloat(const std::string& child, const std::string& name, float value);
     bool SetChildAnimBool(const std::string& child, const std::string& name, bool value);
     bool SetChildAnimInt(const std::string& child, const std::string& name, int value);
+    bool SetChildAnimTrigger(const std::string& child, const std::string& name);
 
 private:
     void RefreshAssetHandles();

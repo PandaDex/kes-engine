@@ -252,7 +252,8 @@ namespace kes::vk
         GPUTexture environmentMap = {};
         render::EnvironmentMaps environment;
         render::FrameSetup frame;
-        VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE; // set 2
+        VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE; // set 2, screen-space lighting at binding 5
+        VkDescriptorSet globalNoSslDescriptorSet = VK_NULL_HANDLE; // set 2 with the white texture at binding 5
         bool globalSetDirty = true;
         render::TonemapCBData tonemap = {}; // this frame's tonemap constants
         bool bloomThisFrame = false;
@@ -332,6 +333,66 @@ namespace kes::vk
         GPUTexture bloomLevels[render::kBloomMaxLevels] = {};
         VkFramebuffer bloomFramebuffers[render::kBloomMaxLevels] = {};
         VkDescriptorSet bloomDescriptorSets[render::kBloomMaxLevels] = {}; // texSetLayout, level as the source
+
+        // Depth + normal prepass (depth_normal.slang) and screen-space lighting
+        // (screen_space_lighting[_blur].slang: AO + contact shadows) at the
+        // render resolution, before the scene pass, which samples `ssl`.
+        bool screenSpaceAvailable = false; // pipelines created
+        bool prepassThisFrame = false;
+        VkRenderPass prepassRenderPass = VK_NULL_HANDLE; // RGBA16F normal + D32 depth, both end shader-readable
+        VkRenderPass sslRenderPass = VK_NULL_HANDLE; // RG8, don't care -> shader read
+        VkDescriptorSetLayout sslSetLayout = VK_NULL_HANDLE; // set 1: two sampled images (Load)
+        VkPipelineLayout sslPipelineLayout = VK_NULL_HANDLE; // uboSetLayout + sslSetLayout
+        GPUShaderProgram prepassProgram; // pipelines[0] single sided, [1] double sided
+        VkShaderModule sslVS = VK_NULL_HANDLE;
+        VkShaderModule sslPS = VK_NULL_HANDLE;
+        VkShaderModule sslBlurVS = VK_NULL_HANDLE;
+        VkShaderModule sslBlurPS = VK_NULL_HANDLE;
+        VkPipeline sslPipeline = VK_NULL_HANDLE;
+        VkPipeline sslBlurPipeline = VK_NULL_HANDLE;
+        GPUTexture prepassNormal = {};
+        GPUTexture prepassDepth = {};
+        GPUTexture sslRaw = {};
+        GPUTexture ssl = {};
+        VkFramebuffer prepassFramebuffer = VK_NULL_HANDLE;
+        VkFramebuffer sslRawFramebuffer = VK_NULL_HANDLE;
+        VkFramebuffer sslFramebuffer = VK_NULL_HANDLE;
+        VkDescriptorSet sslDescriptorSet = VK_NULL_HANDLE; // depth + normal
+        VkDescriptorSet sslBlurDescriptorSet = VK_NULL_HANDLE; // depth + raw lighting
+        // Screen-space reflections (ssr.slang): RGBA16F, traced against the
+        // prepass and shaded from last frame's scene color (historyColor,
+        // copied from the scene color after each scene pass).
+        VkRenderPass ssrRenderPass = VK_NULL_HANDLE; // RGBA16F, don't care -> shader read
+        VkShaderModule ssrVS = VK_NULL_HANDLE;
+        VkShaderModule ssrPS = VK_NULL_HANDLE;
+        VkPipeline ssrPipeline = VK_NULL_HANDLE;
+        GPUTexture ssrColor = {};
+        GPUTexture historyColor = {};
+        VkFramebuffer ssrFramebuffer = VK_NULL_HANDLE;
+        VkDescriptorSet ssrDescriptorSet = VK_NULL_HANDLE; // depth + normal + history
+        // Scene color passes (taa / dof / motion_blur.slang): each reads a copy of
+        // the scene color (historyColor) and writes the scene color through
+        // dofFramebuffer. TAA also reads and then refreshes taaHistory.
+        VkShaderModule dofVS = VK_NULL_HANDLE;
+        VkShaderModule dofPS = VK_NULL_HANDLE;
+        VkPipeline dofPipeline = VK_NULL_HANDLE;
+        VkShaderModule taaVS = VK_NULL_HANDLE;
+        VkShaderModule taaPS = VK_NULL_HANDLE;
+        VkPipeline taaPipeline = VK_NULL_HANDLE;
+        VkShaderModule motionBlurVS = VK_NULL_HANDLE;
+        VkShaderModule motionBlurPS = VK_NULL_HANDLE;
+        VkPipeline motionBlurPipeline = VK_NULL_HANDLE;
+        VkFramebuffer dofFramebuffer = VK_NULL_HANDLE; // the scene color in ssrRenderPass
+        VkDescriptorSet dofDescriptorSet = VK_NULL_HANDLE; // depth + normal + history (depth of field, motion blur)
+        VkDescriptorSet taaDescriptorSet = VK_NULL_HANDLE; // depth + TAA history + history
+        GPUTexture taaHistory = {};
+        bool taaHistoryInitialized = false;
+        bool taaHistoryValid = false;
+        uint32_t taaFrameIndex = 0;
+        bool historyInitialized = false; // left UNDEFINED until the first transition
+        bool historyValid = false; // holds a scene color
+        float prevViewProj[16] = {};
+        bool havePrevViewProj = false;
 
         // Eye adaptation (exposure_histogram / exposure_adapt.slang). The state
         // buffer carries the adapted exposure from frame to frame.

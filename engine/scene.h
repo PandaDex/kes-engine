@@ -79,7 +79,18 @@ struct FogSettings
     float selectionVolume = 0.0f;
 };
 
-// Camera post processing: exposure (manual or eye adaptation), bloom, vignette.
+enum class Tonemapper : int32_t
+{
+    ACES = 0, // Hill's fit of the ACES RRT+ODT
+    AgX = 1,
+    Neutral = 2, // Khronos PBR Neutral
+    Reinhard = 3,
+    None = 4, // clamp
+    Count
+};
+
+// Camera post processing: exposure (manual or eye adaptation), bloom, vignette,
+// colour grading, tonemapping, sharpening.
 // Exposure values are in EV (stops, powers of two).
 struct PostProcessSettings
 {
@@ -99,6 +110,38 @@ struct PostProcessSettings
     float vignetteIntensity = 0.0f; // 0 = off, 1 = strong
     float vignetteSmoothness = 0.5f; // 0-1, falloff softness
     float vignetteColor[3] = { 0.0f, 0.0f, 0.0f };
+
+    Tonemapper tonemapper = Tonemapper::ACES;
+
+    // Grading before the tonemap (scene linear).
+    float temperature = 0.0f; // -1 (cooler) .. 1 (warmer), white balance around 6500 K
+    float tint = 0.0f; // -1 (green) .. 1 (magenta)
+    float saturation = 1.0f; // 0 = grey
+    float contrast = 1.0f; // around middle grey, in log space
+    float colorFilter[3] = { 1.0f, 1.0f, 1.0f };
+
+    // Lift / gamma / gain after the tonemap (display linear, 0-1).
+    float lift[3] = { 0.0f, 0.0f, 0.0f }; // added to the shadows, -1..1
+    float gamma[3] = { 1.0f, 1.0f, 1.0f }; // > 1 brightens the midtones
+    float gain[3] = { 1.0f, 1.0f, 1.0f }; // scales the highlights
+
+    float sharpen = 0.0f; // contrast adaptive sharpening, 0 = off, 1 = strong
+
+    // Screen-space lighting (GraphicsOptions can switch each off).
+    float ambientOcclusionIntensity = 1.0f; // 0 = off; exponent on the AO term
+    float ambientOcclusionRadius = 0.5f; // meters
+    float contactShadowLength = 0.3f; // meters, 0 = off; the sun (or first directional light) only
+    float reflectionIntensity = 1.0f; // screen-space reflections, 0 = off, 1 = full
+    float reflectionMaxRoughness = 0.5f; // rougher surfaces keep the environment reflection
+    float reflectionMaxDistance = 30.0f; // meters a reflection ray travels
+
+    // Depth of field: sharp at the focus distance, fully blurred focusRange meters
+    // nearer or further away.
+    float depthOfFieldFocusDistance = 10.0f; // meters
+    float depthOfFieldFocusRange = 10.0f; // meters
+    float depthOfFieldMaxBlur = 0.0f; // blur radius in percent of the screen height, 0 = off
+
+    float motionBlurIntensity = 0.0f; // camera motion blur, fraction of a frame's motion; 0 = off
 };
 
 // Which PostProcessSettings fields a layer sets. Fields it doesn't set keep
@@ -116,7 +159,27 @@ enum PostProcessOverride : uint32_t
     PostProcessOverride_VignetteIntensity = 1u << 8,
     PostProcessOverride_VignetteSmoothness = 1u << 9,
     PostProcessOverride_VignetteColor = 1u << 10,
-    PostProcessOverride_All = (1u << 11) - 1u,
+    PostProcessOverride_Tonemapper = 1u << 11,
+    PostProcessOverride_Temperature = 1u << 12,
+    PostProcessOverride_Tint = 1u << 13,
+    PostProcessOverride_Saturation = 1u << 14,
+    PostProcessOverride_Contrast = 1u << 15,
+    PostProcessOverride_ColorFilter = 1u << 16,
+    PostProcessOverride_Lift = 1u << 17,
+    PostProcessOverride_Gamma = 1u << 18,
+    PostProcessOverride_Gain = 1u << 19,
+    PostProcessOverride_Sharpen = 1u << 20,
+    PostProcessOverride_AmbientOcclusionIntensity = 1u << 21,
+    PostProcessOverride_AmbientOcclusionRadius = 1u << 22,
+    PostProcessOverride_ContactShadowLength = 1u << 23,
+    PostProcessOverride_ReflectionIntensity = 1u << 24,
+    PostProcessOverride_ReflectionMaxRoughness = 1u << 25,
+    PostProcessOverride_ReflectionMaxDistance = 1u << 26,
+    PostProcessOverride_DepthOfFieldFocusDistance = 1u << 27,
+    PostProcessOverride_DepthOfFieldFocusRange = 1u << 28,
+    PostProcessOverride_DepthOfFieldMaxBlur = 1u << 29,
+    PostProcessOverride_MotionBlurIntensity = 1u << 30,
+    PostProcessOverride_All = (1u << 31) - 1u,
 };
 
 // One contribution to the final post-process settings. Layers are applied in

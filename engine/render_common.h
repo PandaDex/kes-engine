@@ -86,6 +86,16 @@ namespace render
         float localShadowRects[kMaxShadowTiles][4]; // atlas uv: xy = scale, zw = offset
         float clusterParams[4]; // xyz = grid size, w = cluster light count
         float clusterDepth[4]; // x = near, y = slices / log(far / near)
+        float invViewProj[16];
+        float screenParams[4]; // xy = render size, zw = 1 / render size
+        float depthParams[4]; // x = near, y = far
+        float ssaoParams[4]; // x = radius, y = intensity, z = 1 AO on, w = 1 contact shadows on
+        float contactShadowParams[4]; // x = length, y = thickness, z = directional light index (-1 none)
+        float prevViewProj[16];
+        float ssrParams[4]; // x = max distance, y = max roughness, z = 1 on, w = intensity
+        float dofParams[4]; // x = focus distance, y = focus range, z = max blur radius in pixels, w = 1 on
+        float taaParams[4]; // xy = jitter in uv, z = 1 TAA on, w = 1 history valid
+        float motionBlurParams[4]; // x = intensity, y = max length in uv, z = 1 on
     };
 
     struct MaterialCBData
@@ -129,7 +139,12 @@ namespace render
     {
         float params[4]; // x = exposure multiplier, y = dither strength, z = 1 multiply by the adapted exposure, w = bloom intensity
         float vignette[4]; // x = intensity, y = smoothness, z = aspect (width / height), w = 1 / bloom level count
-        float vignetteColor[4]; // rgb
+        float vignetteColor[4]; // rgb, w = tonemapper
+        float whiteBalance[4]; // xyz = LMS scale, w = saturation
+        float colorFilter[4]; // rgb, w = contrast
+        float lift[4]; // rgb, w = sharpen strength
+        float gamma[4]; // rgb = 1 / gamma, w = 1 / render width
+        float gain[4]; // rgb, w = 1 / render height
     };
 
     // exposure_histogram.slang / exposure_adapt.slang.
@@ -148,6 +163,35 @@ namespace render
 
     // Bloom chain sizes for a render resolution; returns the level count (0 when too small).
     int ComputeBloomLevels(int renderWidth, int renderHeight, int outSizes[kBloomMaxLevels][2]);
+    struct FrameSetup;
+
+    // What the backend can run this frame for the screen-space passes.
+    struct ScreenSpaceAvailability
+    {
+        bool lighting = false; // prepass + AO / contact shadow targets
+        bool reflections = false; // reflection target and a history color from last frame
+        bool depthOfField = false;
+        bool temporalAA = false;
+        bool temporalHistory = false; // TAA history from last frame
+        bool motionBlur = false;
+        const float* prevViewProj = nullptr; // last frame's camera matrix without jitter
+    };
+
+    // Screen-space constants of the frame (AO, contact shadows, reflections,
+    // depth of field, TAA, motion blur).
+    void SetScreenSpaceLighting(SceneCBData& cb, const PostProcessSettings& post, const GraphicsOptions& options,
+        int renderWidth, int renderHeight, const ScreenSpaceAvailability& available);
+    // Sub-pixel projection offset for TAA (Halton 2,3; 8 phases). Changes
+    // out.viewProj and the scene constants, not the culling frustum.
+    void ApplyTemporalJitter(FrameSetup& out, uint32_t frameIndex, int renderWidth, int renderHeight);
+    bool WantsDepthPrepass(const SceneCBData& cb);
+    bool WantsScreenReflections(const PostProcessSettings& post, const GraphicsOptions& options);
+    bool WantsDepthOfField(const PostProcessSettings& post, const GraphicsOptions& options);
+    bool WantsMotionBlur(const PostProcessSettings& post, const GraphicsOptions& options);
+    bool InvertMatrix(const float m[16], float out[16]);
+
+    // Unity's white balance: LMS scale factors for a temperature / tint (-1..1).
+    void ComputeWhiteBalanceLms(float temperature, float tint, float out[3]);
     TonemapCBData BuildTonemapConstants(const SceneState& state, const PostProcessSettings& post, bool autoExposure,
         int bloomLevels, int renderWidth, int renderHeight);
     ExposureCBData BuildExposureConstants(const PostProcessSettings& post, float deltaTime, bool reset, int renderWidth, int renderHeight);
@@ -161,13 +205,15 @@ namespace render
     static_assert(offsetof(SceneCBData, localShadowViewProj) == 864, "SceneCB layout");
     static_assert(offsetof(SceneCBData, localShadowRects) == 9056, "SceneCB layout");
     static_assert(offsetof(SceneCBData, clusterParams) == 11104, "SceneCB layout");
-    static_assert(sizeof(SceneCBData) == 11136, "SceneCB layout");
+    static_assert(offsetof(SceneCBData, invViewProj) == 11136, "SceneCB layout");
+    static_assert(offsetof(SceneCBData, prevViewProj) == 11264, "SceneCB layout");
+    static_assert(sizeof(SceneCBData) == 11392, "SceneCB layout");
     static_assert(sizeof(SceneCBData) <= 16384, "SceneCB must fit Vulkan's minimum maxUniformBufferRange");
     static_assert(sizeof(GPULight) == 64, "GPULight layout");
     static_assert(offsetof(ModelCBData, skinInfo) == 128, "ModelCB layout");
     static_assert(offsetof(ModelCBData, skinMatrices) == 144, "ModelCB layout");
     static_assert(sizeof(MaterialCBData) == 64, "MaterialCB layout");
-    static_assert(sizeof(TonemapCBData) == 48, "TonemapCB layout");
+    static_assert(sizeof(TonemapCBData) == 128, "TonemapCB layout (Vulkan push constants: 128 bytes guaranteed)");
     static_assert(sizeof(ExposureCBData) == 48, "ExposureCB layout");
 
     MaterialCBData BuildMaterialConstants(const MaterialData* material, uint32_t textureFlags);

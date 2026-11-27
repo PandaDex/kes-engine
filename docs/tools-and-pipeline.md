@@ -194,11 +194,13 @@ The KES Editor is the one editor for every asset type it can edit. Each open ass
 | Map | `.fmap` (always the first tab) | File > New > Map |
 | Shader Graph | `.slangnodes`, `.mat` | File > New > Shader Graph |
 | Model | `.kmodel`: sockets, colliders, child models, material slots, clip preview | |
-| Animation Graph | `.ag`, previewed on the model the graph names | File > New > Animation Graph |
+| Animation Graph | `.ag` blend trees with state machines, previewed on the model the graph names | File > New > Animation Graph |
 | Input Map | `.imap` | File > New > Input Map |
 | Particle System | `.kfx`: emitter stacks, renderers (incl. lights), value graphs, live preview ([Particles](particles.md)) | File > New > Particle System |
 | Localization | the project's `.po` files (opening any `.po` opens it) | Window > Localization |
 | UI Preview | `.rml`, read-only: right-click > Preview in the Asset Browser (double-click still opens the text editor) | |
+
+In the Animation Graph tab, double-click a State Machine node to edit its states: right-click to add a state, Shift+drag from one state to another (or right-click > Make Transition) to add a transition, and double-click a state to edit its graph. The bar above the canvas leads back up (also Graph > Up One Level, Alt+Up). The inspector edits the selected state or transition (blend time, exit time, conditions, order). While the preview plays, the active state is outlined and each state shows its blend weight. Copying a State Machine node copies only the node; the pasted one starts with a single state.
 
 The UI Preview renders the document with RmlUi like the game: fonts and `DensityScale` from the project's `config/DefaultUi.ini`, `/engine/...` paths from the engine's assets, `#Key` text from the chosen `.po`. It reloads when the document, any style sheet, template or image it loads, the config or the `.po` changes. Pick a game resolution (scaled to fit) or Fit; F5 reloads. RmlUi warnings and errors go to the Problems dock. `onclick` actions only show their name in the status bar, and data models are not bound (the game registers them in code), so `data-*` bindings stay empty.
 

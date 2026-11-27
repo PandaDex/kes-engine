@@ -8,47 +8,15 @@
 //
 //   set 0  b0 SceneCB, b1 ModelCB, b2 MaterialCB, t8 clustered local lights, t9 cluster grid
 //   set 1  t0-t4 material textures (base, normal, metallicRoughness, occlusion, emissive)
-//   set 2  t5 environment cube, t6 sun cascades, t7 local shadow atlas, s5 linear clamp, s6 shadow compare
+//   set 2  t5 environment cube, t6 sun cascades, t7 local shadow atlas, s5 linear clamp, s6 shadow compare,
+//          t10 screen-space lighting (r = AO, g = sun contact shadow), t11 screen-space reflections
 //
 // Matrices are row-major and multiplied as mul(vector, matrix). Lighting is in
 // linear HDR; the tonemap pass (blit.slang) maps it to the display.
 
 #pragma once
 
-static const int kMaxDirectionalLights = 4;
-static const int kMaxCascades = 4;
-static const int kMaxShadowTiles = 128;
-static const float kPi = 3.14159265;
-
-struct GPULight
-{
-    float4 position;   // xyz, w = range
-    float4 color;      // rgb = radiance
-    float4 direction;  // xyz = direction the light travels, w = spot outer cos
-    float4 params;     // x = type (0 dir, 1 point, 2 spot), y = spot inner cos, z = shadow (dir: 1 = cascades, local: first slice, -1 none)
-};
-
-[[vk::binding(0, 0)]]
-cbuffer SceneCB : register(b0)
-{
-    row_major float4x4 uViewProj;
-    float4 uCameraPosition;
-    float4 uCameraForward;
-    float4 uAmbientSH[9];          // irradiance / pi
-    float4 uEnvironmentParams;     // x = specular mip count, y = intensity, z = time in seconds
-    float4 uLightCounts;           // x = directional light count
-    GPULight uLights[kMaxDirectionalLights];
-    float4 uFogColor;
-    float4 uFogParams;             // x = start, y = end, z = enabled, w = max density
-    row_major float4x4 uCascadeViewProj[kMaxCascades];
-    float4 uCascadeSplits;
-    float4 uCascadeTexelSize;
-    float4 uShadowParams;          // x = cascade count, y = 1 / cascade res, z = 1 / atlas size, w = enabled
-    row_major float4x4 uLocalShadowViewProj[kMaxShadowTiles];
-    float4 uLocalShadowRects[kMaxShadowTiles]; // atlas uv: xy = scale, zw = offset
-    float4 uClusterParams;         // xyz = cluster grid size, w = cluster light count
-    float4 uClusterDepth;          // x = near, y = slices / log(far / near)
-};
+#include "kes_scene.slang"
 
 [[vk::binding(1, 0)]]
 cbuffer ModelCB : register(b1)
@@ -69,6 +37,7 @@ cbuffer MaterialCB : register(b2)
 };
 
 static const uint kMaterialFlagLit = 1u;
+static const uint kMaterialFlagTransparent = 2u;
 static const uint kMaterialFlagDoubleSided = 4u;
 static const uint kMaterialFlagHasBase = 8u;
 static const uint kMaterialFlagHasNormal = 16u;
@@ -149,6 +118,25 @@ float KesLightAttenuation(GPULight light, float3 worldPos, out float3 l)
 [[vk::binding(2, 2)]] Texture2DArray<float> uLocalShadowMap : register(t7);
 [[vk::binding(3, 2)]] SamplerState uLinearClampSampler : register(s5);
 [[vk::binding(4, 2)]] SamplerComparisonState uShadowSampler : register(s6);
+[[vk::binding(5, 2)]] Texture2D<float4> uScreenLighting : register(t10);
+[[vk::binding(6, 2)]] Texture2D<float4> uScreenReflections : register(t11);
+
+// Screen-space reflection of the opaque surface at this pixel: rgb radiance, a = weight.
+float4 KesScreenReflection(float3 worldPos)
+{
+    if (!KesScreenReflectionsEnabled() || KesMaterialHas(kMaterialFlagTransparent))
+        return float4(0.0, 0.0, 0.0, 0.0);
+    return uScreenReflections.SampleLevel(uLinearClampSampler, KesScreenUV(worldPos), 0.0);
+}
+
+// AO (r) and the sun's contact shadow (g) of the opaque surface at this pixel.
+// Transparent surfaces aren't in the depth prepass and get none.
+float2 KesScreenLighting(float3 worldPos)
+{
+    if ((!KesScreenAOEnabled() && !KesContactShadowsEnabled()) || KesMaterialHas(kMaterialFlagTransparent))
+        return float2(1.0, 1.0);
+    return uScreenLighting.SampleLevel(uLinearClampSampler, KesScreenUV(worldPos), 0.0).rg;
+}
 
 struct MeshVertexInput
 {
@@ -483,10 +471,17 @@ float4 KesShadeMaterial(SurfaceInput s, KesSurface m)
     float3 f0 = lerp(float3(0.04, 0.04, 0.04), m.baseColor, metallic);
     float3 diffuseColor = m.baseColor * (1.0 - metallic);
 
+    float2 screenLighting = KesScreenLighting(s.worldPosition);
+    occlusion *= screenLighting.x;
+    int contactLight = int(uContactShadowParams.z);
+
     float3 direct = float3(0.0, 0.0, 0.0);
     int lightCount = int(uLightCounts.x);
     for (int i = 0; i < lightCount; i++)
-        direct += KesDirectLight(uLights[i], s.worldPosition, geometricNormal, n, v, NoV, a, f0, diffuseColor);
+    {
+        float3 light = KesDirectLight(uLights[i], s.worldPosition, geometricNormal, n, v, NoV, a, f0, diffuseColor);
+        direct += i == contactLight ? light * screenLighting.y : light;
+    }
     if (uClusterParams.w > 0.5)
     {
         uint header = KesClusterHeader(s.worldPosition);
@@ -498,9 +493,10 @@ float4 KesShadeMaterial(SurfaceInput s, KesSurface m)
     // Image-based ambient: SH irradiance for diffuse, the prefiltered sky cube for reflections.
     float3 r = reflect(-v, n);
     float mip = roughness * (uEnvironmentParams.x - 1.0);
-    float3 prefiltered = uEnvironmentMap.SampleLevel(uLinearClampSampler, r, mip).rgb;
-    float3 ambient = (diffuseColor * KesAmbientIrradiance(n) + prefiltered * KesEnvironmentBRDF(f0, roughness, NoV)) *
-                     (occlusion * uEnvironmentParams.y);
+    float3 prefiltered = uEnvironmentMap.SampleLevel(uLinearClampSampler, r, mip).rgb * (occlusion * uEnvironmentParams.y);
+    float4 reflection = KesScreenReflection(s.worldPosition);
+    float3 specular = lerp(prefiltered, reflection.rgb, reflection.a) * KesEnvironmentBRDF(f0, roughness, NoV);
+    float3 ambient = diffuseColor * KesAmbientIrradiance(n) * (occlusion * uEnvironmentParams.y) + specular;
 
     float3 color = direct + ambient + m.emissive;
     return float4(KesApplyFog(color, s.worldPosition), m.alpha);

@@ -39,6 +39,21 @@ bool PostProcessVolumeEntity::ApplyProperty(const std::string& name, const std::
         { "BloomRadius", &s.bloomRadius, PostProcessOverride_BloomRadius, 0.0f, 4.0f },
         { "VignetteIntensity", &s.vignetteIntensity, PostProcessOverride_VignetteIntensity, 0.0f, 1.0f },
         { "VignetteSmoothness", &s.vignetteSmoothness, PostProcessOverride_VignetteSmoothness, 0.0f, 1.0f },
+        { "Temperature", &s.temperature, PostProcessOverride_Temperature, -1.0f, 1.0f },
+        { "Tint", &s.tint, PostProcessOverride_Tint, -1.0f, 1.0f },
+        { "Saturation", &s.saturation, PostProcessOverride_Saturation, 0.0f, 4.0f },
+        { "Contrast", &s.contrast, PostProcessOverride_Contrast, 0.0f, 4.0f },
+        { "Sharpen", &s.sharpen, PostProcessOverride_Sharpen, 0.0f, 1.0f },
+        { "AmbientOcclusionIntensity", &s.ambientOcclusionIntensity, PostProcessOverride_AmbientOcclusionIntensity, 0.0f, 8.0f },
+        { "AmbientOcclusionRadius", &s.ambientOcclusionRadius, PostProcessOverride_AmbientOcclusionRadius, 0.01f, 10.0f },
+        { "ContactShadowLength", &s.contactShadowLength, PostProcessOverride_ContactShadowLength, 0.0f, 5.0f },
+        { "ReflectionIntensity", &s.reflectionIntensity, PostProcessOverride_ReflectionIntensity, 0.0f, 1.0f },
+        { "ReflectionMaxRoughness", &s.reflectionMaxRoughness, PostProcessOverride_ReflectionMaxRoughness, 0.0f, 1.0f },
+        { "ReflectionMaxDistance", &s.reflectionMaxDistance, PostProcessOverride_ReflectionMaxDistance, 1.0f, 200.0f },
+        { "DepthOfFieldFocusDistance", &s.depthOfFieldFocusDistance, PostProcessOverride_DepthOfFieldFocusDistance, 0.0f, 10000.0f },
+        { "DepthOfFieldFocusRange", &s.depthOfFieldFocusRange, PostProcessOverride_DepthOfFieldFocusRange, 0.01f, 10000.0f },
+        { "DepthOfFieldMaxBlur", &s.depthOfFieldMaxBlur, PostProcessOverride_DepthOfFieldMaxBlur, 0.0f, 5.0f },
+        { "MotionBlurIntensity", &s.motionBlurIntensity, PostProcessOverride_MotionBlurIntensity, 0.0f, 2.0f },
     };
     for (const FloatField& field : floats)
     {
@@ -60,15 +75,40 @@ bool PostProcessVolumeEntity::ApplyProperty(const std::string& name, const std::
         layer.overrides |= PostProcessOverride_AutoExposure;
         return true;
     }
-    if (name == "VignetteColor")
+    struct VectorField
+    {
+        const char* name;
+        float* value;
+        uint32_t bit;
+    };
+    const VectorField vectors[] = {
+        { "VignetteColor", s.vignetteColor, PostProcessOverride_VignetteColor },
+        { "ColorFilter", s.colorFilter, PostProcessOverride_ColorFilter },
+        { "Lift", s.lift, PostProcessOverride_Lift },
+        { "Gamma", s.gamma, PostProcessOverride_Gamma },
+        { "Gain", s.gain, PostProcessOverride_Gain },
+    };
+    for (const VectorField& field : vectors)
+    {
+        if (name == field.name)
+        {
+            if (empty)
+                return true;
+            const Vector3 v = entityprops::ParseVector3(value, { field.value[0], field.value[1], field.value[2] });
+            field.value[0] = v.x;
+            field.value[1] = v.y;
+            field.value[2] = v.z;
+            layer.overrides |= field.bit;
+            return true;
+        }
+    }
+    if (name == "Tonemapper")
     {
         if (empty)
             return true;
-        const Vector3 color = entityprops::ParseVector3(value, { s.vignetteColor[0], s.vignetteColor[1], s.vignetteColor[2] });
-        s.vignetteColor[0] = color.x;
-        s.vignetteColor[1] = color.y;
-        s.vignetteColor[2] = color.z;
-        layer.overrides |= PostProcessOverride_VignetteColor;
+        const int index = static_cast<int>(entityprops::ParseFloat(value, static_cast<float>(s.tonemapper)));
+        s.tonemapper = static_cast<Tonemapper>(std::clamp(index, 0, static_cast<int>(Tonemapper::Count) - 1));
+        layer.overrides |= PostProcessOverride_Tonemapper;
         return true;
     }
     if (name == "Priority")
