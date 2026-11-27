@@ -53,6 +53,7 @@ namespace kes::vk
         VkDeviceMemory indexMemory = VK_NULL_HANDLE;
         uint32_t indexCount = 0;
         std::vector<MeshSection> sections; // never empty once uploaded
+        std::vector<MeshLod> lods; // sections per LOD, after the base indices in the same buffers
         Vector3 boundsCenter = {}; // local-space bounding sphere
         float boundsRadius = 0.0f;
     };
@@ -189,6 +190,7 @@ namespace kes::vk
         GPUMesh* mesh = nullptr;
         uint32_t firstIndex = 0; // one mesh section
         uint32_t indexCount = 0;
+        uint32_t lod = 0;
         Vector3 boundsCenter = {}; // static objects, world space
         float boundsRadius = 0.0f;
     };

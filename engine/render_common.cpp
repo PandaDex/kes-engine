@@ -178,6 +178,28 @@ namespace render
         return object.material;
     }
 
+    float ProjectedScreenSize(const Vector3& center, float radius, const Vector3& cameraPosition, float fovY)
+    {
+        const float distance = Vector3Length(center - cameraPosition);
+        if (distance <= radius)
+            return 1.0f;
+        return radius / (distance * std::tan(fovY * 0.5f));
+    }
+
+    uint32_t SelectLod(const std::vector<MeshLod>& lods, float screenSize, const SceneObject& object, const GraphicsOptions& options)
+    {
+        if (lods.empty())
+            return 0;
+        const int forced = object.forcedLod >= 0 ? object.forcedLod : options.forcedLod;
+        if (forced >= 0)
+            return std::min(static_cast<uint32_t>(forced), static_cast<uint32_t>(lods.size()));
+        const float size = screenSize * std::max(options.lodBias, 0.01f);
+        uint32_t lod = 0;
+        while (lod < lods.size() && size < lods[lod].screenSize)
+            ++lod;
+        return lod;
+    }
+
     Matrix4 SceneObjectMatrix(const SceneObject& object, Vector3& outScale)
     {
         if (!object.useWorldMatrix)

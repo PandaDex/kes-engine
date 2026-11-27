@@ -36,12 +36,29 @@ struct KModelPrimitive
     int32_t materialIndex = -1;
 };
 
+// A lower detail version of a mesh: its own triangles over the mesh's vertices,
+// one primitive per primitive of the base mesh (same order and slots).
+struct KModelMeshLod
+{
+    std::vector<uint32_t> indices;
+    std::vector<KModelPrimitive> primitives;
+};
+
 struct KModelMesh
 {
     std::string name;
     std::vector<KModelVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<KModelPrimitive> primitives;
+    std::vector<KModelMeshLod> lods; // empty, or one per KModelData::lods
+};
+
+// LOD n (1-based) is drawn once the model's bounding sphere covers less than
+// screenSize of the screen height. triangleRatio is the generation target (of LOD 0).
+struct KModelLodLevel
+{
+    float screenSize = 0.5f;
+    float triangleRatio = 0.5f;
 };
 
 // A material slot. Primitives pick one by index; an entity can override it by name ("Material.<name>").
@@ -130,6 +147,8 @@ struct KModelData
     std::vector<KModelSocket> sockets;
     std::vector<KModelCollider> colliders;
     std::vector<KModelChild> children;
+    std::vector<KModelLodLevel> lods; // LOD 1..N, screen sizes decreasing
+    bool autoLods = false; // the mesh LODs are generated from the levels (and again on re-import)
 };
 
 bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outError = nullptr);
@@ -140,8 +159,22 @@ bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::st
 // Re-import keeps hand-made sockets, colliders, children and the default material: copies them
 // from the .kmodel at existingPath (if any), remapping bones by name. Returns how many were kept.
 // Slot materials are kept by slot name. A primitive the new source gives no material keeps the slot
-// it had (matched by mesh name and primitive order).
+// it had (matched by mesh name and primitive order). LOD screen sizes are kept when the level count
+// matches; autoLods levels are copied when the new model has none (mesh LODs are not regenerated).
 size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model);
 const KModelSocket* FindKModelSocket(const KModelData& model, const char* name);
 int32_t FindKModelMaterialSlot(const KModelData& model, const char* name); // -1 if missing
+// Appends a mesh's LOD triangles (offset by baseVertex) to lodIndices and their sections to lods,
+// resized to the model's level count. lodIndexOffset is where lodIndices start in the drawn index
+// buffer; a mesh without LODs adds its LOD 0 sections (at baseIndex) to every level.
+void AppendKModelMeshLods(const KModelData& model, const KModelMesh& mesh, uint32_t baseVertex, uint32_t baseIndex,
+    uint32_t lodIndexOffset, std::vector<uint32_t>& lodIndices, std::vector<MeshLod>& lods);
+// Simplifies every mesh to each level's triangleRatio (meshoptimizer). Replaces existing mesh LODs.
+bool GenerateKModelLods(KModelData& model, std::string* outError = nullptr);
+// Levels with the usual halving: ratio and screen size 1/2, 1/4, ...
+void SetDefaultKModelLodLevels(KModelData& model, uint32_t count);
+// Hand-made LODs from the source file: meshes named "<base>_LOD<n>" (n >= 1) become LODs of the mesh
+// "<base>" (or "<base>_LOD0") and are removed. Their vertices are appended to the base mesh, so they
+// must be in the same space. Sets autoLods to false. Returns how many meshes were merged.
+uint32_t ExtractKModelSourceLods(KModelData& model);
 void ConvertMeshDataToKModelMesh(const MeshData& mesh, KModelMesh& outMesh, const char* name = nullptr);

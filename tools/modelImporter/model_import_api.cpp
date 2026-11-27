@@ -17,7 +17,7 @@ namespace
         return value;
     }
 
-    bool ImportObjToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error)
+    bool ImportObjToKModel(const std::string& inputPath, const std::string& outputPath, std::string& error, const ModelImportOptions& options)
     {
         MeshData mesh = {};
         std::vector<std::string> materialNames;
@@ -41,9 +41,36 @@ namespace
         root.meshIndex = 0;
         model.nodes.push_back(root);
 
-        CarryOverKModelAttachments(outputPath.c_str(), model);
-        return SaveKModelFile(outputPath.c_str(), model, &error);
+        return FinishAndSaveKModel(model, outputPath, options, error);
     }
+}
+
+bool FinishAndSaveKModel(KModelData& model, const std::string& outputPath, const ModelImportOptions& options, std::string& error)
+{
+    const bool sourceLods = ExtractKModelSourceLods(model) > 0;
+    CarryOverKModelAttachments(outputPath.c_str(), model);
+    if (!sourceLods && options.autoLodCount >= 0)
+    {
+        const uint32_t count = (uint32_t)options.autoLodCount;
+        if (count == 0)
+            model.lods.clear();
+        else if (!model.autoLods || model.lods.size() != count)
+            SetDefaultKModelLodLevels(model, count);
+        model.autoLods = count > 0;
+    }
+    if (model.autoLods)
+    {
+        if (model.lods.empty())
+            model.autoLods = false;
+        else if (!GenerateKModelLods(model, &error))
+            return false;
+    }
+    if (model.lods.empty())
+    {
+        for (KModelMesh& mesh : model.meshes)
+            mesh.lods.clear();
+    }
+    return SaveKModelFile(outputPath.c_str(), model, &error);
 }
 
 bool CanImportModelSource(const std::string& path)
@@ -68,7 +95,7 @@ bool ImportModelToKModel(const std::string& inputPath, const std::string& output
             error = "OBJ files have no animations";
             return false;
         }
-        return ImportObjToKModel(inputPath, outputPath, error);
+        return ImportObjToKModel(inputPath, outputPath, error, options);
     }
     if (extension == ".gltf" || extension == ".glb")
         return ImportGltfToKModel(inputPath, outputPath, error, options);

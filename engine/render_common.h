@@ -11,6 +11,7 @@
 #include "camera.h"
 #include "engine_types.h"
 #include "material.h"
+#include "mesh.h"
 #include "render_backend.h"
 #include "particle_sim.h"
 
@@ -339,6 +340,7 @@ namespace render
             mix(item.world.m, sizeof(item.world.m));
             mix(&item.object->mesh, sizeof(item.object->mesh));
             mix(&item.object->model, sizeof(item.object->model));
+            mix(&item.lod, sizeof(item.lod));
             if (item.skinned && !item.object->skinMatrices.empty())
                 mix(item.object->skinMatrices.data(), item.object->skinMatrices.size() * sizeof(float));
             caster.state = h;
@@ -397,6 +399,16 @@ namespace render
     Matrix4 SceneObjectMatrix(const SceneObject& object, Vector3& outScale);
     // The object's material for a mesh section's slot (-1 or unassigned: the object's own material).
     MaterialHandle SectionMaterial(const SceneObject& object, int32_t materialSlot);
+
+    // How much of the screen height a world-space sphere's diameter covers (1 = all of it).
+    float ProjectedScreenSize(const Vector3& center, float radius, const Vector3& cameraPosition, float fovY);
+    // 0 = the base mesh, n = lods[n - 1]. SceneObject::forcedLod, then GraphicsOptions::forcedLod,
+    // win over the screen size (scaled by GraphicsOptions::lodBias).
+    uint32_t SelectLod(const std::vector<MeshLod>& lods, float screenSize, const SceneObject& object, const GraphicsOptions& options);
+    inline const std::vector<MeshSection>& LodSections(const std::vector<MeshSection>& base, const std::vector<MeshLod>& lods, uint32_t lod)
+    {
+        return lod == 0 || lod > lods.size() ? base : lods[lod - 1].sections;
+    }
 
     uint16_t FloatToHalf(float value);
 

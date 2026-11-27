@@ -57,6 +57,9 @@ struct GraphicsOptions
     bool screenSpaceReflections = true; // same prepass, plus a copy of the scene color each frame
     bool depthOfField = true; // off skips it whatever the scene asks for
     bool motionBlur = true; // camera motion blur; off skips it whatever the scene asks for
+    float lodBias = 1.0f; // scales the screen size models pick their LOD by; above 1 keeps detail further away
+    int forcedLod = -1; // >= 0 draws every model at that LOD (clamped to what it has)
+    // The LOD fields only change draw selection, so operator== leaves them out (no target rebuild).
 
     bool operator==(const GraphicsOptions& other) const
     {

@@ -676,8 +676,7 @@ bool ImportGltfToKModel(const std::string& inputPath, const std::string& outputP
             return false;
         }
 
-        CarryOverKModelAttachments(outputPath.c_str(), model);
-        if (!SaveKModelFile(outputPath.c_str(), model, &error))
+        if (!FinishAndSaveKModel(model, outputPath, options, error))
         {
             cgltf_free(data);
             return false;

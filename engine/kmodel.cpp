@@ -12,7 +12,7 @@
 namespace
 {
     static constexpr uint32_t kKModelMagic = 0x4C444D4Bu; // KMDL
-    static constexpr uint32_t kKModelVersion = 4u; // 2: sockets/colliders, 3: default material + children, 4: child animations
+    static constexpr uint32_t kKModelVersion = 5u; // 2: sockets/colliders, 3: default material + children, 4: child animations, 5: LODs
 
     // Vertices are read and written field by field in this order, without padding.
     static_assert(sizeof(KModelVertex) == 88 && std::is_trivially_copyable_v<KModelVertex>, "KModelVertex file layout");
@@ -396,6 +396,29 @@ bool SaveKModelFile(const char* path, const KModelData& model, std::string* outE
         }
     }
 
+    bool lodsOk = WriteValue(file, (uint8_t)(model.autoLods ? 1 : 0)) && WriteValue(file, (uint32_t)model.lods.size());
+    for (const KModelLodLevel& level : model.lods)
+        lodsOk = lodsOk && WriteValue(file, level.screenSize) && WriteValue(file, level.triangleRatio);
+    for (const KModelMesh& mesh : model.meshes)
+    {
+        lodsOk = lodsOk && WriteValue(file, (uint32_t)mesh.lods.size());
+        for (const KModelMeshLod& lod : mesh.lods)
+        {
+            lodsOk = lodsOk && WriteValue(file, (uint32_t)lod.indices.size());
+            if (lodsOk && !lod.indices.empty())
+                file.write(reinterpret_cast<const char*>(lod.indices.data()), (std::streamsize)(sizeof(uint32_t) * lod.indices.size()));
+            lodsOk = lodsOk && file.good() && WriteValue(file, (uint32_t)lod.primitives.size());
+            for (const KModelPrimitive& primitive : lod.primitives)
+                lodsOk = lodsOk && WriteValue(file, primitive.firstIndex) && WriteValue(file, primitive.indexCount) && WriteValue(file, primitive.materialIndex);
+        }
+    }
+    if (!lodsOk)
+    {
+        if (outError)
+            *outError = "Failed to write kmodel LODs";
+        return false;
+    }
+
     return true;
 }
 
@@ -409,19 +432,33 @@ namespace
         const int32_t nodeCount = (int32_t)model.nodes.size();
         const int32_t boneCount = (int32_t)model.bones.size();
 
-        for (const KModelMesh& mesh : model.meshes)
+        const auto checkGeometry = [&](const KModelMesh& mesh, const std::vector<uint32_t>& indices,
+            const std::vector<KModelPrimitive>& primitives) -> const char*
         {
-            for (uint32_t index : mesh.indices)
+            for (uint32_t index : indices)
             {
                 if (index >= mesh.vertices.size())
                     return "KModel index is out of range";
             }
-            for (const KModelPrimitive& primitive : mesh.primitives)
+            for (const KModelPrimitive& primitive : primitives)
             {
-                if ((uint64_t)primitive.firstIndex + primitive.indexCount > mesh.indices.size())
+                if ((uint64_t)primitive.firstIndex + primitive.indexCount > indices.size())
                     return "KModel primitive is out of range";
                 if (primitive.materialIndex < -1 || primitive.materialIndex >= materialCount)
                     return "KModel primitive references a missing material";
+            }
+            return nullptr;
+        };
+        for (const KModelMesh& mesh : model.meshes)
+        {
+            if (const char* error = checkGeometry(mesh, mesh.indices, mesh.primitives))
+                return error;
+            if (!mesh.lods.empty() && mesh.lods.size() != model.lods.size())
+                return "KModel mesh LOD count does not match the model";
+            for (const KModelMeshLod& lod : mesh.lods)
+            {
+                if (const char* error = checkGeometry(mesh, lod.indices, lod.primitives))
+                    return error;
             }
         }
 
@@ -629,34 +666,104 @@ bool LoadKModelFile(const char* path, KModelData& outModel, std::string* outErro
             return fail("Failed to read kmodel child");
     }
 
+    if (version >= 5u)
+    {
+        outModel.autoLods = file.u8() != 0;
+        const uint32_t levelCount = file.u32();
+        if (!file.count(levelCount, 8))
+            return fail("Failed to read kmodel LOD levels");
+        outModel.lods.resize(levelCount);
+        for (KModelLodLevel& level : outModel.lods)
+        {
+            level.screenSize = file.f32();
+            level.triangleRatio = file.f32();
+        }
+        for (KModelMesh& mesh : outModel.meshes)
+        {
+            const uint32_t lodCount = file.u32();
+            if (!file.count(lodCount, 8))
+                return fail("Failed to read kmodel mesh LODs");
+            mesh.lods.resize(lodCount);
+            for (KModelMeshLod& lod : mesh.lods)
+            {
+                const uint32_t indexCount = file.u32();
+                if (!file.count(indexCount, sizeof(uint32_t)))
+                    return fail("Failed to read kmodel LOD indices");
+                lod.indices.resize(indexCount);
+                file.bytes(lod.indices.data(), indexCount * sizeof(uint32_t));
+                const uint32_t primitiveCount = file.u32();
+                if (!file.count(primitiveCount, 12))
+                    return fail("Failed to read kmodel LOD primitives");
+                lod.primitives.resize(primitiveCount);
+                for (KModelPrimitive& primitive : lod.primitives)
+                {
+                    primitive.firstIndex = file.u32();
+                    primitive.indexCount = file.u32();
+                    primitive.materialIndex = file.i32();
+                }
+            }
+        }
+        if (!file.ok())
+            return fail("Failed to read kmodel LODs");
+    }
+
     if (const char* error = FindKModelError(outModel))
         return fail(error);
     return true;
 }
 
+namespace
+{
+    void AppendPrimitiveSections(const std::vector<KModelPrimitive>& primitives, size_t indexCount, uint32_t baseIndex,
+        std::vector<MeshSection>& sections)
+    {
+        const auto add = [&](uint32_t first, uint32_t count, int32_t slot)
+        {
+            if (count == 0)
+                return;
+            MeshSection* last = sections.empty() ? nullptr : &sections.back();
+            if (last && last->materialSlot == slot && last->firstIndex + last->indexCount == first)
+                last->indexCount += count;
+            else
+                sections.push_back({ first, count, slot });
+        };
+        // Indices no primitive covers still draw, with no slot.
+        uint32_t covered = 0;
+        for (const KModelPrimitive& primitive : primitives)
+        {
+            if (primitive.firstIndex > covered)
+                add(baseIndex + covered, primitive.firstIndex - covered, -1);
+            add(baseIndex + primitive.firstIndex, primitive.indexCount, primitive.materialIndex);
+            covered = std::max(covered, primitive.firstIndex + primitive.indexCount);
+        }
+        if (covered < indexCount)
+            add(baseIndex + covered, (uint32_t)indexCount - covered, -1);
+    }
+}
+
 void AppendKModelMeshSections(const KModelMesh& mesh, uint32_t baseIndex, std::vector<MeshSection>& sections)
 {
-    const auto add = [&](uint32_t first, uint32_t count, int32_t slot)
+    AppendPrimitiveSections(mesh.primitives, mesh.indices.size(), baseIndex, sections);
+}
+
+void AppendKModelMeshLods(const KModelData& model, const KModelMesh& mesh, uint32_t baseVertex, uint32_t baseIndex,
+    uint32_t lodIndexOffset, std::vector<uint32_t>& lodIndices, std::vector<MeshLod>& lods)
+{
+    lods.resize(model.lods.size());
+    for (size_t level = 0; level < model.lods.size(); ++level)
     {
-        if (count == 0)
-            return;
-        MeshSection* last = sections.empty() ? nullptr : &sections.back();
-        if (last && last->materialSlot == slot && last->firstIndex + last->indexCount == first)
-            last->indexCount += count;
-        else
-            sections.push_back({ first, count, slot });
-    };
-    // Indices no primitive covers still draw, with no slot.
-    uint32_t covered = 0;
-    for (const KModelPrimitive& primitive : mesh.primitives)
-    {
-        if (primitive.firstIndex > covered)
-            add(baseIndex + covered, primitive.firstIndex - covered, -1);
-        add(baseIndex + primitive.firstIndex, primitive.indexCount, primitive.materialIndex);
-        covered = std::max(covered, primitive.firstIndex + primitive.indexCount);
+        lods[level].screenSize = model.lods[level].screenSize;
+        if (level >= mesh.lods.size())
+        {
+            AppendKModelMeshSections(mesh, baseIndex, lods[level].sections);
+            continue;
+        }
+        const KModelMeshLod& lod = mesh.lods[level];
+        const uint32_t first = lodIndexOffset + (uint32_t)lodIndices.size();
+        for (uint32_t index : lod.indices)
+            lodIndices.push_back(baseVertex + index);
+        AppendPrimitiveSections(lod.primitives, lod.indices.size(), first, lods[level].sections);
     }
-    if (covered < mesh.indices.size())
-        add(baseIndex + covered, (uint32_t)mesh.indices.size() - covered, -1);
 }
 
 bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::string* outError, uint32_t meshIndex)
@@ -726,6 +833,8 @@ bool BuildMeshDataFromKModel(const KModelData& model, MeshData& outMesh, std::st
             outMesh.indices.push_back(baseVertex + index);
 
         AppendKModelMeshSections(source, baseIndex, outMesh.sections);
+        if (!model.lods.empty())
+            AppendKModelMeshLods(model, source, baseVertex, baseIndex, (uint32_t)totalIndexCount, outMesh.lodIndices, outMesh.lods);
     }
 
     if (outMesh.vertices.empty() || outMesh.indices.empty())
@@ -817,6 +926,22 @@ size_t CarryOverKModelAttachments(const char* existingPath, KModelData& model)
     }
     if (model.defaultMaterial.empty())
         model.defaultMaterial = existing.defaultMaterial;
+
+    // LOD levels: hand-made LODs keep their tuned screen sizes; generated ones keep their settings
+    // (the caller regenerates the mesh LODs).
+    if (!model.lods.empty())
+    {
+        if (existing.lods.size() == model.lods.size())
+        {
+            for (size_t index = 0; index < model.lods.size(); ++index)
+                model.lods[index].screenSize = existing.lods[index].screenSize;
+        }
+    }
+    else if (existing.autoLods)
+    {
+        model.lods = existing.lods;
+        model.autoLods = true;
+    }
 
     const auto findSlot = [&](const std::string& name) { return FindKModelMaterialSlot(model, name.c_str()); };
     for (const KModelMaterial& slot : existing.materials)

@@ -35,6 +35,7 @@ struct SceneObject
     bool useWorldMatrix = false;
     float worldMatrix[16] = {};
     bool active = true;
+    int forcedLod = -1; // >= 0: always this LOD instead of picking by screen size
 };
 
 struct Light

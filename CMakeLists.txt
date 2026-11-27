@@ -71,6 +71,7 @@ include(KesPackage)     # "package" target: staged folder + archive / MSIXVC
 include(KesProfiler)    # KES_PROFILING: Tracy profiler zones (engine/profiler.h)
 include(KesUi)          # RmlUi + FreeType (HTML/CSS UI, engine/ui_system.h)
 include(KesPhysics)     # Box3D (collision and rigid bodies, engine/collision_world.h)
+include(KesMeshOptimizer) # meshoptimizer (LOD generation, engine/kmodel_lod.cpp)
 
 # Debug hotkeys (F1-F4 render/input toggles, F7 UI reload, F8 RmlUi inspector)
 # and the RmlUi debugger. On for development builds; the package-* presets turn

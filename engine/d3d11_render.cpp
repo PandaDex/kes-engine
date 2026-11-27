@@ -1563,8 +1563,21 @@ namespace kes::d3d11
         }
 
         GPUMesh gpu = {};
-        if (!UploadMeshBuffers(r, vertices, data->indices, gpu))
+        const bool hasLods = !data->indices.empty() && !data->lods.empty();
+        std::vector<uint32_t> lodIndices;
+        if (hasLods)
+        {
+            lodIndices.reserve(data->indices.size() + data->lodIndices.size());
+            lodIndices.insert(lodIndices.end(), data->indices.begin(), data->indices.end());
+            lodIndices.insert(lodIndices.end(), data->lodIndices.begin(), data->lodIndices.end());
+        }
+        if (!UploadMeshBuffers(r, vertices, hasLods ? lodIndices : data->indices, gpu))
             return nullptr;
+        if (hasLods)
+        {
+            gpu.indexCount = static_cast<uint32_t>(data->indices.size());
+            gpu.lods = data->lods;
+        }
         gpu.sections = data->sections;
         if (gpu.sections.empty())
             gpu.sections.push_back({ 0, gpu.indexCount, -1 });
@@ -1613,8 +1626,17 @@ namespace kes::d3d11
         }
 
         GPUMesh gpu = {};
-        if (!UploadMeshBuffers(r, vertices, source.indices, gpu))
+        std::vector<uint32_t> indices = source.indices;
+        if (!model->lods.empty() && !indices.empty())
+        {
+            std::vector<uint32_t> lodIndices;
+            AppendKModelMeshLods(*model, source, 0, 0, static_cast<uint32_t>(indices.size()), lodIndices, gpu.lods);
+            indices.insert(indices.end(), lodIndices.begin(), lodIndices.end());
+        }
+        if (!UploadMeshBuffers(r, vertices, indices, gpu))
             return nullptr;
+        if (!source.indices.empty())
+            gpu.indexCount = static_cast<uint32_t>(source.indices.size());
         AppendKModelMeshSections(source, 0, gpu.sections);
         if (gpu.sections.empty())
             gpu.sections.push_back({ 0, gpu.indexCount, -1 });
@@ -2467,10 +2489,11 @@ namespace kes::d3d11
                 const KModelData* model = assets.GetModel(obj.model);
                 item.skinned = model && !model->bones.empty() && obj.skinMatrixCount > 0;
                 // One draw item per mesh section, each with its slot's material.
-                const auto addSections = [&](GPUMesh* mesh)
+                const auto addSections = [&](GPUMesh* mesh, uint32_t lod)
                 {
                     item.mesh = mesh;
-                    for (const MeshSection& section : mesh->sections)
+                    item.lod = lod;
+                    for (const MeshSection& section : render::LodSections(mesh->sections, mesh->lods, lod))
                     {
                         item.firstIndex = section.firstIndex;
                         item.indexCount = section.indexCount;
@@ -2480,10 +2503,27 @@ namespace kes::d3d11
                 };
                 if (item.skinned)
                 {
-                    for (uint32_t meshIndex = 0; meshIndex < static_cast<uint32_t>(model->meshes.size()); ++meshIndex)
+                    // One LOD for every mesh of the model, by the largest bind-pose bounds on screen.
+                    const uint32_t meshCount = static_cast<uint32_t>(model->meshes.size());
+                    float screenSize = 0.0f;
+                    const std::vector<MeshLod>* lods = nullptr;
+                    for (uint32_t meshIndex = 0; meshIndex < meshCount && !model->lods.empty(); ++meshIndex)
+                    {
+                        GPUMesh* mesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets);
+                        if (!mesh)
+                            continue;
+                        Vector3 center;
+                        float radius = 0.0f;
+                        render::TransformSphere(item.world, worldScale, mesh->boundsCenter, mesh->boundsRadius, center, radius);
+                        screenSize = std::max(screenSize, render::ProjectedScreenSize(center, radius, cameraPosition, camera.fovY));
+                        if (!lods)
+                            lods = &mesh->lods;
+                    }
+                    const uint32_t lod = lods ? render::SelectLod(*lods, screenSize, obj, r.options) : 0;
+                    for (uint32_t meshIndex = 0; meshIndex < meshCount; ++meshIndex)
                     {
                         if (GPUMesh* mesh = GetOrUploadModelMesh(r, obj.model, meshIndex, assets))
-                            addSections(mesh);
+                            addSections(mesh, lod);
                     }
                     return;
                 }
@@ -2492,7 +2532,8 @@ namespace kes::d3d11
                     return;
                 render::TransformSphere(item.world, worldScale, mesh->boundsCenter, mesh->boundsRadius,
                     item.boundsCenter, item.boundsRadius);
-                addSections(mesh);
+                const float screenSize = render::ProjectedScreenSize(item.boundsCenter, item.boundsRadius, cameraPosition, camera.fovY);
+                addSections(mesh, render::SelectLod(mesh->lods, screenSize, obj, r.options));
             };
             for (const SceneObject& obj : sceneObj.GetObjects())
                 addObject(obj);

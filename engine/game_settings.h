@@ -113,6 +113,8 @@ public:
     bool GetDepthOfField() const { return m_depthOfField; }
     void SetMotionBlur(bool enabled) { m_motionBlur = enabled; }
     bool GetMotionBlur() const { return m_motionBlur; }
+    void SetLodBias(float bias) { m_lodBias = bias; }
+    float GetLodBias() const { return m_lodBias; }
     GraphicsOptions GetGraphicsOptions() const;
 
     // Look controls, applied live (multipliers on the player's base values,
@@ -239,6 +241,7 @@ private:
     bool m_screenSpaceReflections = true; // bScreenSpaceReflections
     bool m_depthOfField = true; // bDepthOfField
     bool m_motionBlur = true; // bMotionBlur
+    float m_lodBias = 1.0f; // LodBias
     float m_mouseSensitivity = 1.0f; // MouseSensitivity
     float m_gamepadLookSensitivity = 1.0f; // GamepadLookSensitivity
     bool m_invertLookY = false; // bInvertLookY

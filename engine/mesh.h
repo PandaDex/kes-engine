@@ -20,9 +20,19 @@ struct MeshSection
     int32_t materialSlot = -1;
 };
 
+// Sections index into indices followed by lodIndices.
+struct MeshLod
+{
+    float screenSize = 0.0f;
+    std::vector<MeshSection> sections;
+};
+
 struct MeshData
 {
     std::vector<MeshVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<MeshSection> sections; // empty = one section over every index, slot -1
+    // Only for drawing; collision and picking use indices alone.
+    std::vector<uint32_t> lodIndices;
+    std::vector<MeshLod> lods;
 };

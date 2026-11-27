@@ -233,6 +233,7 @@ GraphicsOptions GameSettings::GetGraphicsOptions() const
     options.screenSpaceReflections = m_screenSpaceReflections;
     options.depthOfField = m_depthOfField;
     options.motionBlur = m_motionBlur;
+    options.lodBias = m_lodBias;
     return options;
 }
 
@@ -403,6 +404,7 @@ void GameSettings::SetToDefaults()
     m_screenSpaceReflections = true;
     m_depthOfField = true;
     m_motionBlur = true;
+    m_lodBias = 1.0f;
 }
 
 void GameSettings::ValidateSettings()
@@ -451,6 +453,9 @@ void GameSettings::ValidateSettings()
                                                                 : 1;
     m_postAntiAliasing = static_cast<PostAntiAliasing>(std::clamp(static_cast<int>(m_postAntiAliasing), 0, static_cast<int>(PostAntiAliasing::TAA)));
     m_anisotropy = std::clamp(m_anisotropy, 1, 16);
+    if (!std::isfinite(m_lodBias))
+        m_lodBias = 1.0f;
+    m_lodBias = std::clamp(m_lodBias, 0.25f, 4.0f);
     if (!std::isfinite(m_shadowDistance))
         m_shadowDistance = 60.0f;
     m_shadowDistance = std::clamp(m_shadowDistance, 5.0f, 500.0f);
@@ -502,6 +507,7 @@ void GameSettings::ReadFromIni(const IniFile& ini)
     m_screenSpaceReflections = ini.GetBool(kSection, "bScreenSpaceReflections", m_screenSpaceReflections);
     m_depthOfField = ini.GetBool(kSection, "bDepthOfField", m_depthOfField);
     m_motionBlur = ini.GetBool(kSection, "bMotionBlur", m_motionBlur);
+    m_lodBias = ini.GetFloat(kSection, "LodBias", m_lodBias);
     m_mouseSensitivity = ini.GetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     m_gamepadLookSensitivity = ini.GetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     m_invertLookY = ini.GetBool(kSection, "bInvertLookY", m_invertLookY);
@@ -543,6 +549,7 @@ void GameSettings::WriteToIni(IniFile& ini) const
     ini.SetBool(kSection, "bScreenSpaceReflections", m_screenSpaceReflections);
     ini.SetBool(kSection, "bDepthOfField", m_depthOfField);
     ini.SetBool(kSection, "bMotionBlur", m_motionBlur);
+    ini.SetFloat(kSection, "LodBias", m_lodBias);
     ini.SetFloat(kSection, "MouseSensitivity", m_mouseSensitivity);
     ini.SetFloat(kSection, "GamepadLookSensitivity", m_gamepadLookSensitivity);
     ini.SetBool(kSection, "bInvertLookY", m_invertLookY);

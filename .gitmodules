@@ -7,10 +7,6 @@
 [submodule "external/freetype"]
 	path = external/freetype
 	url = https://github.com/freetype/freetype.git
-[submodule "tools/shaderGraph"]
-	path = tools/shaderGraph
-	url = https://github.com/PandaDex/kes-shaderGraph
-	branch = master
 [submodule "tools/forgeMapEditor"]
 	path = tools/forgeMapEditor
 	url = https://github.com/PandaDex/kes-forge
@@ -21,19 +17,11 @@
 [submodule "external/box3d"]
 	path = external/box3d
 	url = https://github.com/erincatto/box3d
-[submodule "tools/inputMappingEditor"]
-	path = tools/inputMappingEditor
-	url = https://github.com/PandaDex/kes-inputMappingEditor
-	branch = master
-[submodule "tools/modelEditor"]
-	path = tools/modelEditor
-	url = https://github.com/PandaDex/kes-modelEditor
-	branch = master
-[submodule "tools/localizationEditor"]
-	path = tools/localizationEditor
-	url = https://github.com/PandaDex/kes-localizationEditor
 	branch = master
 [submodule "tools/buildLauncher"]
 	path = tools/buildLauncher
 	url = https://github.com/PandaDex/kes-buildLauncher.git
 	branch = master
+[submodule "external/meshoptimizer"]
+	path = external/meshoptimizer
+	url = https://github.com/zeux/meshoptimizer.git

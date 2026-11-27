@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -57,11 +58,21 @@ int main(int argc, char* argv[])
     ModelImportOptions modelOptions;
     modelOptions.mesh = !takeFlag("--no-mesh");
     modelOptions.animations = !takeFlag("--no-anims");
+    for (auto it = args.begin(); it != args.end(); ++it)
+    {
+        if (it->rfind("--lods=", 0) == 0)
+        {
+            modelOptions.autoLodCount = std::clamp(std::atoi(it->c_str() + 7), 0, 8);
+            args.erase(it);
+            break;
+        }
+    }
     if (args.size() < 1 || args.size() > 2)
     {
-        std::cout << "Usage: model-importer [-assetpath <content-root>] [--pcm] [--no-mesh] [--no-anims] <input> [output]\n"
+        std::cout << "Usage: model-importer [-assetpath <content-root>] [--pcm] [--no-mesh] [--no-anims] [--lods=N] <input> [output]\n"
                      "  --no-mesh   write only the .kanim clips; if <output> exists they are matched to its nodes by name\n"
-                     "  --no-anims  write only the .kmodel\n";
+                     "  --no-anims  write only the .kmodel\n"
+                     "  --lods=N    generate N LODs (0 removes them); a re-import without it keeps the existing setting\n";
         return 1;
     }
 

@@ -122,6 +122,7 @@ add_library(engine ${_kes_engine_type}
     "mesh_file.cpp"
     "kmodel.h"
     "kmodel.cpp"
+    "kmodel_lod.cpp"
     "material.h"
     "material_file.h"
     "material_file.cpp"
@@ -191,6 +192,9 @@ target_link_libraries(engine PUBLIC RmlUi::RmlUi)
 
 # Physics (cmake/KesPhysics.cmake)
 target_link_libraries(engine PRIVATE box3d::box3d)
+
+# LOD generation (cmake/KesMeshOptimizer.cmake)
+target_link_libraries(engine PRIVATE meshoptimizer)
 
 # Crash reporting (KES_CRASH_REPORTER, cmake/KesCrash.cmake)
 kes_target_crash_reporter(engine)
