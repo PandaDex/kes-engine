@@ -27,9 +27,9 @@ struct SceneState
 enum class ShadowQuality
 {
     Off = 0,
-    Low = 1, // 2 sun cascades at 1024, 6 local shadow slices at 512
-    Medium = 2, // 3 cascades at 2048, 8 local slices at 512
-    High = 3, // 4 cascades at 2048, 12 local slices at 1024
+    Low = 1, // 2 sun cascades at 1024, 2048 local shadow atlas, tiles up to 512
+    Medium = 2, // 3 cascades at 2048, 4096 atlas, tiles up to 512
+    High = 3, // 4 cascades at 2048, 4096 atlas, tiles up to 1024
 };
 
 // Post-process anti-aliasing on the tonemapped image, independent of MSAA

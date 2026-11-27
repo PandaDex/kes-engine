@@ -61,7 +61,7 @@ Sprite and ribbon batches are drawn in this order: `SortOrder` (higher on top), 
 
 ## Lights and the clustered light list
 
-The renderer divides the view into a 16 × 9 × 24 grid of clusters (exponential depth slices) and bins every point light into the clusters its sphere touches (`render::BuildClusters` in `render_common.cpp`, on the CPU). Shaders look up their pixel's cluster and loop over its lights after the regular lights (`KesShadeMaterial` in `kes_common.slang`), so every material, including custom material shaders, is lit by particles. Limits: 1024 lights per frame, 255 per cluster, 96K cluster entries. Cluster lights don't cast shadows.
+The renderer divides the view into a 16 × 9 × 24 grid of clusters (exponential depth slices) and bins every point light into the clusters its sphere touches (`render::BuildClusters` in `render_common.cpp`, on the CPU). Shaders look up their pixel's cluster and loop over its lights after the regular lights (`KesShadeMaterial` in `kes_common.slang`), so every material, including custom material shaders, is lit by particles. Scene point and spot lights share the clusters and come first. Limits: 4096 local lights per frame, 255 per cluster, 256K cluster entries. Particle lights don't cast shadows.
 
 Game code can add lights to the same list for one frame:
 

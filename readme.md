@@ -8,7 +8,7 @@ Documentation is located in `docs` directory.
 
 ### Implemented in any way:
 
-- Lighting (per-pixel PBR, up to 32 lights, shadows, sky ambient; see `docs/rendering.md`)
+- Lighting (per-pixel PBR, clustered point/spot lights (up to 4096), shadows, sky ambient; see `docs/rendering.md`)
 - Audio System
 - Entity System
 - Material System

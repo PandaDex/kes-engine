@@ -6,18 +6,18 @@
 // both D3D (register) and Vulkan (vk::binding) so the same source compiles to
 // DXBC and SPIR-V without per-backend edits.
 //
-//   set 0  b0 SceneCB, b1 ModelCB, b2 MaterialCB, t8 cluster lights, t9 cluster grid
+//   set 0  b0 SceneCB, b1 ModelCB, b2 MaterialCB, t8 clustered local lights, t9 cluster grid
 //   set 1  t0-t4 material textures (base, normal, metallicRoughness, occlusion, emissive)
-//   set 2  t5 environment cube, t6 sun cascades, t7 local shadows, s5 linear clamp, s6 shadow compare
+//   set 2  t5 environment cube, t6 sun cascades, t7 local shadow atlas, s5 linear clamp, s6 shadow compare
 //
 // Matrices are row-major and multiplied as mul(vector, matrix). Lighting is in
 // linear HDR; the tonemap pass (blit.slang) maps it to the display.
 
 #pragma once
 
-static const int kMaxLights = 32;
+static const int kMaxDirectionalLights = 4;
 static const int kMaxCascades = 4;
-static const int kMaxLocalShadowSlices = 16;
+static const int kMaxShadowTiles = 128;
 static const float kPi = 3.14159265;
 
 struct GPULight
@@ -36,15 +36,16 @@ cbuffer SceneCB : register(b0)
     float4 uCameraForward;
     float4 uAmbientSH[9];          // irradiance / pi
     float4 uEnvironmentParams;     // x = specular mip count, y = intensity, z = time in seconds
-    float4 uLightCounts;           // x = light count
-    GPULight uLights[kMaxLights];
+    float4 uLightCounts;           // x = directional light count
+    GPULight uLights[kMaxDirectionalLights];
     float4 uFogColor;
     float4 uFogParams;             // x = start, y = end, z = enabled, w = max density
     row_major float4x4 uCascadeViewProj[kMaxCascades];
     float4 uCascadeSplits;
     float4 uCascadeTexelSize;
-    float4 uShadowParams;          // x = cascade count, y = 1 / cascade res, z = 1 / local res, w = enabled
-    row_major float4x4 uLocalShadowViewProj[kMaxLocalShadowSlices];
+    float4 uShadowParams;          // x = cascade count, y = 1 / cascade res, z = 1 / atlas size, w = enabled
+    row_major float4x4 uLocalShadowViewProj[kMaxShadowTiles];
+    float4 uLocalShadowRects[kMaxShadowTiles]; // atlas uv: xy = scale, zw = offset
     float4 uClusterParams;         // xyz = cluster grid size, w = cluster light count
     float4 uClusterDepth;          // x = near, y = slices / log(far / near)
 };
@@ -85,14 +86,9 @@ bool KesMaterialHas(uint flag)
     return (uMaterialFlags.x & flag) != 0u;
 }
 
-// Clustered shadowless point lights (render_common.h BuildClusters). The grid
+// Clustered point and spot lights (render_common.cpp BuildClusters). The grid
 // starts with a header per cluster: (first index << 8) | count.
-struct KesClusterLight
-{
-    float4 positionRadius;
-    float4 color;
-};
-[[vk::binding(3, 0)]] StructuredBuffer<KesClusterLight> uClusterLights : register(t8);
+[[vk::binding(3, 0)]] StructuredBuffer<GPULight> uClusterLights : register(t8);
 [[vk::binding(4, 0)]] StructuredBuffer<uint> uClusterGrid : register(t9);
 
 uint KesClusterHeader(float3 worldPos)
@@ -119,6 +115,25 @@ float KesPointAttenuation(float dist, float range)
     float x = dist / range;
     float window = saturate(1.0 - x * x * x * x);
     return window * window / (1.0 + 4.0 * x * x);
+}
+
+// Direction to the light and its falloff (range window, spot cone) at worldPos.
+float KesLightAttenuation(GPULight light, float3 worldPos, out float3 l)
+{
+    if (light.params.x < 0.5)
+    {
+        l = -normalize(light.direction.xyz);
+        return 1.0;
+    }
+    float3 toLight = light.position.xyz - worldPos;
+    float dist = length(toLight);
+    l = toLight / max(dist, 0.0001);
+    if (dist >= light.position.w)
+        return 0.0;
+    float attenuation = KesPointAttenuation(dist, light.position.w);
+    if (light.params.x > 1.5)
+        attenuation *= smoothstep(light.direction.w, light.params.y, dot(-l, normalize(light.direction.xyz)));
+    return attenuation;
 }
 
 // Material textures: combined texture + sampler (set 1 on Vulkan, t0-t4/s0-s4 on D3D).
@@ -249,6 +264,21 @@ float KesSampleShadowPCF(Texture2DArray<float> map, float2 uv, float slice, floa
     return sum / 9.0;
 }
 
+// PCF inside one atlas tile: taps are clamped half a texel in from its edges.
+float KesSampleShadowTile(float2 uv, float4 rect, float depth, float texel)
+{
+    float2 lo = rect.zw + texel * 0.5;
+    float2 hi = rect.zw + rect.xy - texel * 0.5;
+    float2 center = uv * rect.xy + rect.zw;
+    float sum = 0.0;
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+            sum += uLocalShadowMap.SampleCmpLevelZero(uShadowSampler, float3(clamp(center + float2(x, y) * texel, lo, hi), 0.0), depth);
+    }
+    return sum / 9.0;
+}
+
 float2 KesShadowUV(float2 ndc)
 {
     return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
@@ -280,7 +310,7 @@ float KesCascadeShadow(float3 worldPos, float3 geometricNormal)
 
 float KesLocalShadow(GPULight light, float3 worldPos, float3 geometricNormal)
 {
-    float slice = light.params.z;
+    float tile = light.params.z;
     float3 fromLight = worldPos - light.position.xyz;
     if (light.params.x < 1.5)
     {
@@ -290,11 +320,13 @@ float KesLocalShadow(GPULight light, float3 worldPos, float3 geometricNormal)
         float face = a.x >= a.y && a.x >= a.z ? (fromLight.x >= 0.0 ? 0.0 : 1.0)
                    : a.y >= a.z ? (fromLight.y >= 0.0 ? 2.0 : 3.0)
                    : (fromLight.z >= 0.0 ? 4.0 : 5.0);
-        slice += face;
+        tile += face;
     }
-    int index = int(slice);
+    int index = int(tile);
+    float4 rect = uLocalShadowRects[index];
+    float tileTexel = uShadowParams.z / rect.x; // 1 / tile resolution
     float distanceToLight = length(fromLight);
-    float3 p = worldPos + geometricNormal * (distanceToLight * uShadowParams.z * 2.0);
+    float3 p = worldPos + geometricNormal * (distanceToLight * tileTexel * 2.0);
     float4 clip = mul(float4(p, 1.0), uLocalShadowViewProj[index]);
     if (clip.w <= 0.0001)
         return 1.0;
@@ -302,7 +334,7 @@ float KesLocalShadow(GPULight light, float3 worldPos, float3 geometricNormal)
     float2 uv = KesShadowUV(ndc.xy);
     if (any(uv < 0.0) || any(uv > 1.0) || ndc.z > 1.0)
         return 1.0;
-    return KesSampleShadowPCF(uLocalShadowMap, uv, slice, ndc.z - 0.00005, uShadowParams.z);
+    return KesSampleShadowTile(uv, rect, ndc.z - 0.00005, uShadowParams.z);
 }
 
 // Normal mapping without vertex tangents: cotangent frame from screen-space
@@ -402,6 +434,33 @@ KesSurface KesMaterialSurface(SurfaceInput s)
     return m;
 }
 
+// One light's GGX specular + Lambert diffuse, with its shadow.
+float3 KesDirectLight(GPULight light, float3 worldPos, float3 geometricNormal, float3 n, float3 v, float NoV, float a,
+                      float3 f0, float3 diffuseColor)
+{
+    float3 l;
+    float attenuation = KesLightAttenuation(light, worldPos, l);
+    float NoL = dot(n, l);
+    if (NoL <= 0.0 || attenuation <= 0.0)
+        return float3(0.0, 0.0, 0.0);
+
+    if (uShadowParams.w > 0.5 && light.params.z >= 0.0)
+    {
+        if (light.params.x < 0.5)
+            attenuation *= KesCascadeShadow(worldPos, geometricNormal);
+        else
+            attenuation *= KesLocalShadow(light, worldPos, geometricNormal);
+    }
+
+    float3 h = normalize(v + l);
+    float NoH = saturate(dot(n, h));
+    float VoH = saturate(dot(v, h));
+    float3 f = KesFresnelSchlick(f0, VoH);
+    float3 specular = KesDistributionGGX(NoH, a) * KesVisibilitySmithGGX(NoV, NoL, a) * f;
+    float3 diffuse = (1.0 - f) * diffuseColor / kPi;
+    return (diffuse + specular) * light.color.rgb * (NoL * attenuation);
+}
+
 // Direct lights with shadows, image-based ambient, emissive and fog. Returns
 // linear HDR color with alpha. Discards below the alpha cutoff.
 float4 KesShadeMaterial(SurfaceInput s, KesSurface m)
@@ -427,70 +486,13 @@ float4 KesShadeMaterial(SurfaceInput s, KesSurface m)
     float3 direct = float3(0.0, 0.0, 0.0);
     int lightCount = int(uLightCounts.x);
     for (int i = 0; i < lightCount; i++)
-    {
-        GPULight light = uLights[i];
-        float3 l;
-        float attenuation = 1.0;
-        if (light.params.x < 0.5)
-        {
-            l = -normalize(light.direction.xyz);
-        }
-        else
-        {
-            float3 toLight = light.position.xyz - s.worldPosition;
-            float dist = length(toLight);
-            l = toLight / max(dist, 0.0001);
-            attenuation = KesPointAttenuation(dist, light.position.w);
-            if (light.params.x > 1.5)
-                attenuation *= smoothstep(light.direction.w, light.params.y, dot(-l, normalize(light.direction.xyz)));
-        }
-
-        float NoL = dot(n, l);
-        if (NoL <= 0.0 || attenuation <= 0.0)
-            continue;
-
-        float shadow = 1.0;
-        if (uShadowParams.w > 0.5 && light.params.z >= 0.0)
-        {
-            if (light.params.x < 0.5)
-                shadow = KesCascadeShadow(s.worldPosition, geometricNormal);
-            else
-                shadow = KesLocalShadow(light, s.worldPosition, geometricNormal);
-        }
-
-        float3 h = normalize(v + l);
-        float NoH = saturate(dot(n, h));
-        float VoH = saturate(dot(v, h));
-        float3 f = KesFresnelSchlick(f0, VoH);
-        float3 specular = KesDistributionGGX(NoH, a) * KesVisibilitySmithGGX(NoV, NoL, a) * f;
-        float3 diffuse = (1.0 - f) * diffuseColor / kPi;
-        direct += (diffuse + specular) * light.color.rgb * (NoL * attenuation * shadow);
-    }
-
+        direct += KesDirectLight(uLights[i], s.worldPosition, geometricNormal, n, v, NoV, a, f0, diffuseColor);
     if (uClusterParams.w > 0.5)
     {
         uint header = KesClusterHeader(s.worldPosition);
         uint count = header & 0xFFu;
         for (uint ci = 0; ci < count; ci++)
-        {
-            KesClusterLight light = uClusterLights[KesClusterLightIndex(header, ci)];
-            float3 toLight = light.positionRadius.xyz - s.worldPosition;
-            float dist = length(toLight);
-            if (dist >= light.positionRadius.w)
-                continue;
-            float3 l = toLight / max(dist, 0.0001);
-            float NoL = dot(n, l);
-            if (NoL <= 0.0)
-                continue;
-            float attenuation = KesPointAttenuation(dist, light.positionRadius.w);
-            float3 h = normalize(v + l);
-            float NoH = saturate(dot(n, h));
-            float VoH = saturate(dot(v, h));
-            float3 f = KesFresnelSchlick(f0, VoH);
-            float3 specular = KesDistributionGGX(NoH, a) * KesVisibilitySmithGGX(NoV, NoL, a) * f;
-            float3 diffuse = (1.0 - f) * diffuseColor / kPi;
-            direct += (diffuse + specular) * light.color.rgb * (NoL * attenuation);
-        }
+            direct += KesDirectLight(uClusterLights[KesClusterLightIndex(header, ci)], s.worldPosition, geometricNormal, n, v, NoV, a, f0, diffuseColor);
     }
 
     // Image-based ambient: SH irradiance for diffuse, the prefiltered sky cube for reflections.
@@ -513,48 +515,31 @@ float4 KesShadeSurface(SurfaceInput s)
 // Diffuse light arriving at a particle (wrapped Lambert so the side facing
 // away from a light still picks some of it up, as with thin smoke), without
 // shadows except the sun's cascades. Multiply by the particle's albedo.
+float3 KesParticleLight(GPULight light, float3 worldPos, float3 n)
+{
+    float3 l;
+    float attenuation = KesLightAttenuation(light, worldPos, l);
+    if (attenuation <= 0.0)
+        return float3(0.0, 0.0, 0.0);
+    if (light.params.x < 0.5 && uShadowParams.w > 0.5 && light.params.z >= 0.0)
+        attenuation *= KesCascadeShadow(worldPos, n);
+    float wrap = saturate((dot(n, l) + 0.5) / 1.5);
+    return light.color.rgb * (wrap * attenuation / kPi);
+}
+
 float3 KesParticleLighting(float3 worldPos, float3 normal)
 {
     float3 n = normalize(normal);
     float3 result = KesAmbientIrradiance(n) * uEnvironmentParams.y;
     int lightCount = int(uLightCounts.x);
     for (int i = 0; i < lightCount; i++)
-    {
-        GPULight light = uLights[i];
-        float3 l;
-        float attenuation = 1.0;
-        if (light.params.x < 0.5)
-        {
-            l = -normalize(light.direction.xyz);
-            if (uShadowParams.w > 0.5 && light.params.z >= 0.0)
-                attenuation = KesCascadeShadow(worldPos, n);
-        }
-        else
-        {
-            float3 toLight = light.position.xyz - worldPos;
-            float dist = length(toLight);
-            l = toLight / max(dist, 0.0001);
-            attenuation = KesPointAttenuation(dist, light.position.w);
-            if (light.params.x > 1.5)
-                attenuation *= smoothstep(light.direction.w, light.params.y, dot(-l, normalize(light.direction.xyz)));
-        }
-        float wrap = saturate((dot(n, l) + 0.5) / 1.5);
-        result += light.color.rgb * (wrap * attenuation / kPi);
-    }
+        result += KesParticleLight(uLights[i], worldPos, n);
     if (uClusterParams.w > 0.5)
     {
         uint header = KesClusterHeader(worldPos);
         uint count = header & 0xFFu;
         for (uint ci = 0; ci < count; ci++)
-        {
-            KesClusterLight light = uClusterLights[KesClusterLightIndex(header, ci)];
-            float3 toLight = light.positionRadius.xyz - worldPos;
-            float dist = length(toLight);
-            if (dist >= light.positionRadius.w)
-                continue;
-            float wrap = saturate((dot(n, toLight / max(dist, 0.0001)) + 0.5) / 1.5);
-            result += light.color.rgb * (wrap * KesPointAttenuation(dist, light.positionRadius.w) / kPi);
-        }
+            result += KesParticleLight(uClusterLights[KesClusterLightIndex(header, ci)], worldPos, n);
     }
     return result;
 }

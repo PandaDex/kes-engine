@@ -4,7 +4,7 @@ Both renderer backends (Vulkan and D3D11) draw the same way. The backend-indepen
 
 ## Frame
 
-1. **Shadow maps**: depth passes for the sun cascades and the local shadow slices (see below).
+1. **Shadow maps**: depth passes for the sun cascades and the local shadow atlas tiles that need drawing this frame (see below).
 2. **Scene**: HDR (RGBA16F) with MSAA, at the internal render resolution (window size × `ResolutionScale`). The sky draws first, then opaque objects grouped by material and front to back, then transparent objects back to front. Objects outside the view are culled by bounding sphere. Animated (skinned) models are not culled.
 3. **Resolve**: the multisampled scene into a single-sample HDR image.
 4. **Eye adaptation** (compute, when auto exposure is on): a log2 luminance histogram of that image and the adapted exposure (see Post processing).
@@ -93,27 +93,28 @@ Normal mapping doesn't need vertex tangents (the tangent frame comes from screen
 
 ## Lights
 
-Up to 32 lights per frame: all directional lights, then the visible point and spot lights nearest to the camera.
+Up to 4 directional lights per frame, in scene order. Point and spot lights go through the clustered path shared with particle lights: the visible ones nearest to the camera first, up to 4096 local lights per frame (scene lights before particle lights), 255 per cluster and 256K cluster entries. Each pixel only loops over the lights of its cluster.
 
 - `Intensity` scales `Color`. A white Lambert surface facing a light of intensity 1 is lit to white (1.0) before tonemapping.
 - **Point and spot falloff:** smooth inverse-square-like, reaching 0 at `Range`: `window(d/range)² / (1 + 4 (d/range)²)`.
 - **Spot cone:** `SpotAngle` is the full cone. The soft edge starts at 75 % of it.
-- **`CastShadows`:** defaults to on for directional and spot lights, and off for point lights (a point light takes six shadow slices).
-- **Clustered point lights:** on top of those 32, up to 1024 shadowless point lights per frame (particle Light renderers and `Scene::SubmitPointLight`) are binned into a 16 × 9 × 24 cluster grid on the CPU and looked up per pixel. Same falloff as point lights. See [particles.md](particles.md#lights-and-the-clustered-light-list).
+- **`CastShadows`:** defaults to on for directional and spot lights, and off for point lights (a point light takes six shadow tiles).
+- **Particle and submitted lights:** particle Light renderers and `Scene::SubmitPointLight` add shadowless point lights to the same clusters, after the scene's lights. Same falloff as point lights. See [particles.md](particles.md#lights-and-the-clustered-light-list).
 
 Particles (sprites and ribbons) are drawn after the transparent meshes with `particle.slang`; mesh particles are drawn as scene objects. See [particles.md](particles.md).
 
 ## Shadows
 
-| `ShadowQuality` | Sun cascades | Local slices |
-|---|---|---|
-| 0 Off | none | none |
-| 1 Low | 2 × 1024 | 6 × 512 |
-| 2 Medium | 3 × 2048 | 8 × 512 |
-| 3 High (default) | 4 × 2048 | 12 × 1024 |
+| `ShadowQuality` | Sun cascades | Local shadow atlas | Largest local tile |
+|---|---|---|---|
+| 0 Off | none | none | |
+| 1 Low | 2 × 1024 | 2048² | 512 |
+| 2 Medium | 3 × 2048 | 4096² | 512 |
+| 3 High (default) | 4 × 2048 | 4096² | 1024 |
 
 - **Sun:** the first shadow-casting directional light gets cascaded shadow maps over `ShadowDistance` meters (default 60). Cascades are bounding spheres snapped to whole texels, so shadows don't shimmer as the camera moves.
-- **Local lights:** shadow-casting spot lights take one slice and point lights six (one per cube face), nearest lights first, while slices last.
+- **Local lights:** shadow-casting spot and point lights get tiles in one depth atlas: a spot one tile, a point light six (one per cube face, a size smaller). Tile size follows how big the light is on screen, from 128 up to the largest tile. Up to 128 tiles per frame, nearest lights first; when they don't fit, the largest tiles of the farthest lights shrink first.
+- **Shadow caching:** atlas tiles are kept between frames. A light's tiles are drawn again only when the light changes, or when a shadow caster in its range moves, appears or goes away (redraws caused by casters are limited to 16 tiles a frame, oldest first; new and moved lights are always drawn at once). A still scene draws no local shadow maps at all. Tiles of lights out of view stay until the space is needed. Animated models count as moving every frame they animate.
 - **Filtering and bias:** 3×3 hardware PCF, slope-scaled depth bias, and a normal offset against acne.
 
 ## Ambient light and reflections

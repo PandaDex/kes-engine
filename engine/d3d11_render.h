@@ -218,6 +218,7 @@ namespace kes::d3d11
         ID3D11BlendState* alphaBlendState = nullptr;
         ID3D11DepthStencilState* depthWriteState = nullptr;
         ID3D11DepthStencilState* depthReadState = nullptr;
+        ID3D11DepthStencilState* depthAlwaysState = nullptr; // clears shadow atlas tiles
 
         ID3D11SamplerState* materialSampler = nullptr; // anisotropic, wrap (s0-s4)
         ID3D11SamplerState* linearClampSampler = nullptr; // environment, tonemap, UI (s5)
@@ -226,7 +227,8 @@ namespace kes::d3d11
 
         // Shadows and image-based ambient
         GPUShadowArray cascadeShadows;
-        GPUShadowArray localShadows;
+        GPUShadowArray localShadows; // one layer: the local shadow atlas
+        std::vector<render::ShadowCaster> shadowCasters; // per-frame scratch
         GPUTexture environmentMap = {}; // RGBA16F cube with mips
         render::EnvironmentMaps environment;
         render::FrameSetup frame;

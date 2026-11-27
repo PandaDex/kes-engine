@@ -478,8 +478,9 @@ namespace kes::d3d11
     static bool CreateShadowTargets(Renderer& r)
     {
         const render::ShadowConfig config = render::GetShadowConfig(r.options.shadowQuality);
+        render::InvalidateShadowCache(r.frame.shadowCache);
         return CreateShadowArray(r, r.cascadeShadows, config.cascadeCount, config.cascadeResolution, "cascade") &&
-            CreateShadowArray(r, r.localShadows, config.localSlices, config.localResolution, "local");
+            CreateShadowArray(r, r.localShadows, config.atlasSize > 0 ? 1 : 0, config.atlasSize, "local");
     }
 
     static bool CreateDeviceAndSwapChain(Renderer& r, SDL_Window* window)
@@ -699,6 +700,15 @@ namespace kes::d3d11
         if (FAILED(hr))
         {
             EngineLogf("Create depth write state failed: 0x%08X", static_cast<unsigned>(hr));
+            return false;
+        }
+
+        D3D11_DEPTH_STENCIL_DESC depthAlways = depthWrite;
+        depthAlways.DepthFunc = D3D11_COMPARISON_ALWAYS;
+        hr = r.device->CreateDepthStencilState(&depthAlways, &r.depthAlwaysState);
+        if (FAILED(hr))
+        {
+            EngineLogf("Create depth always state failed: 0x%08X", static_cast<unsigned>(hr));
             return false;
         }
 
@@ -1080,7 +1090,7 @@ namespace kes::d3d11
 
     static bool CreateClusterBuffers(Renderer& r)
     {
-        if (CreateDynamicStructuredBuffer(r, render::kMaxClusterLights, sizeof(render::GPUClusterLight), &r.clusterLightBuffer, &r.clusterLightSRV) &&
+        if (CreateDynamicStructuredBuffer(r, render::kMaxClusterLights, sizeof(render::GPULight), &r.clusterLightBuffer, &r.clusterLightSRV) &&
             CreateDynamicStructuredBuffer(r, render::kClusterGridUints, sizeof(uint32_t), &r.clusterGridBuffer, &r.clusterGridSRV))
             return true;
         EngineLog("Create cluster light buffers failed");
@@ -1467,6 +1477,7 @@ namespace kes::d3d11
     static void DestroyRendererAssetCaches(Renderer& r)
     {
         KES_ZONE_FN(RENDER);
+        render::InvalidateShadowCache(r.frame.shadowCache);
         for (auto& pair : r.gpuTextures)
             DestroyGPUTexture(pair.second);
         r.gpuTextures.clear();
@@ -1955,19 +1966,8 @@ namespace kes::d3d11
         ID3D11SamplerState* materialSamplers[render::kMaterialTextureCount] = { r.materialSampler, r.materialSampler, r.materialSampler, r.materialSampler, r.materialSampler };
         r.context->PSSetSamplers(0, render::kMaterialTextureCount, materialSamplers);
 
-        for (const render::ShadowView& view : r.frame.shadowViews)
+        const auto drawCasters = [&](const render::ShadowView& view)
         {
-            GPUShadowArray& target = view.cascade ? r.cascadeShadows : r.localShadows;
-            if (view.slice >= static_cast<int>(target.sliceViews.size()))
-                continue;
-            ID3D11DepthStencilView* dsv = target.sliceViews[static_cast<size_t>(view.slice)];
-            r.context->OMSetRenderTargets(0, nullptr, dsv);
-            r.context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH, 1.0f, 0);
-            D3D11_VIEWPORT vp = {};
-            vp.Width = vp.Height = static_cast<float>(target.resolution);
-            vp.MaxDepth = 1.0f;
-            r.context->RSSetViewports(1, &vp);
-
             // The light's frustum (far plane = range for local lights) culls casters.
             const render::Frustum frustum = render::ExtractFrustum(view.viewProj);
             DrawState state;
@@ -1976,6 +1976,48 @@ namespace kes::d3d11
                 if (CastsShadows(item.material))
                     DrawSceneObject(r, state, item, view.viewProj, frustum, assets, true, false);
             }
+        };
+
+        for (const render::ShadowView& view : r.frame.shadowViews)
+        {
+            if (!view.cascade || view.slice >= static_cast<int>(r.cascadeShadows.sliceViews.size()))
+                continue;
+            ID3D11DepthStencilView* dsv = r.cascadeShadows.sliceViews[static_cast<size_t>(view.slice)];
+            r.context->OMSetRenderTargets(0, nullptr, dsv);
+            r.context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH, 1.0f, 0);
+            D3D11_VIEWPORT vp = {};
+            vp.Width = vp.Height = static_cast<float>(r.cascadeShadows.resolution);
+            vp.MaxDepth = 1.0f;
+            r.context->RSSetViewports(1, &vp);
+            drawCasters(view);
+        }
+
+        // Local tiles share the atlas, so a tile is cleared on its own: a
+        // fullscreen triangle squeezed into it with the depth range at 1.
+        if (r.localShadows.sliceViews.empty())
+            return;
+        r.context->OMSetRenderTargets(0, nullptr, r.localShadows.sliceViews[0]);
+        for (const render::ShadowView& view : r.frame.shadowViews)
+        {
+            if (view.cascade)
+                continue;
+            D3D11_VIEWPORT vp = {};
+            vp.TopLeftX = static_cast<float>(view.x);
+            vp.TopLeftY = static_cast<float>(view.y);
+            vp.Width = vp.Height = static_cast<float>(view.size);
+            vp.MinDepth = vp.MaxDepth = 1.0f;
+            r.context->RSSetViewports(1, &vp);
+            r.context->OMSetDepthStencilState(r.depthAlwaysState, 0);
+            r.context->RSSetState(r.solidNoCullRS);
+            r.context->IASetInputLayout(nullptr);
+            r.context->VSSetShader(r.tonemapVS, nullptr, 0);
+            r.context->PSSetShader(nullptr, nullptr, 0);
+            r.context->Draw(3, 0);
+
+            vp.MinDepth = 0.0f;
+            r.context->RSSetViewports(1, &vp);
+            r.context->OMSetDepthStencilState(r.depthWriteState, 0);
+            drawCasters(view);
         }
     }
 
@@ -2103,7 +2145,7 @@ namespace kes::d3d11
         r.context->UpdateSubresource(r.sceneCB, 0, nullptr, &r.frame.scene, 0, 0);
         if (!r.frame.clusterLights.empty())
         {
-            UploadDynamic(r, r.clusterLightBuffer, r.frame.clusterLights.data(), r.frame.clusterLights.size() * sizeof(render::GPUClusterLight));
+            UploadDynamic(r, r.clusterLightBuffer, r.frame.clusterLights.data(), r.frame.clusterLights.size() * sizeof(render::GPULight));
             UploadDynamic(r, r.clusterGridBuffer, r.frame.clusterGrid.data(), r.frame.clusterGrid.size() * sizeof(uint32_t));
         }
 
@@ -2168,6 +2210,11 @@ namespace kes::d3d11
             KES_PROFILE_PLOT("Transparent draw items", static_cast<int64_t>(transparentItems.size()));
         }
 
+        if (r.cascadeShadows.srv && r.localShadows.srv)
+        {
+            render::GatherShadowCasters(opaqueItems, [](const MaterialData* m) { return CastsShadows(m); }, r.shadowCasters);
+            render::UpdateLocalShadows(r.frame, r.shadowCasters);
+        }
         RenderShadowMaps(r, assets);
 
         // HDR scene pass
@@ -2526,6 +2573,7 @@ namespace kes::d3d11
         SafeRelease(r.shadowSampler);
         SafeRelease(r.depthReadState);
         SafeRelease(r.depthWriteState);
+        SafeRelease(r.depthAlwaysState);
         SafeRelease(r.alphaBlendState);
         SafeRelease(r.opaqueBlendState);
         SafeRelease(r.shadowRS);

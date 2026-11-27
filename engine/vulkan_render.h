@@ -220,6 +220,7 @@ namespace kes::vk
         // Render passes
         VkRenderPass sceneRenderPass = VK_NULL_HANDLE; // HDR color (+ resolve) + depth, msaaSamples
         VkRenderPass shadowRenderPass = VK_NULL_HANDLE; // depth only
+        VkRenderPass shadowAtlasRenderPass = VK_NULL_HANDLE; // same, loads (cached local shadow tiles)
         VkRenderPass backbufferRenderPass = VK_NULL_HANDLE;
         VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT; // of sceneRenderPass
 
@@ -245,7 +246,8 @@ namespace kes::vk
 
         // Shadows and image-based ambient
         GPUShadowArray cascadeShadows;
-        GPUShadowArray localShadows;
+        GPUShadowArray localShadows; // one layer: the local shadow atlas
+        std::vector<render::ShadowCaster> shadowCasters; // per-frame scratch
         GPUShadowArray dummyShadows; // 1x1, bound when shadows are off
         GPUTexture environmentMap = {};
         render::EnvironmentMaps environment;

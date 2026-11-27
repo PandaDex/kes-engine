@@ -281,9 +281,9 @@ namespace render
     {
         switch (quality)
         {
-        case ShadowQuality::Low:    return { 2, 1024, 6, 512 };
-        case ShadowQuality::Medium: return { 3, 2048, 8, 512 };
-        case ShadowQuality::High:   return { 4, 2048, 12, 1024 };
+        case ShadowQuality::Low:    return { 2, 1024, 2048, 512 };
+        case ShadowQuality::Medium: return { 3, 2048, 4096, 512 };
+        case ShadowQuality::High:   return { 4, 2048, 4096, 1024 };
         default:                    return {};
         }
     }
@@ -329,7 +329,35 @@ namespace render
         {
             const Light* light = nullptr;
             float score = 0.0f; // lower first
+            Vector3 center;
+            float radius = 0.0f;
         };
+
+        // A light waiting to be binned, with the sphere it can reach.
+        struct ClusterCandidate
+        {
+            GPULight gpu;
+            Vector3 center;
+            float radius = 0.0f;
+            const Light* source = nullptr; // scene lights only
+        };
+
+        // Range sphere, or for a spot the sphere through its apex and cap rim
+        // (center R / (2 cos half) along the axis) when that one is smaller.
+        void LocalLightBounds(const Light& light, Vector3& outCenter, float& outRadius)
+        {
+            const float range = std::max(light.range, 0.01f);
+            outCenter = light.transform.position;
+            outRadius = range;
+            if (light.type != LightType::Spot)
+                return;
+            const float cosHalf = std::cos(std::clamp(light.spotAngle, 1.0f, 179.0f) * 0.5f * kPi / 180.0f);
+            const float radius = range / (2.0f * cosHalf);
+            if (radius >= range)
+                return;
+            outCenter = light.transform.position + LightDirection(light) * radius;
+            outRadius = radius;
+        }
 
         void PackLight(const Light& light, GPULight& out)
         {
@@ -403,14 +431,16 @@ namespace render
         }
     }
 
-    // Bins the frame's point lights into the cluster grid. View space comes
-    // from the camera's own view matrix so it matches what the shader derives
-    // from uViewProj and the camera forward.
-    static void BuildClusters(FrameSetup& out, const CameraViewData& camera, const Scene& scene)
+    // Bins local lights into the cluster grid, in order until kMaxClusterLights.
+    // View space comes from the camera's own view matrix so it matches what the
+    // shader derives from uViewProj and the camera forward.
+    static void BuildClusters(FrameSetup& out, const CameraViewData& camera, const std::vector<ClusterCandidate>& candidates,
+        std::vector<const Light*>& outSources)
     {
         KES_ZONE_FN(RENDER);
         out.clusterLights.clear();
-        out.clusterGrid.assign(static_cast<size_t>(kClusterGridUints), 0u);
+        outSources.clear();
+        out.clusterGrid.assign(static_cast<size_t>(kClusterCount), 0u);
         const float nearZ = kCameraNearPlane;
         const float farZ = kCameraFarPlane;
         const float sliceScale = static_cast<float>(kClusterZ) / std::log(farZ / nearZ);
@@ -419,9 +449,7 @@ namespace render
         out.scene.clusterParams[2] = static_cast<float>(kClusterZ);
         out.scene.clusterDepth[0] = nearZ;
         out.scene.clusterDepth[1] = sliceScale;
-
-        const std::vector<ScenePointLight>& lights = scene.GetParticles().lights;
-        if (lights.empty())
+        if (candidates.empty())
             return;
 
         const float* v = camera.view;
@@ -437,13 +465,14 @@ namespace render
             int x0, x1, y0, y1, z0, z1;
         };
         std::vector<Range> ranges;
-        ranges.reserve(std::min<size_t>(lights.size(), kMaxClusterLights));
-        for (const ScenePointLight& light : lights)
+        ranges.reserve(std::min<size_t>(candidates.size(), kMaxClusterLights));
+        out.clusterLights.reserve(ranges.capacity());
+        for (const ClusterCandidate& candidate : candidates)
         {
             if (out.clusterLights.size() >= static_cast<size_t>(kMaxClusterLights))
                 break;
-            const Vector3 p(light.position[0], light.position[1], light.position[2]);
-            const float r = light.radius;
+            const Vector3& p = candidate.center;
+            const float r = candidate.radius;
             if (r <= 0.0f || !SphereInFrustum(out.frustum, p, r))
                 continue;
             const float vx = p.x * v[0] + p.y * v[4] + p.z * v[8] + v[12];
@@ -474,20 +503,13 @@ namespace render
                 continue;
 
             ranges.push_back({ tile(nx0, kClusterX), tile(nx1, kClusterX), tile(ny0, kClusterY), tile(ny1, kClusterY), slice(zMin), slice(zMax) });
-            GPUClusterLight gpu = {};
-            gpu.positionRadius[0] = p.x;
-            gpu.positionRadius[1] = p.y;
-            gpu.positionRadius[2] = p.z;
-            gpu.positionRadius[3] = r;
-            for (int c = 0; c < 3; ++c)
-                gpu.color[c] = light.color[c] * 3.14159265f; // same radiance scale as regular lights
-            out.clusterLights.push_back(gpu);
+            out.clusterLights.push_back(candidate.gpu);
+            outSources.push_back(candidate.source);
         }
         out.scene.clusterParams[3] = static_cast<float>(out.clusterLights.size());
         if (out.clusterLights.empty())
             return;
 
-        uint32_t* grid = out.clusterGrid.data();
         std::vector<uint32_t> counts(static_cast<size_t>(kClusterCount), 0u);
         for (const Range& range : ranges)
             for (int z = range.z0; z <= range.z1; ++z)
@@ -504,11 +526,13 @@ namespace render
             uint32_t count = counts[static_cast<size_t>(c)];
             if (offset + count > static_cast<uint32_t>(kMaxClusterIndices))
                 count = static_cast<uint32_t>(kMaxClusterIndices) - offset;
-            grid[c] = offset << 8; // count is filled in below
+            out.clusterGrid[static_cast<size_t>(c)] = offset << 8; // count is filled in below
             counts[static_cast<size_t>(c)] = count; // capacity
             offset += count;
         }
+        out.clusterGrid.resize(static_cast<size_t>(kClusterCount) + offset, 0u);
 
+        uint32_t* grid = out.clusterGrid.data();
         for (uint32_t li = 0; li < static_cast<uint32_t>(ranges.size()); ++li)
         {
             const Range& range = ranges[li];
@@ -523,6 +547,414 @@ namespace render
                         grid[kClusterCount + (grid[c] >> 8) + filled] = li;
                         grid[c] += 1u;
                     }
+        }
+    }
+
+    // Local shadow atlas
+
+    void InvalidateShadowCache(ShadowAtlasCache& cache)
+    {
+        cache.entries.clear();
+        cache.frameEntries.clear();
+        std::fill(cache.cells.begin(), cache.cells.end(), uint8_t(0));
+        cache.casters.clear();
+    }
+
+    namespace
+    {
+        constexpr float kShadowReferenceHeight = 1080.0f; // tile size: on-screen diameter at this height
+        constexpr int kShadowRefreshBudget = 16; // tiles redrawn per frame because a caster moved
+
+        int AtlasCells(const ShadowAtlasCache& cache)
+        {
+            return cache.atlasSize / kMinShadowTile;
+        }
+
+        void MarkTile(ShadowAtlasCache& cache, int x, int y, int size, uint8_t value)
+        {
+            const int cells = AtlasCells(cache);
+            const int k = size / kMinShadowTile;
+            for (int cy = y / kMinShadowTile; cy < y / kMinShadowTile + k; ++cy)
+                for (int cx = x / kMinShadowTile; cx < x / kMinShadowTile + k; ++cx)
+                    cache.cells[static_cast<size_t>(cy * cells + cx)] = value;
+        }
+
+        // First free block aligned to its own size.
+        bool AllocateTile(ShadowAtlasCache& cache, int size, int& outX, int& outY)
+        {
+            const int cells = AtlasCells(cache);
+            const int k = size / kMinShadowTile;
+            for (int cy = 0; cy + k <= cells; cy += k)
+                for (int cx = 0; cx + k <= cells; cx += k)
+                {
+                    bool free = true;
+                    for (int y = cy; y < cy + k && free; ++y)
+                        for (int x = cx; x < cx + k && free; ++x)
+                            free = cache.cells[static_cast<size_t>(y * cells + x)] == 0;
+                    if (!free)
+                        continue;
+                    outX = cx * kMinShadowTile;
+                    outY = cy * kMinShadowTile;
+                    MarkTile(cache, outX, outY, size, 1);
+                    return true;
+                }
+            return false;
+        }
+
+        void FreeEntryTiles(ShadowAtlasCache& cache, ShadowAtlasCache::Entry& entry)
+        {
+            for (int i = 0; i < entry.tileCount; ++i)
+                MarkTile(cache, entry.x[i], entry.y[i], entry.tileSize, 0);
+            entry.tileCount = 0;
+            entry.contentValid = false;
+        }
+
+        // `count` tiles of `size`, evicting the least recently used entries
+        // that aren't drawn this frame when the atlas is full.
+        bool AllocateTiles(ShadowAtlasCache& cache, int size, int count, int outX[6], int outY[6])
+        {
+            for (;;)
+            {
+                int placed = 0;
+                while (placed < count && AllocateTile(cache, size, outX[placed], outY[placed]))
+                    ++placed;
+                if (placed == count)
+                    return true;
+                for (int i = 0; i < placed; ++i)
+                    MarkTile(cache, outX[i], outY[i], size, 0);
+
+                int victim = -1;
+                for (int i = 0; i < static_cast<int>(cache.entries.size()); ++i)
+                {
+                    const ShadowAtlasCache::Entry& e = cache.entries[static_cast<size_t>(i)];
+                    if (e.tileCount == 0 || e.lastUsedFrame == cache.frame)
+                        continue;
+                    if (victim < 0 || e.lastUsedFrame < cache.entries[static_cast<size_t>(victim)].lastUsedFrame)
+                        victim = i;
+                }
+                if (victim < 0)
+                    return false;
+                FreeEntryTiles(cache, cache.entries[static_cast<size_t>(victim)]);
+            }
+        }
+
+        uint64_t LightShadowState(const Light& light)
+        {
+            const float values[] = { static_cast<float>(light.type), light.transform.position.x, light.transform.position.y,
+                light.transform.position.z, light.transform.rotation.x, light.transform.rotation.y, light.transform.rotation.z,
+                light.range, light.spotAngle };
+            uint64_t h = 1469598103934665603ull;
+            const unsigned char* p = reinterpret_cast<const unsigned char*>(values);
+            for (size_t i = 0; i < sizeof(values); ++i)
+                h = (h ^ p[i]) * 1099511628211ull;
+            return h;
+        }
+
+        // A spot's one view or a point light's six (+X -X +Y -Y +Z -Z; the
+        // shader picks a face by the major axis). 92 degrees so filtering near
+        // face edges stays inside the tile.
+        int LocalShadowMatrices(const Light& light, Matrix4 out[6])
+        {
+            const Vector3 position = light.transform.position;
+            const float range = std::max(light.range, 0.1f);
+            const float zn = std::max(0.05f, range * 0.002f);
+            if (light.type == LightType::Spot)
+            {
+                const Vector3 dir = LightDirection(light);
+                const float fov = std::min(std::clamp(light.spotAngle, 1.0f, 179.0f) * kPi / 180.0f + 0.1f, 3.0f);
+                out[0] = MatrixMultiply(MatrixLookToLH(position, dir, PickUp(dir)), MatrixPerspectiveFovLH(fov, 1.0f, zn, range));
+                return 1;
+            }
+            static const Vector3 kDirs[6] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+            static const Vector3 kUps[6] = { { 0, 1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 } };
+            const Matrix4 proj = MatrixPerspectiveFovLH(92.0f * kPi / 180.0f, 1.0f, zn, range);
+            for (int face = 0; face < 6; ++face)
+                out[face] = MatrixMultiply(MatrixLookToLH(position, kDirs[face], kUps[face]), proj);
+            return 6;
+        }
+    }
+
+    // Gives the shadow-casting lights among the binned cluster lights (nearest
+    // first) their atlas tiles. Tile size follows the light's on-screen size;
+    // a kept tile only shrinks once it is 4x too big, so it doesn't flip
+    // between two sizes while the camera moves.
+    static void AssignLocalShadows(FrameSetup& out, const std::vector<const Light*>& sources, const Vector3& eye, float yScale)
+    {
+        KES_ZONE_FN(RENDER);
+        ShadowAtlasCache& cache = out.shadowCache;
+        const ShadowConfig& config = out.shadows;
+        SceneCBData& cb = out.scene;
+        ++cache.frame;
+        cache.frameEntries.clear();
+        if (config.atlasSize != cache.atlasSize || config.maxTile != cache.maxTile)
+        {
+            cache.atlasSize = config.atlasSize;
+            cache.maxTile = config.maxTile;
+            const int cells = std::max(config.atlasSize / kMinShadowTile, 0);
+            cache.cells.assign(static_cast<size_t>(cells * cells), 0);
+            cache.entries.clear();
+        }
+        cache.entries.erase(std::remove_if(cache.entries.begin(), cache.entries.end(),
+                                [](const ShadowAtlasCache::Entry& e) { return e.tileCount == 0; }),
+            cache.entries.end());
+        if (config.atlasSize < kMinShadowTile || config.cascadeCount == 0)
+            return;
+
+        struct Want
+        {
+            size_t gpuIndex;
+            const Light* light;
+            uint64_t key;
+            int entry;
+            int size;
+            int count;
+            Vector3 center;
+            float radius;
+        };
+        std::vector<Want> wants;
+        for (size_t i = 0; i < sources.size(); ++i)
+        {
+            const Light* light = sources[i];
+            if (!light || !light->castShadows)
+                continue;
+            Want want = {};
+            want.gpuIndex = i;
+            want.light = light;
+            want.key = light->id ? light->id : (reinterpret_cast<uintptr_t>(light) | (1ull << 63));
+            want.count = light->type == LightType::Point ? 6 : 1;
+            LocalLightBounds(*light, want.center, want.radius);
+            const float dist = Vector3Length(want.center - eye);
+            const float tanAngle = dist <= want.radius * 1.001f ? 1e3f : want.radius / std::sqrt(dist * dist - want.radius * want.radius);
+            const float diameter = tanAngle * yScale * kShadowReferenceHeight;
+            want.size = kMinShadowTile;
+            while (want.size < config.maxTile && static_cast<float>(want.size) < diameter)
+                want.size *= 2;
+            if (want.count == 6 && want.size > kMinShadowTile)
+                want.size /= 2;
+            want.entry = -1;
+            for (int e = 0; e < static_cast<int>(cache.entries.size()); ++e)
+            {
+                if (cache.entries[static_cast<size_t>(e)].lightKey == want.key)
+                {
+                    want.entry = e;
+                    cache.entries[static_cast<size_t>(e)].lastUsedFrame = cache.frame;
+                    break;
+                }
+            }
+            wants.push_back(want);
+        }
+
+        // Nearest lights first up to the tile limit, then shrink the largest
+        // tiles (farthest first) until all of them fit the atlas.
+        int tileTotal = 0;
+        size_t kept = 0;
+        for (; kept < wants.size() && tileTotal + wants[kept].count <= kMaxShadowTiles; ++kept)
+            tileTotal += wants[kept].count;
+        wants.resize(kept);
+        const int64_t atlasArea = static_cast<int64_t>(config.atlasSize) * config.atlasSize;
+        bool pressure = false;
+        for (;;)
+        {
+            int64_t area = 0;
+            for (const Want& want : wants)
+                area += static_cast<int64_t>(want.size) * want.size * want.count;
+            if (area <= atlasArea)
+                break;
+            pressure = true;
+            int pick = -1;
+            for (int i = static_cast<int>(wants.size()) - 1; i >= 0; --i)
+            {
+                if (wants[static_cast<size_t>(i)].size > kMinShadowTile && (pick < 0 || wants[static_cast<size_t>(i)].size > wants[static_cast<size_t>(pick)].size))
+                    pick = i;
+            }
+            if (pick < 0)
+                break;
+            wants[static_cast<size_t>(pick)].size /= 2;
+        }
+
+        // Largest tiles first: aligned power-of-two blocks then pack without gaps.
+        std::vector<size_t> order(wants.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = i;
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return wants[a].size > wants[b].size; });
+        std::vector<bool> placed(wants.size(), false);
+        for (size_t index : order)
+        {
+            Want& want = wants[index];
+            int xs[6], ys[6];
+            if (want.entry >= 0)
+            {
+                ShadowAtlasCache::Entry& entry = cache.entries[static_cast<size_t>(want.entry)];
+                const bool lenient = !pressure && want.size < entry.tileSize && want.size * 4 > entry.tileSize;
+                const bool keep = entry.tileCount == want.count && (want.size == entry.tileSize || lenient);
+                if (!keep)
+                {
+                    // New tiles first, so a full atlas keeps the old ones.
+                    if (AllocateTiles(cache, want.size, want.count, xs, ys))
+                    {
+                        FreeEntryTiles(cache, entry);
+                        std::copy(xs, xs + want.count, entry.x);
+                        std::copy(ys, ys + want.count, entry.y);
+                        entry.tileSize = want.size;
+                        entry.tileCount = want.count;
+                    }
+                    else if (entry.tileCount != want.count)
+                    {
+                        FreeEntryTiles(cache, entry);
+                        continue;
+                    }
+                }
+            }
+            else
+            {
+                bool ok = false;
+                int size = want.size;
+                while (size >= kMinShadowTile && !(ok = AllocateTiles(cache, size, want.count, xs, ys)))
+                    size /= 2;
+                if (!ok)
+                    continue;
+                ShadowAtlasCache::Entry entry;
+                entry.lightKey = want.key;
+                entry.tileSize = size;
+                entry.tileCount = want.count;
+                std::copy(xs, xs + want.count, entry.x);
+                std::copy(ys, ys + want.count, entry.y);
+                entry.lastUsedFrame = cache.frame;
+                cache.entries.push_back(entry);
+                want.entry = static_cast<int>(cache.entries.size()) - 1;
+            }
+            placed[index] = true;
+        }
+
+        const float atlas = static_cast<float>(config.atlasSize);
+        int tileIndex = 0;
+        for (size_t index = 0; index < wants.size(); ++index)
+        {
+            if (!placed[index])
+                continue;
+            const Want& want = wants[index];
+            ShadowAtlasCache::Entry& entry = cache.entries[static_cast<size_t>(want.entry)];
+            const uint64_t lightState = LightShadowState(*want.light);
+            if (lightState != entry.lightState)
+            {
+                entry.lightState = lightState;
+                entry.contentValid = false;
+            }
+            Matrix4 matrices[6];
+            LocalShadowMatrices(*want.light, matrices);
+            entry.origin = want.light->transform.position;
+            entry.range = std::max(want.light->range, 0.1f);
+            entry.center = want.center;
+            entry.radius = want.radius;
+            for (int t = 0; t < entry.tileCount; ++t)
+            {
+                entry.viewProj[t] = matrices[t];
+                CopyMatrix(matrices[t], cb.localShadowViewProj[tileIndex + t]);
+                float* rect = cb.localShadowRects[tileIndex + t];
+                rect[0] = rect[1] = static_cast<float>(entry.tileSize) / atlas;
+                rect[2] = static_cast<float>(entry.x[t]) / atlas;
+                rect[3] = static_cast<float>(entry.y[t]) / atlas;
+            }
+            out.clusterLights[want.gpuIndex].params[2] = static_cast<float>(tileIndex);
+            cache.frameEntries.push_back(want.entry);
+            tileIndex += entry.tileCount;
+        }
+    }
+
+    void UpdateLocalShadows(FrameSetup& out, const std::vector<ShadowCaster>& casters)
+    {
+        KES_ZONE_FN(RENDER);
+        ShadowAtlasCache& cache = out.shadowCache;
+
+        // Spheres where shadows may have changed: casters that moved (old and
+        // new place), appeared or went away.
+        struct Sphere
+        {
+            Vector3 center;
+            float radius;
+        };
+        std::vector<Sphere> changed;
+        for (const ShadowCaster& caster : casters)
+        {
+            if (caster.key & ShadowCaster::kTransient)
+            {
+                changed.push_back({ caster.center, caster.radius });
+                continue;
+            }
+            auto [it, inserted] = cache.casters.try_emplace(caster.key);
+            ShadowAtlasCache::CasterRecord& record = it->second;
+            if (record.seenFrame == cache.frame && !inserted)
+                continue; // another section of the same object
+            if (inserted)
+                changed.push_back({ caster.center, caster.radius });
+            else if (record.state != caster.state)
+            {
+                changed.push_back({ record.center, record.radius });
+                changed.push_back({ caster.center, caster.radius });
+            }
+            record = { caster.state, caster.center, caster.radius, cache.frame };
+        }
+        for (auto it = cache.casters.begin(); it != cache.casters.end();)
+        {
+            if (it->second.seenFrame != cache.frame)
+            {
+                changed.push_back({ it->second.center, it->second.radius });
+                it = cache.casters.erase(it);
+            }
+            else
+                ++it;
+        }
+
+        for (ShadowAtlasCache::Entry& entry : cache.entries)
+        {
+            if (!entry.contentValid || entry.stale)
+                continue;
+            for (const Sphere& sphere : changed)
+            {
+                if (Vector3LengthSq(sphere.center - entry.center) <= (sphere.radius + entry.radius) * (sphere.radius + entry.radius))
+                {
+                    entry.stale = true;
+                    entry.staleSince = cache.frame;
+                    break;
+                }
+            }
+        }
+
+        const auto emit = [&](ShadowAtlasCache::Entry& entry)
+        {
+            for (int t = 0; t < entry.tileCount; ++t)
+            {
+                ShadowView view;
+                view.viewProj = entry.viewProj[t];
+                view.x = entry.x[t];
+                view.y = entry.y[t];
+                view.size = entry.tileSize;
+                view.origin = entry.origin;
+                view.radius = entry.range;
+                out.shadowViews.push_back(view);
+            }
+            entry.contentValid = true;
+            entry.stale = false;
+        };
+        // New tiles and changed lights now; caster refreshes within the budget, oldest first.
+        std::vector<ShadowAtlasCache::Entry*> refresh;
+        for (int index : cache.frameEntries)
+        {
+            ShadowAtlasCache::Entry& entry = cache.entries[static_cast<size_t>(index)];
+            if (!entry.contentValid)
+                emit(entry);
+            else if (entry.stale)
+                refresh.push_back(&entry);
+        }
+        std::stable_sort(refresh.begin(), refresh.end(),
+            [](const ShadowAtlasCache::Entry* a, const ShadowAtlasCache::Entry* b) { return a->staleSince < b->staleSince; });
+        int budget = kShadowRefreshBudget;
+        for (ShadowAtlasCache::Entry* entry : refresh)
+        {
+            if (budget <= 0)
+                break;
+            budget -= entry->tileCount;
+            emit(*entry);
         }
     }
 
@@ -557,9 +989,11 @@ namespace render
         cb.cameraForward[0] = forward.x;
         cb.cameraForward[1] = forward.y;
         cb.cameraForward[2] = forward.z;
-        BuildClusters(out, cameraData, scene);
 
-        // Lights: directional first, then visible local lights nearest first.
+        // Directional lights go into the scene constants in scene order, visible
+        // local lights into the clusters nearest first (shadow tiles in the same
+        // order), then the particle lights.
+        const std::vector<ScenePointLight>& pointLights = scene.GetParticles().lights;
         std::vector<LightCandidate> candidates;
         candidates.reserve(scene.GetLights().size());
         for (const Light& light : scene.GetLights())
@@ -571,108 +1005,95 @@ namespace render
                 candidates.push_back({ &light, -1e30f });
                 continue;
             }
-            const Vector3 position = light.transform.position;
-            if (!SphereInFrustum(out.frustum, position, light.range))
+            Vector3 center;
+            float radius = 0.0f;
+            LocalLightBounds(light, center, radius);
+            if (!SphereInFrustum(out.frustum, center, radius))
                 continue;
-            candidates.push_back({ &light, Vector3Length(position - eye) - light.range });
+            candidates.push_back({ &light, Vector3Length(center - eye) - radius, center, radius });
         }
         std::stable_sort(candidates.begin(), candidates.end(),
             [](const LightCandidate& a, const LightCandidate& b)
             { return a.score < b.score; });
-        if (candidates.size() > static_cast<size_t>(kMaxLights))
-            candidates.resize(kMaxLights);
 
+        std::vector<ClusterCandidate> clustered;
+        clustered.reserve(candidates.size() + pointLights.size());
         int lightCount = 0;
         bool sunAssigned = false;
-        int nextLocalSlice = 0;
         for (const LightCandidate& candidate : candidates)
         {
             const Light& light = *candidate.light;
-            GPULight& gpu = cb.lights[lightCount++];
-            PackLight(light, gpu);
-            if (!light.castShadows || out.shadows.cascadeCount == 0)
-                continue;
-
+            GPULight* slot = nullptr;
             if (light.type == LightType::Directional)
             {
-                if (sunAssigned)
+                if (lightCount >= kMaxDirectionalLights)
                     continue;
-                sunAssigned = true;
-                gpu.params[2] = 1.0f;
-
-                const Vector3 lightDir = LightDirection(light);
-                const float nearPlane = kCameraNearPlane;
-                const float farPlane = std::clamp(options.shadowDistance, 5.0f, kCameraFarPlane);
-                const int count = out.shadows.cascadeCount;
-                float splits[kMaxCascades + 1] = { nearPlane };
-                for (int i = 1; i <= count; ++i)
-                {
-                    const float t = static_cast<float>(i) / static_cast<float>(count);
-                    const float logSplit = nearPlane * std::pow(farPlane / nearPlane, t);
-                    const float linearSplit = nearPlane + (farPlane - nearPlane) * t;
-                    splits[i] = 0.8f * logSplit + 0.2f * linearSplit;
-                }
-                for (int i = 0; i < count; ++i)
-                {
-                    float texel = 0.0f;
-                    ShadowView view;
-                    view.viewProj = BuildCascade(camera, aspect, splits[i], splits[i + 1], lightDir, out.shadows.cascadeResolution, texel);
-                    view.slice = i;
-                    view.cascade = true;
-                    out.shadowViews.push_back(view);
-                    CopyMatrix(view.viewProj, cb.cascadeViewProj[i]);
-                    cb.cascadeSplits[i] = splits[i + 1];
-                    cb.cascadeTexelSize[i] = texel;
-                }
-                cb.shadowParams[0] = static_cast<float>(count);
-                continue;
-            }
-
-            // Local shadows: a spot uses one slice, a point light six (one per cube face).
-            const int needed = light.type == LightType::Point ? 6 : 1;
-            if (nextLocalSlice + needed > out.shadows.localSlices)
-                continue;
-            gpu.params[2] = static_cast<float>(nextLocalSlice);
-            const Vector3 position = light.transform.position;
-            const float range = std::max(light.range, 0.1f);
-            const float zn = std::max(0.05f, range * 0.002f);
-            if (light.type == LightType::Spot)
-            {
-                const Vector3 dir = LightDirection(light);
-                const float fov = std::min(std::clamp(light.spotAngle, 1.0f, 179.0f) * kPi / 180.0f + 0.1f, 3.0f);
-                ShadowView view;
-                view.viewProj = MatrixMultiply(MatrixLookToLH(position, dir, PickUp(dir)), MatrixPerspectiveFovLH(fov, 1.0f, zn, range));
-                view.slice = nextLocalSlice;
-                view.origin = position;
-                view.radius = range;
-                out.shadowViews.push_back(view);
-                CopyMatrix(view.viewProj, cb.localShadowViewProj[nextLocalSlice]);
+                slot = &cb.lights[lightCount++];
             }
             else
             {
-                // Faces +X -X +Y -Y +Z -Z; the shader picks one by the major axis.
-                // 92 degrees so filtering near face edges stays inside the slice.
-                static const Vector3 kDirs[6] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
-                static const Vector3 kUps[6] = { { 0, 1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 } };
-                const Matrix4 proj = MatrixPerspectiveFovLH(92.0f * kPi / 180.0f, 1.0f, zn, range);
-                for (int face = 0; face < 6; ++face)
-                {
-                    ShadowView view;
-                    view.viewProj = MatrixMultiply(MatrixLookToLH(position, kDirs[face], kUps[face]), proj);
-                    view.slice = nextLocalSlice + face;
-                    view.origin = position;
-                    view.radius = range;
-                    out.shadowViews.push_back(view);
-                    CopyMatrix(view.viewProj, cb.localShadowViewProj[nextLocalSlice + face]);
-                }
+                if (clustered.size() >= static_cast<size_t>(kMaxClusterLights))
+                    break;
+                clustered.push_back({ {}, candidate.center, candidate.radius, &light });
+                slot = &clustered.back().gpu;
             }
-            nextLocalSlice += needed;
+            GPULight& gpu = *slot;
+            PackLight(light, gpu);
+            if (!light.castShadows || out.shadows.cascadeCount == 0 || light.type != LightType::Directional || sunAssigned)
+                continue;
+            sunAssigned = true;
+            gpu.params[2] = 1.0f;
+
+            const Vector3 lightDir = LightDirection(light);
+            const float nearPlane = kCameraNearPlane;
+            const float farPlane = std::clamp(options.shadowDistance, 5.0f, kCameraFarPlane);
+            const int count = out.shadows.cascadeCount;
+            float splits[kMaxCascades + 1] = { nearPlane };
+            for (int i = 1; i <= count; ++i)
+            {
+                const float t = static_cast<float>(i) / static_cast<float>(count);
+                const float logSplit = nearPlane * std::pow(farPlane / nearPlane, t);
+                const float linearSplit = nearPlane + (farPlane - nearPlane) * t;
+                splits[i] = 0.8f * logSplit + 0.2f * linearSplit;
+            }
+            for (int i = 0; i < count; ++i)
+            {
+                float texel = 0.0f;
+                ShadowView view;
+                view.viewProj = BuildCascade(camera, aspect, splits[i], splits[i + 1], lightDir, out.shadows.cascadeResolution, texel);
+                view.slice = i;
+                view.cascade = true;
+                out.shadowViews.push_back(view);
+                CopyMatrix(view.viewProj, cb.cascadeViewProj[i]);
+                cb.cascadeSplits[i] = splits[i + 1];
+                cb.cascadeTexelSize[i] = texel;
+            }
+            cb.shadowParams[0] = static_cast<float>(count);
         }
         cb.lightCounts[0] = static_cast<float>(lightCount);
+
+        for (const ScenePointLight& light : pointLights)
+        {
+            ClusterCandidate c;
+            c.center = Vector3(light.position[0], light.position[1], light.position[2]);
+            c.radius = light.radius;
+            c.gpu.position[0] = c.center.x;
+            c.gpu.position[1] = c.center.y;
+            c.gpu.position[2] = c.center.z;
+            c.gpu.position[3] = std::max(light.radius, 0.01f);
+            for (int i = 0; i < 3; ++i)
+                c.gpu.color[i] = light.color[i] * kPi; // same radiance scale as regular lights
+            c.gpu.params[0] = static_cast<float>(LightType::Point);
+            c.gpu.params[2] = -1.0f;
+            clustered.push_back(c);
+        }
+        std::vector<const Light*> clusterSources;
+        BuildClusters(out, cameraData, clustered, clusterSources);
+        AssignLocalShadows(out, clusterSources, eye, cameraData.projection[5]);
         if (out.shadows.cascadeCount > 0)
         {
             cb.shadowParams[1] = 1.0f / static_cast<float>(out.shadows.cascadeResolution);
-            cb.shadowParams[2] = 1.0f / static_cast<float>(std::max(out.shadows.localResolution, 1));
+            cb.shadowParams[2] = 1.0f / static_cast<float>(std::max(out.shadows.atlasSize, 1));
             cb.shadowParams[3] = 1.0f;
         }
 

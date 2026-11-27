@@ -48,7 +48,7 @@ struct Light
     Transform transform;
     bool active = true;
     // The first shadowed directional light gets the sun cascades; spot and
-    // point lights share the local shadow slices (nearest to the camera first).
+    // point lights get tiles in the local shadow atlas (nearest to the camera first).
     bool castShadows = false;
 };
 

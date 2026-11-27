@@ -1055,6 +1055,11 @@ namespace kes::vk
         passInfo.dependencyCount = 2;
         passInfo.pDependencies = dependencies;
         VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &r.shadowRenderPass), "vkCreateRenderPass (shadow)", false);
+
+        // Local shadow atlas: tiles keep their contents across frames and are
+        // cleared one by one, so the pass loads.
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        VK_CHECK_RET(vkCreateRenderPass(r.device, &passInfo, nullptr, &r.shadowAtlasRenderPass), "vkCreateRenderPass (shadow atlas)", false);
         return true;
     }
 
@@ -2034,8 +2039,9 @@ namespace kes::vk
     static bool CreateShadowTargets(Renderer& r)
     {
         const render::ShadowConfig config = render::GetShadowConfig(r.options.shadowQuality);
+        render::InvalidateShadowCache(r.frame.shadowCache);
         const bool ok = CreateShadowArray(r, r.cascadeShadows, config.cascadeCount, config.cascadeResolution, true) &&
-            CreateShadowArray(r, r.localShadows, config.localSlices, config.localResolution, true);
+            CreateShadowArray(r, r.localShadows, config.atlasSize > 0 ? 1 : 0, config.atlasSize, true);
         r.globalSetDirty = true;
         if (!ok)
             EngineLog("Shadow map creation failed; shadows are off.");
@@ -3044,7 +3050,7 @@ namespace kes::vk
             UpdateDynamicRingDescriptorBinding(r, frame.uboDescriptorSet, 1, frame.modelCBRing);
             UpdateDynamicRingDescriptorBinding(r, frame.uboDescriptorSet, 2, frame.materialCBRing);
 
-            const VkDeviceSize lightBytes = sizeof(render::GPUClusterLight) * render::kMaxClusterLights;
+            const VkDeviceSize lightBytes = sizeof(render::GPULight) * render::kMaxClusterLights;
             const VkDeviceSize gridBytes = sizeof(uint32_t) * render::kClusterGridUints;
             if (!EnsureStreamBuffer(r, frame.clusterLights, lightBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) ||
                 !EnsureStreamBuffer(r, frame.clusterGrid, gridBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
@@ -3501,6 +3507,7 @@ namespace kes::vk
     static void DestroyRendererAssetCaches(Renderer& r)
     {
         KES_ZONE_FN(RENDER);
+        render::InvalidateShadowCache(r.frame.shadowCache);
         // Nothing here may be in flight: callers only invoke this outside of an
         // active frame (asset-generation change, or full shutdown).
         DestroyMaterialSets(r);
@@ -4076,28 +4083,8 @@ namespace kes::vk
         KES_ZONE(RENDER, "Shadow maps");
         KES_VK_GPU_ZONE(r, "Shadows");
 
-        for (const render::ShadowView& view : r.frame.shadowViews)
+        const auto drawCasters = [&](const render::ShadowView& view)
         {
-            GPUShadowArray& target = view.cascade ? r.cascadeShadows : r.localShadows;
-            if (view.slice >= static_cast<int>(target.framebuffers.size()))
-                continue;
-
-            VkClearValue clear = {};
-            clear.depthStencil = { 1.0f, 0 };
-            VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-            passBegin.renderPass = r.shadowRenderPass;
-            passBegin.framebuffer = target.framebuffers[static_cast<size_t>(view.slice)];
-            passBegin.renderArea.extent = { static_cast<uint32_t>(target.resolution), static_cast<uint32_t>(target.resolution) };
-            passBegin.clearValueCount = 1;
-            passBegin.pClearValues = &clear;
-            vkCmdBeginRenderPass(r.commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
-
-            const float size = static_cast<float>(target.resolution);
-            const VkViewport viewport = BuildFlippedViewport(size, size);
-            vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
-            const VkRect2D scissor = { { 0, 0 }, passBegin.renderArea.extent };
-            vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
-
             // The light's frustum (far plane = range for local lights) culls casters.
             const render::Frustum frustum = render::ExtractFrustum(view.viewProj);
             DrawState state;
@@ -4106,8 +4093,67 @@ namespace kes::vk
                 if (CastsShadows(item.material))
                     DrawSceneObject(r, state, item, view.viewProj, frustum, assets, true, false, false);
             }
+        };
+
+        VkClearValue clear = {};
+        clear.depthStencil = { 1.0f, 0 };
+        for (const render::ShadowView& view : r.frame.shadowViews)
+        {
+            if (!view.cascade || view.slice >= static_cast<int>(r.cascadeShadows.framebuffers.size()))
+                continue;
+            VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+            passBegin.renderPass = r.shadowRenderPass;
+            passBegin.framebuffer = r.cascadeShadows.framebuffers[static_cast<size_t>(view.slice)];
+            const uint32_t resolution = static_cast<uint32_t>(r.cascadeShadows.resolution);
+            passBegin.renderArea.extent = { resolution, resolution };
+            passBegin.clearValueCount = 1;
+            passBegin.pClearValues = &clear;
+            vkCmdBeginRenderPass(r.commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+            const float size = static_cast<float>(resolution);
+            const VkViewport viewport = BuildFlippedViewport(size, size);
+            vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
+            const VkRect2D scissor = { { 0, 0 }, passBegin.renderArea.extent };
+            vkCmdSetScissor(r.commandBuffer, 0, 1, &scissor);
+            drawCasters(view);
             vkCmdEndRenderPass(r.commandBuffer);
         }
+
+        // Local tiles: one pass over the atlas that keeps the cached tiles;
+        // each tile drawn now is cleared on its own first.
+        if (r.localShadows.framebuffers.empty())
+            return;
+        bool passOpen = false;
+        for (const render::ShadowView& view : r.frame.shadowViews)
+        {
+            if (view.cascade)
+                continue;
+            if (!passOpen)
+            {
+                VkRenderPassBeginInfo passBegin = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+                passBegin.renderPass = r.shadowAtlasRenderPass;
+                passBegin.framebuffer = r.localShadows.framebuffers[0];
+                const uint32_t atlas = static_cast<uint32_t>(r.localShadows.resolution);
+                passBegin.renderArea.extent = { atlas, atlas };
+                vkCmdBeginRenderPass(r.commandBuffer, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+                passOpen = true;
+            }
+            const VkRect2D tile = { { view.x, view.y }, { static_cast<uint32_t>(view.size), static_cast<uint32_t>(view.size) } };
+            VkClearAttachment clearAttachment = {};
+            clearAttachment.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            clearAttachment.clearValue = clear;
+            const VkClearRect clearRect = { tile, 0, 1 };
+            vkCmdClearAttachments(r.commandBuffer, 1, &clearAttachment, 1, &clearRect);
+
+            VkViewport viewport = BuildFlippedViewport(static_cast<float>(view.size), static_cast<float>(view.size));
+            viewport.x = static_cast<float>(view.x);
+            viewport.y += static_cast<float>(view.y);
+            vkCmdSetViewport(r.commandBuffer, 0, 1, &viewport);
+            vkCmdSetScissor(r.commandBuffer, 0, 1, &tile);
+            drawCasters(view);
+        }
+        if (passOpen)
+            vkCmdEndRenderPass(r.commandBuffer);
     }
 
     void RendererRenderScene(Renderer& r, const SceneState& scene, const Camera& camera, const Scene& sceneObj, const AssetSystem& assets)
@@ -4172,7 +4218,7 @@ namespace kes::vk
         if (!r.frame.clusterLights.empty())
         {
             FrameResources& frame = r.frames[r.frameIndex];
-            std::memcpy(frame.clusterLights.mapped, r.frame.clusterLights.data(), r.frame.clusterLights.size() * sizeof(render::GPUClusterLight));
+            std::memcpy(frame.clusterLights.mapped, r.frame.clusterLights.data(), r.frame.clusterLights.size() * sizeof(render::GPULight));
             std::memcpy(frame.clusterGrid.mapped, r.frame.clusterGrid.data(), r.frame.clusterGrid.size() * sizeof(uint32_t));
         }
 
@@ -4243,6 +4289,12 @@ namespace kes::vk
         if (!drawParticles)
             r.particleGeometry.draws.clear();
 
+        // Before reserving the per-draw constants: it decides how many shadow views there are.
+        if (r.cascadeShadows.arrayView && r.localShadows.arrayView)
+        {
+            render::GatherShadowCasters(opaqueItems, [](const MaterialData* m) { return CastsShadows(m); }, r.shadowCasters);
+            render::UpdateLocalShadows(r.frame, r.shadowCasters);
+        }
         if (!ReserveDynamicConstants(r))
             return;
 
@@ -4759,7 +4811,7 @@ namespace kes::vk
         DestroyPostProcessPipelines(r);
         DestroyBuffer(r, r.histogramBuffer, r.histogramMemory);
         DestroyBuffer(r, r.exposureStateBuffer, r.exposureStateMemory);
-        for (VkRenderPass* pass : { &r.sceneRenderPass, &r.shadowRenderPass, &r.backbufferRenderPass })
+        for (VkRenderPass* pass : { &r.sceneRenderPass, &r.shadowRenderPass, &r.shadowAtlasRenderPass, &r.backbufferRenderPass })
         {
             if (*pass)
             {
