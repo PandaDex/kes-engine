@@ -5,33 +5,12 @@
 #include <filesystem>
 #include <fstream>
 #include <SDL3/SDL.h>
-#include "binary_reader.h"
 #include "file_paths.h"
 #include "pak_file_system.h"
 #include "profiler.h"
 
 namespace
 {
-    static constexpr uint32_t kKTexMagic = 0x5845544Bu; // KTEX
-    static constexpr uint32_t kKTexVersion = 1u;
-
-    template<typename T>
-    static bool WriteValue(std::ofstream& file, const T& value)
-    {
-        file.write(reinterpret_cast<const char*>(&value), sizeof(T));
-        return file.good();
-    }
-
-    static bool WriteString(std::ofstream& file, const std::string& value)
-    {
-        const uint32_t length = (uint32_t)value.size();
-        if (!WriteValue(file, length))
-            return false;
-        if (length > 0)
-            file.write(value.data(), length);
-        return file.good();
-    }
-
     static std::string Lowercase(std::string value)
     {
         std::transform(value.begin(), value.end(), value.begin(),
@@ -87,6 +66,7 @@ namespace
         outTexture.format = TexturePixelFormat::RGBA8;
         outTexture.flags = TextureFileFlag_Srgb;
         outTexture.mipCount = 1;
+        outTexture.version = 1;
 
         const size_t rowBytes = static_cast<size_t>(converted->w) * 4u;
         outTexture.pixels.resize(static_cast<size_t>(converted->w) * static_cast<size_t>(converted->h) * 4u);
@@ -120,7 +100,7 @@ bool LoadTextureFile(const char* path, TextureFileData& outTexture, std::string*
     return false;
 }
 
-bool LoadKTexFile(const char* path, TextureFileData& outTexture, std::string* outError)
+bool LoadKTexFile(const char* path, TextureFileData& outTexture, std::string* outError, bool keepSource)
 {
     KES_ZONE_FN(ASSETS);
     KES_ZONE_TEXTF(ASSETS, "%s", path ? path : "<null>");
@@ -129,50 +109,7 @@ bool LoadKTexFile(const char* path, TextureFileData& outTexture, std::string* ou
     std::vector<uint8_t> fileBytes;
     if (!LoadAssetFileBytes(path, fileBytes, outError))
         return false;
-
-    const auto fail = [&](const char* message)
-    {
-        if (outError)
-            *outError = message;
-        outTexture = {};
-        return false;
-    };
-
-    BinaryReader file(fileBytes);
-    const uint32_t magic = file.u32();
-    const uint32_t version = file.u32();
-    if (!file.ok())
-        return fail("Failed to read texture header");
-    if (magic != kKTexMagic)
-        return fail("Invalid texture magic");
-    if (version != kKTexVersion)
-        return fail("Unsupported texture version");
-
-    outTexture.sourcePath = file.string();
-    outTexture.width = file.u32();
-    outTexture.height = file.u32();
-    const uint32_t format = file.u32();
-    outTexture.flags = file.u32();
-    outTexture.mipCount = file.u32();
-    const uint32_t pixelDataSize = file.u32();
-    if (!file.ok())
-        return fail("Failed to read texture header");
-
-    outTexture.format = static_cast<TexturePixelFormat>(format);
-    if (outTexture.format != TexturePixelFormat::RGBA8)
-        return fail("Unsupported texture pixel format");
-    if (outTexture.width == 0 || outTexture.height == 0 || outTexture.mipCount == 0)
-        return fail("Invalid texture dimensions");
-
-    const uint64_t minimumSize = static_cast<uint64_t>(outTexture.width) * static_cast<uint64_t>(outTexture.height) * 4u;
-    if (pixelDataSize < minimumSize)
-        return fail("Texture pixel payload is too small");
-    if (!file.count(pixelDataSize, 1))
-        return fail("Failed to read texture pixel payload");
-
-    outTexture.pixels.resize(pixelDataSize);
-    file.bytes(outTexture.pixels.data(), pixelDataSize);
-    return true;
+    return ReadKTex(fileBytes.data(), fileBytes.size(), outTexture, outError, keepSource);
 }
 
 bool SaveKTexFile(const char* path, const TextureFileData& texture, std::string* outError)
@@ -184,20 +121,9 @@ bool SaveKTexFile(const char* path, const TextureFileData& texture, std::string*
         return false;
     }
 
-    if (texture.format != TexturePixelFormat::RGBA8)
-    {
-        if (outError)
-            *outError = "Only RGBA8 textures are currently supported";
+    std::vector<uint8_t> bytes;
+    if (!WriteKTex(texture, bytes, outError))
         return false;
-    }
-
-    const size_t expectedPixelBytes = static_cast<size_t>(texture.width) * static_cast<size_t>(texture.height) * 4u;
-    if (texture.width == 0 || texture.height == 0 || texture.mipCount == 0 || texture.pixels.size() < expectedPixelBytes)
-    {
-        if (outError)
-            *outError = "Texture data is incomplete";
-        return false;
-    }
 
     const std::filesystem::path outputPath(path);
     if (!outputPath.parent_path().empty())
@@ -210,31 +136,12 @@ bool SaveKTexFile(const char* path, const TextureFileData& texture, std::string*
             *outError = "Failed to open texture output file";
         return false;
     }
-
-    const uint32_t format = static_cast<uint32_t>(texture.format);
-    const uint32_t pixelDataSize = static_cast<uint32_t>(texture.pixels.size());
-    if (!WriteValue(file, kKTexMagic) ||
-        !WriteValue(file, kKTexVersion) ||
-        !WriteString(file, texture.sourcePath) ||
-        !WriteValue(file, texture.width) ||
-        !WriteValue(file, texture.height) ||
-        !WriteValue(file, format) ||
-        !WriteValue(file, texture.flags) ||
-        !WriteValue(file, texture.mipCount) ||
-        !WriteValue(file, pixelDataSize))
-    {
-        if (outError)
-            *outError = "Failed to write texture header";
-        return false;
-    }
-
-    file.write(reinterpret_cast<const char*>(texture.pixels.data()), static_cast<std::streamsize>(texture.pixels.size()));
+    file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (!file.good())
     {
         if (outError)
-            *outError = "Failed to write texture pixel payload";
+            *outError = "Failed to write texture file";
         return false;
     }
-
     return true;
 }

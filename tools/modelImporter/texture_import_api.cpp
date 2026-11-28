@@ -1,8 +1,11 @@
 #include "texture_import_api.h"
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <vector>
 #include <windows.h>
 #include <wincodec.h>
+#include "texture_cook.h"
 #include "texture_file.h"
 
 namespace
@@ -48,7 +51,20 @@ bool CanImportTextureSource(const std::string& path)
     return extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".bmp" || extension == ".tif" || extension == ".tiff";
 }
 
-bool ImportTextureToKTex(const std::string& inputPath, const std::string& outputPath, std::string& error)
+static std::vector<TextureGroup> LoadProjectTextureGroups(const std::string& groupsPath)
+{
+    std::vector<TextureGroup> groups = DefaultTextureGroups();
+    if (!groupsPath.empty())
+    {
+        std::ifstream file(std::filesystem::path(groupsPath), std::ios::binary);
+        if (file)
+            ParseTextureGroups(std::string(std::istreambuf_iterator<char>(file), {}), groups);
+    }
+    return groups;
+}
+
+bool ImportTextureToKTex(const std::string& inputPath, const std::string& outputPath, std::string& error,
+    const TextureImportOptions& options)
 {
     if (!CanImportTextureSource(inputPath))
     {
@@ -172,22 +188,37 @@ bool ImportTextureToKTex(const std::string& inputPath, const std::string& output
         return false;
     }
 
-    TextureFileData texture = {};
-    texture.sourcePath = std::filesystem::path(inputPath).filename().string();
-    texture.width = width;
-    texture.height = height;
-    texture.format = TexturePixelFormat::RGBA8;
-    texture.flags = TextureFileFlag_Srgb;
-    texture.mipCount = 1;
-    texture.pixels = std::move(pixels);
-
-    const bool saved = SaveKTexFile(outputPath.c_str(), texture, &error);
-
     SafeRelease(converter);
     SafeRelease(frame);
     SafeRelease(decoder);
     SafeRelease(factory);
     if (shouldUninitialize)
         CoUninitialize();
-    return saved;
+
+    TextureFileData texture = {};
+    texture.sourcePath = std::filesystem::path(inputPath).filename().string();
+    {
+        std::ifstream source(std::filesystem::path(inputPath), std::ios::binary);
+        texture.sourceData.assign(std::istreambuf_iterator<char>(source), {});
+        if (texture.sourceData.empty())
+        {
+            error = "Failed to read source image";
+            return false;
+        }
+    }
+
+    // A re-import keeps the texture's settings, as in UE.
+    TextureFileData existing;
+    if (options.group.empty() && std::filesystem::exists(std::filesystem::path(outputPath)) &&
+        LoadKTexFile(outputPath.c_str(), existing) && existing.version >= 2)
+        texture.settings = existing.settings;
+    else
+        texture.settings.group = options.group.empty() ? GuessTextureGroup(inputPath) : options.group;
+
+    const std::vector<TextureGroup> groups = LoadProjectTextureGroups(options.groupsPath);
+    const TextureGroupSettings resolved = ResolveTextureSettings(texture.settings, groups);
+    if (!CookTexture(pixels.data(), width, height, resolved, texture, &error))
+        return false;
+    return SaveKTexFile(outputPath.c_str(), texture, &error);
 }
+

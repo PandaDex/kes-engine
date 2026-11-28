@@ -151,6 +151,18 @@ if(ENGINE_SHADERS_DIR AND EXISTS "${ENGINE_SHADERS_DIR}")
     file(COPY "${ENGINE_SHADERS_DIR}/" DESTINATION "${_work}/engine/engine/shaders")
 endif()
 
+# Texture source images (.ktex v2) are editor-only.
+execute_process(
+    COMMAND "${PAK_TOOL}" --strip-texture-sources "${_work}"
+    RESULT_VARIABLE _strip_result
+    OUTPUT_VARIABLE _strip_out
+    ERROR_VARIABLE _strip_err)
+if(NOT _strip_result EQUAL 0)
+    message(FATAL_ERROR "Stripping texture sources failed:\n${_strip_out}${_strip_err}")
+endif()
+string(STRIP "${_strip_out}" _strip_out)
+message(STATUS "${_strip_out}")
+
 if(CONTENT_MODE STREQUAL "loose")
     # The engine reads loose files under <exe>/content before any pak.
     file(COPY "${_work}/game/" DESTINATION "${_stage}/content")

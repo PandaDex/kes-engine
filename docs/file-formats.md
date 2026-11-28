@@ -388,36 +388,68 @@ Game code can change a slot at runtime with `SkinnedModelEntity::SetSlotMaterial
 
 ## Texture Files: `.ktex`
 
-`.ktex` is the runtime texture format.
+`.ktex` is the texture format: the cooked GPU data plus, in the editor, the texture's settings and its original image. Reader, writer and cooker are shared by the engine, the importer and the KES Editor (`engine/texture_format.h`, `engine/texture_cook.h`).
 
 Container info:
 
 - magic: `KTEX`
-- version: `1`
-- format type: binary
+- version: `2` (version `1` files still load, see below)
+- format type: binary, little endian
 
-Stored data:
+Stored data, in order:
 
-- `sourcePath`
-- `width`
-- `height`
-- `format`
-- `flags`
+- `sourcePath`: the original file name
+- `width`, `height`: mip 0 after cooking
+- `format`: `1` RGBA8, `2` BC1, `4` BC4, `5` BC5, `6` BC7
+- `flags`: sRGB, clamp / mirror U and V, point filtered, no anisotropy, no mip filter, normal map
 - `mipCount`
-- raw pixel bytes
+- pixel bytes: every mip, mip 0 first, tightly packed. BC mips take whole 4x4 blocks, so 2x2 and 1x1 mips are one block.
+- settings: text, `Group=<name>` plus the overridden keys of the table below
+- source image: the original file's bytes. Editor only: packaging strips it (`pak-tool --strip-texture-sources`).
 
-Current pixel format support:
+Version 1 files hold RGBA8 mip 0 only. The renderers make their mips at load and take the color space from the material slot, as before. Opening one in the Texture Editor cooks it, and saving writes version 2 with the old pixels as a PNG source.
 
-- `RGBA8`
+### Texture groups and settings
 
-Current authoring flags:
+As in UE, every texture belongs to a group, and each setting comes from the group unless the texture overrides it. The Texture Editor (double-click a `.ktex` in the Asset Browser) shows the group, the values in effect, and an override check box per setting. Every change re-cooks in the background so the preview shows the compressed result. Save writes the file.
 
-- sRGB
-- clamp U
-- clamp V
-- point filtered
+| Key | Values | |
+|---|---|---|
+| `Compression` | `Default` (BC7), `DefaultSmall` (BC1), `NormalMap` (BC5), `Masks` (BC7, linear), `Grayscale` (BC4), `UserInterface` (RGBA8), `Uncompressed` (RGBA8) | `NormalMap`, `Masks` and `Grayscale` are never sRGB |
+| `SRGB` | `True`, `False` | |
+| `MipGen` | `Box`, `NoMipmaps` | box filter in linear space; normal map mips are renormalized |
+| `MaxSize` | `0` (no limit), or the largest side | the top mips are dropped until it fits |
+| `LODBias` | `0` and up | top mips dropped when cooking |
+| `Filter` | `Default` (anisotropic), `Nearest`, `Bilinear`, `Trilinear` | |
+| `AddressU`, `AddressV` | `Wrap`, `Clamp`, `Mirror` | shown as Address X / Y in the editor |
 
-At the moment `.ktex` is an uncompressed engine texture container with metadata.
+Built-in groups:
+
+| Group | Compression | sRGB | Other |
+|---|---|---|---|
+| `World` | Default (BC7) | yes | |
+| `WorldNormalMap` | NormalMap (BC5) | no | |
+| `WorldMasks` | Masks (BC7) | no | metallic / roughness / occlusion packs |
+| `Grayscale` | Grayscale (BC4) | no | |
+| `Effects` | Default (BC7) | yes | |
+| `UI` | UserInterface (RGBA8) | yes | no mipmaps, bilinear, clamp |
+| `Pixel` | Uncompressed (RGBA8) | yes | no mipmaps, nearest |
+
+A project changes groups or adds its own in `config/TextureGroups.ini` next to the `.kproject`, with the keys above:
+
+```ini
+[Group.World]
+MaxSize=2048
+
+[Group.Terrain]
+Compression=DefaultSmall
+SRGB=True
+LODBias=1
+```
+
+The importer picks a new texture's group from its name: `_n`, `_nrm`, `_normal` -> `WorldNormalMap`; `_orm`, `_arm`, `_mr`, `_rough`, `_ao`, `_mask`, `_metal` -> `WorldMasks`; a `ui/` folder -> `UI`; anything else `World`. `model-importer --group=<name>` sets it. A re-import keeps the texture's settings.
+
+Normal maps store X and Y only (BC5); shaders rebuild Z with `KesUnpackNormal`, which reads RGBA8 normal maps the same way. Compression is Compressonator's CMP_Core (`external/compressonator`). A Vulkan device without BC support gets the textures decoded to RGBA8 at load.
 
 ## Sound Files: `.ksound`
 

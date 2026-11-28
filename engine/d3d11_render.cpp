@@ -837,9 +837,17 @@ namespace kes::d3d11
         return true;
     }
 
+    static void DestroyTextureSamplers(Renderer& r)
+    {
+        for (auto& [flags, sampler] : r.textureSamplers)
+            SafeRelease(sampler);
+        r.textureSamplers.clear();
+    }
+
     static bool CreateMaterialSampler(Renderer& r)
     {
         SafeRelease(r.materialSampler);
+        DestroyTextureSamplers(r);
         const int anisotropy = std::clamp(r.options.anisotropy, 1, 16);
         D3D11_SAMPLER_DESC samp = {};
         samp.Filter = anisotropy > 1 ? D3D11_FILTER_ANISOTROPIC : D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -855,6 +863,43 @@ namespace kes::d3d11
             return false;
         }
         return true;
+    }
+
+    static ID3D11SamplerState* GetTextureSampler(Renderer& r, uint32_t flags)
+    {
+        flags = TextureSamplerFlags(flags);
+        if (flags == 0)
+            return r.materialSampler;
+        auto it = r.textureSamplers.find(flags);
+        if (it != r.textureSamplers.end())
+            return it->second;
+
+        auto address = [](bool clamp, bool mirror)
+        {
+            return clamp ? D3D11_TEXTURE_ADDRESS_CLAMP : mirror ? D3D11_TEXTURE_ADDRESS_MIRROR : D3D11_TEXTURE_ADDRESS_WRAP;
+        };
+        const int anisotropy = std::clamp(r.options.anisotropy, 1, 16);
+        D3D11_SAMPLER_DESC samp = {};
+        if (flags & TextureFileFlag_PointFiltered)
+            samp.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+        else if (flags & TextureFileFlag_NoMipFilter)
+            samp.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+        else if (!(flags & TextureFileFlag_NoAnisotropy) && anisotropy > 1)
+            samp.Filter = D3D11_FILTER_ANISOTROPIC;
+        else
+            samp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        samp.MaxAnisotropy = samp.Filter == D3D11_FILTER_ANISOTROPIC ? static_cast<UINT>(anisotropy) : 1u;
+        samp.AddressU = address(flags & TextureFileFlag_ClampU, flags & TextureFileFlag_MirrorU);
+        samp.AddressV = address(flags & TextureFileFlag_ClampV, flags & TextureFileFlag_MirrorV);
+        samp.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        samp.MaxLOD = D3D11_FLOAT32_MAX;
+        ID3D11SamplerState* sampler = nullptr;
+        if (FAILED(r.device->CreateSamplerState(&samp, &sampler)))
+        {
+            EngineLogf("Create texture sampler (flags 0x%X) failed", flags);
+            return r.materialSampler;
+        }
+        return r.textureSamplers.emplace(flags, sampler).first->second;
     }
 
     static bool CreateSamplers(Renderer& r)
@@ -1352,7 +1397,8 @@ namespace kes::d3d11
 
     // Textures
 
-    static bool CreateTexture2D(Renderer& r, const std::vector<render::MipLevel>& levels, DXGI_FORMAT format, GPUTexture& out)
+    static bool CreateTexture2D(Renderer& r, const std::vector<render::MipLevel>& levels, DXGI_FORMAT format, GPUTexture& out,
+        TexturePixelFormat pixelFormat = TexturePixelFormat::RGBA8)
     {
         if (levels.empty())
             return false;
@@ -1370,7 +1416,7 @@ namespace kes::d3d11
         for (size_t i = 0; i < levels.size(); ++i)
         {
             init[i].pSysMem = levels[i].pixels.data();
-            init[i].SysMemPitch = levels[i].width * 4u;
+            init[i].SysMemPitch = TextureRowPitch(pixelFormat, levels[i].width);
         }
         HRESULT hr = r.device->CreateTexture2D(&desc, init.data(), &out.texture);
         if (SUCCEEDED(hr))
@@ -1393,24 +1439,35 @@ namespace kes::d3d11
         return CreateTexture2D(r, levels, DXGI_FORMAT_R8G8B8A8_UNORM, r.whiteTexture);
     }
 
-    // Material texture with mips, in the color space its slot needs. Failed loads
-    // are cached as empty so they aren't retried every frame.
-    static ID3D11ShaderResourceView* GetMaterialTexture(Renderer& r, const std::string& path, render::TextureUsage usage)
+    // Failed loads are cached as empty so they aren't retried every frame.
+    static ID3D11ShaderResourceView* GetMaterialTexture(Renderer& r, const std::string& path, render::TextureUsage usage,
+        uint32_t* outSamplerFlags = nullptr)
     {
+        if (outSamplerFlags)
+            *outSamplerFlags = 0;
         if (path.empty())
             return nullptr;
         const std::string key = std::to_string(static_cast<int>(usage)) + "|" + path;
         auto it = r.gpuTextures.find(key);
         if (it != r.gpuTextures.end())
+        {
+            if (outSamplerFlags)
+                *outSamplerFlags = it->second.samplerFlags;
             return it->second.srv;
+        }
 
         KES_ZONE(RENDER, "Load material texture (cache miss)");
         KES_ZONE_TEXTF(RENDER, "%s", path.c_str());
         GPUTexture texture = {};
         TextureFileData file = {};
         std::string error;
-        if (LoadTextureFile(path.c_str(), file, &error) && file.pixels.size() >= static_cast<size_t>(file.width) * file.height * 4u)
+        if (!LoadTextureFile(path.c_str(), file, &error))
         {
+            EngineLogf("LoadTextureFile failed for %s: %s", path.c_str(), error.c_str());
+        }
+        else if (file.version < 2)
+        {
+            // Version 1: RGBA8 mip 0 only, mips and color space from the slot.
             std::vector<render::MipLevel> levels;
             render::GenerateMips(file.pixels.data(), file.width, file.height, usage, levels);
             const DXGI_FORMAT format = usage == render::TextureUsage::Color ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1418,8 +1475,30 @@ namespace kes::d3d11
         }
         else
         {
-            EngineLogf("LoadTextureFile failed for %s: %s", path.c_str(), error.c_str());
+            // Feature level 11_0 is required, so every BC format can be sampled.
+            const bool srgb = (file.flags & TextureFileFlag_Srgb) != 0;
+            std::vector<render::MipLevel> levels(file.mipCount);
+            for (uint32_t mip = 0; mip < file.mipCount; ++mip)
+            {
+                levels[mip].width = TextureMipWidth(file.width, mip);
+                levels[mip].height = TextureMipWidth(file.height, mip);
+                const uint8_t* begin = file.pixels.data() + TextureMipOffset(file, mip);
+                levels[mip].pixels.assign(begin, begin + TextureMipByteSize(file.format, levels[mip].width, levels[mip].height));
+            }
+            DXGI_FORMAT format = srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+            switch (file.format)
+            {
+            case TexturePixelFormat::BC1: format = srgb ? DXGI_FORMAT_BC1_UNORM_SRGB : DXGI_FORMAT_BC1_UNORM; break;
+            case TexturePixelFormat::BC4: format = DXGI_FORMAT_BC4_UNORM; break;
+            case TexturePixelFormat::BC5: format = DXGI_FORMAT_BC5_UNORM; break;
+            case TexturePixelFormat::BC7: format = srgb ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM; break;
+            case TexturePixelFormat::RGBA8: break;
+            }
+            CreateTexture2D(r, levels, format, texture, file.format);
         }
+        texture.samplerFlags = TextureSamplerFlags(file.flags);
+        if (outSamplerFlags)
+            *outSamplerFlags = texture.samplerFlags;
         return r.gpuTextures.emplace(key, texture).first->second.srv;
     }
 
@@ -1428,6 +1507,7 @@ namespace kes::d3d11
     static uint32_t BindMaterialTextures(Renderer& r, const MaterialData* material)
     {
         ID3D11ShaderResourceView* views[render::kMaterialTextureCount] = {};
+        uint32_t samplerFlags[render::kMaterialTextureCount] = {};
         uint32_t flags = 0;
         if (material)
         {
@@ -1445,7 +1525,7 @@ namespace kes::d3d11
             };
             for (int i = 0; i < render::kMaterialTextureCount; ++i)
             {
-                views[i] = GetMaterialTexture(r, *slots[i].path, slots[i].usage);
+                views[i] = GetMaterialTexture(r, *slots[i].path, slots[i].usage, &samplerFlags[i]);
                 if (views[i])
                     flags |= slots[i].flag;
             }
@@ -1456,6 +1536,10 @@ namespace kes::d3d11
                 view = r.whiteTexture.srv;
         }
         r.context->PSSetShaderResources(0, render::kMaterialTextureCount, views);
+        ID3D11SamplerState* samplers[render::kMaterialTextureCount] = {};
+        for (int i = 0; i < render::kMaterialTextureCount; ++i)
+            samplers[i] = GetTextureSampler(r, samplerFlags[i]);
+        r.context->PSSetSamplers(0, render::kMaterialTextureCount, samplers);
         return flags;
     }
 
@@ -2917,6 +3001,7 @@ namespace kes::d3d11
         DestroyRendererAssetCaches(r);
         r.assetGeneration = 0;
 
+        DestroyTextureSamplers(r);
         SafeRelease(r.materialSampler);
         SafeRelease(r.linearClampSampler);
         SafeRelease(r.shadowSampler);

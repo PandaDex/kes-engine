@@ -128,6 +128,10 @@ add_library(engine ${_kes_engine_type}
     "material_file.cpp"
     "texture_file.h"
     "texture_file.cpp"
+    "texture_format.h"
+    "texture_format.cpp"
+    "texture_cook.h"
+    "texture_cook.cpp"
     "sound_file.h"
     "sound_file.cpp"
     "qoa_codec.c"
@@ -195,6 +199,8 @@ target_link_libraries(engine PRIVATE box3d::box3d)
 
 # LOD generation (cmake/KesMeshOptimizer.cmake)
 target_link_libraries(engine PRIVATE meshoptimizer)
+
+target_link_libraries(engine PRIVATE CMP_Core)
 
 # Crash reporting (KES_CRASH_REPORTER, cmake/KesCrash.cmake)
 kes_target_crash_reporter(engine)

@@ -27,6 +27,7 @@
 #include "logger.h"
 #include "pak_file_system.h"
 #include "profiler.h"
+#include "texture_cook.h"
 #include "texture_file.h"
 
 namespace
@@ -276,11 +277,19 @@ namespace
 
             TextureFileData texture;
             std::string error;
-            if (!LoadTextureFile(source.c_str(), texture, &error) || texture.pixels.size() < size_t(texture.width) * texture.height * 4u)
+            if (!LoadTextureFile(source.c_str(), texture, &error))
             {
                 Rml::Log::Message(Rml::Log::LT_WARNING, "Could not load image '%s': %s", source.c_str(), error.c_str());
                 return 0;
             }
+            // Non-RGBA8 textures are decoded, mip 0 only.
+            std::vector<uint8_t> rgba;
+            if (!DecodeTextureMip(texture, 0, rgba))
+            {
+                Rml::Log::Message(Rml::Log::LT_WARNING, "Could not decode image '%s'", source.c_str());
+                return 0;
+            }
+            texture.pixels = std::move(rgba);
 
             uint8_t* pixel = texture.pixels.data();
             const size_t pixelCount = size_t(texture.width) * texture.height;

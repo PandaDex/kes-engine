@@ -58,21 +58,31 @@ int main(int argc, char* argv[])
     ModelImportOptions modelOptions;
     modelOptions.mesh = !takeFlag("--no-mesh");
     modelOptions.animations = !takeFlag("--no-anims");
-    for (auto it = args.begin(); it != args.end(); ++it)
+    TextureImportOptions textureOptions;
+    for (auto it = args.begin(); it != args.end();)
     {
         if (it->rfind("--lods=", 0) == 0)
-        {
             modelOptions.autoLodCount = std::clamp(std::atoi(it->c_str() + 7), 0, 8);
-            args.erase(it);
-            break;
+        else if (it->rfind("--group=", 0) == 0)
+            textureOptions.group = it->substr(8);
+        else if (it->rfind("--texture-groups=", 0) == 0)
+            textureOptions.groupsPath = it->substr(17);
+        else
+        {
+            ++it;
+            continue;
         }
+        it = args.erase(it);
     }
     if (args.size() < 1 || args.size() > 2)
     {
-        std::cout << "Usage: model-importer [-assetpath <content-root>] [--pcm] [--no-mesh] [--no-anims] [--lods=N] <input> [output]\n"
+        std::cout << "Usage: model-importer [-assetpath <content-root>] [--pcm] [--no-mesh] [--no-anims] [--lods=N]\n"
+                     "                      [--group=<texture group>] [--texture-groups=<TextureGroups.ini>] <input> [output]\n"
                      "  --no-mesh   write only the .kanim clips; if <output> exists they are matched to its nodes by name\n"
                      "  --no-anims  write only the .kmodel\n"
-                     "  --lods=N    generate N LODs (0 removes them); a re-import without it keeps the existing setting\n";
+                     "  --lods=N    generate N LODs (0 removes them); a re-import without it keeps the existing setting\n"
+                     "  --group     texture group; without it a re-import keeps the texture's settings and a new\n"
+                     "              texture's group comes from its name (_n -> WorldNormalMap, _orm -> WorldMasks, ...)\n";
         return 1;
     }
 
@@ -98,7 +108,7 @@ int main(int argc, char* argv[])
         imported = ImportModelToKModel(inputPath, outputPath.string(), error, modelOptions);
         break;
     case ImportKind::Texture:
-        imported = ImportTextureToKTex(inputPath, outputPath.string(), error);
+        imported = ImportTextureToKTex(inputPath, outputPath.string(), error, textureOptions);
         break;
     case ImportKind::Sound:
         imported = ImportSoundToKSound(inputPath, outputPath.string(), error, !soundPcm);

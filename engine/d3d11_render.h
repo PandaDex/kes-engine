@@ -92,6 +92,7 @@ namespace kes::d3d11
     {
         ID3D11Texture2D* texture = nullptr;
         ID3D11ShaderResourceView* srv = nullptr;
+        uint32_t samplerFlags = 0;
     };
 
     // Depth texture array with one depth view per slice (shadow maps).
@@ -270,6 +271,7 @@ namespace kes::d3d11
         ID3D11DepthStencilState* depthAlwaysState = nullptr; // clears shadow atlas tiles
 
         ID3D11SamplerState* materialSampler = nullptr; // anisotropic, wrap (s0-s4)
+        std::unordered_map<uint32_t, ID3D11SamplerState*> textureSamplers;
         ID3D11SamplerState* linearClampSampler = nullptr; // environment, tonemap, UI (s5)
         ID3D11SamplerState* shadowSampler = nullptr; // comparison PCF (s6)
         GPUTexture whiteTexture = {};

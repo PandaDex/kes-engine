@@ -14,6 +14,7 @@
 #include "scene.h"
 #include "asset_system.h"
 #include "engine_configuration.h"
+#include "texture_cook.h"
 #include "texture_file.h"
 #include "logger.h"
 #include "pak_file_system.h"
@@ -395,7 +396,6 @@ namespace kes::vk
         return true;
     }
 
-    // Uploads an RGBA8 mip chain as a sampled 2D texture.
     static bool CreateTexture2D(Renderer& r, const std::vector<render::MipLevel>& levels, VkFormat format, GPUTexture& out)
     {
         if (levels.empty())
@@ -702,6 +702,10 @@ namespace kes::vk
         features.fillModeNonSolid = supported.fillModeNonSolid; // wireframe rasterizer variants (F1 debug toggle)
         features.samplerAnisotropy = supported.samplerAnisotropy;
         features.depthBiasClamp = supported.depthBiasClamp;
+        features.textureCompressionBC = supported.textureCompressionBC;
+        r.bcSupported = supported.textureCompressionBC == VK_TRUE;
+        if (!r.bcSupported)
+            EngineLogf("Vulkan: no BC texture support, compressed textures are decoded to RGBA8 at load.");
         r.depthBiasClampSupported = supported.depthBiasClamp == VK_TRUE;
         r.anisotropySupported = supported.samplerAnisotropy == VK_TRUE;
 
@@ -1094,6 +1098,13 @@ namespace kes::vk
 
     // Samplers
 
+    static void DestroyTextureSamplers(Renderer& r)
+    {
+        for (auto& [flags, sampler] : r.textureSamplers)
+            vkDestroySampler(r.device, sampler, nullptr);
+        r.textureSamplers.clear();
+    }
+
     static bool CreateMaterialSampler(Renderer& r)
     {
         if (r.materialSampler)
@@ -1101,6 +1112,7 @@ namespace kes::vk
             vkDestroySampler(r.device, r.materialSampler, nullptr);
             r.materialSampler = VK_NULL_HANDLE;
         }
+        DestroyTextureSamplers(r);
         const float anisotropy = std::min(static_cast<float>(std::clamp(r.options.anisotropy, 1, 16)),
             r.physicalDeviceProperties.limits.maxSamplerAnisotropy);
         VkSamplerCreateInfo info = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
@@ -1115,6 +1127,41 @@ namespace kes::vk
         info.maxLod = VK_LOD_CLAMP_NONE;
         VK_CHECK_RET(vkCreateSampler(r.device, &info, nullptr, &r.materialSampler), "vkCreateSampler (material)", false);
         return true;
+    }
+
+    static VkSampler GetTextureSampler(Renderer& r, uint32_t flags)
+    {
+        flags = TextureSamplerFlags(flags);
+        if (flags == 0)
+            return r.materialSampler;
+        auto it = r.textureSamplers.find(flags);
+        if (it != r.textureSamplers.end())
+            return it->second;
+
+        auto address = [](bool clamp, bool mirror)
+        {
+            return clamp ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : mirror ? VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        };
+        const bool point = (flags & TextureFileFlag_PointFiltered) != 0;
+        const float anisotropy = std::min(static_cast<float>(std::clamp(r.options.anisotropy, 1, 16)),
+            r.physicalDeviceProperties.limits.maxSamplerAnisotropy);
+        VkSamplerCreateInfo info = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+        info.magFilter = point ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+        info.minFilter = point ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+        info.mipmapMode = point || (flags & TextureFileFlag_NoMipFilter) ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        info.addressModeU = address(flags & TextureFileFlag_ClampU, flags & TextureFileFlag_MirrorU);
+        info.addressModeV = address(flags & TextureFileFlag_ClampV, flags & TextureFileFlag_MirrorV);
+        info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        info.anisotropyEnable = !(flags & TextureFileFlag_NoAnisotropy) && r.anisotropySupported && anisotropy > 1.0f ? VK_TRUE : VK_FALSE;
+        info.maxAnisotropy = info.anisotropyEnable ? anisotropy : 1.0f;
+        info.maxLod = VK_LOD_CLAMP_NONE;
+        VkSampler sampler = VK_NULL_HANDLE;
+        if (vkCreateSampler(r.device, &info, nullptr, &sampler) != VK_SUCCESS)
+        {
+            EngineLogf("vkCreateSampler (texture flags 0x%X) failed", flags);
+            return r.materialSampler;
+        }
+        return r.textureSamplers.emplace(flags, sampler).first->second;
     }
 
     static bool CreateSamplers(Renderer& r)
@@ -3384,24 +3431,66 @@ namespace kes::vk
         return CreateTexture2D(r, levels, VK_FORMAT_R8G8B8A8_UNORM, r.whiteTexture);
     }
 
-    // Material texture with mips, in the color space its slot needs. Failed loads
-    // are cached as empty so they aren't retried every frame.
-    static VkImageView GetMaterialTexture(Renderer& r, const std::string& path, render::TextureUsage usage)
+    // BC is decoded to RGBA8 when the device can't sample it.
+    static VkFormat CookedTextureLevels(Renderer& r, const TextureFileData& file, std::vector<render::MipLevel>& levels)
     {
+        const bool srgb = (file.flags & TextureFileFlag_Srgb) != 0;
+        const bool decode = IsBlockCompressed(file.format) && !r.bcSupported;
+        levels.resize(file.mipCount);
+        for (uint32_t mip = 0; mip < file.mipCount; ++mip)
+        {
+            render::MipLevel& level = levels[mip];
+            level.width = TextureMipWidth(file.width, mip);
+            level.height = TextureMipWidth(file.height, mip);
+            if (decode)
+            {
+                DecodeTextureMipRaw(file, mip, level.pixels);
+                continue;
+            }
+            const uint8_t* begin = file.pixels.data() + TextureMipOffset(file, mip);
+            level.pixels.assign(begin, begin + TextureMipByteSize(file.format, level.width, level.height));
+        }
+        if (decode)
+            return srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        switch (file.format)
+        {
+        case TexturePixelFormat::BC1: return srgb ? VK_FORMAT_BC1_RGBA_SRGB_BLOCK : VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+        case TexturePixelFormat::BC4: return VK_FORMAT_BC4_UNORM_BLOCK;
+        case TexturePixelFormat::BC5: return VK_FORMAT_BC5_UNORM_BLOCK;
+        case TexturePixelFormat::BC7: return srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+        case TexturePixelFormat::RGBA8: break;
+        }
+        return srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+    }
+
+    // Failed loads are cached as empty so they aren't retried every frame.
+    static VkImageView GetMaterialTexture(Renderer& r, const std::string& path, render::TextureUsage usage, uint32_t* outSamplerFlags = nullptr)
+    {
+        if (outSamplerFlags)
+            *outSamplerFlags = 0;
         if (path.empty())
             return VK_NULL_HANDLE;
         const std::string key = std::to_string(static_cast<int>(usage)) + "|" + path;
         auto it = r.gpuTextures.find(key);
         if (it != r.gpuTextures.end())
+        {
+            if (outSamplerFlags)
+                *outSamplerFlags = it->second.samplerFlags;
             return it->second.view;
+        }
 
         KES_ZONE(RENDER, "Load material texture (cache miss)");
         KES_ZONE_TEXTF(RENDER, "%s", path.c_str());
         GPUTexture texture = {};
         TextureFileData file = {};
         std::string error;
-        if (LoadTextureFile(path.c_str(), file, &error) && file.pixels.size() >= static_cast<size_t>(file.width) * file.height * 4u)
+        if (!LoadTextureFile(path.c_str(), file, &error))
         {
+            EngineLogf("LoadTextureFile failed for %s: %s", path.c_str(), error.c_str());
+        }
+        else if (file.version < 2)
+        {
+            // Version 1: RGBA8 mip 0 only, mips and color space from the slot.
             std::vector<render::MipLevel> levels;
             render::GenerateMips(file.pixels.data(), file.width, file.height, usage, levels);
             const VkFormat format = usage == render::TextureUsage::Color ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
@@ -3409,8 +3498,13 @@ namespace kes::vk
         }
         else
         {
-            EngineLogf("LoadTextureFile failed for %s: %s", path.c_str(), error.c_str());
+            std::vector<render::MipLevel> levels;
+            const VkFormat format = CookedTextureLevels(r, file, levels);
+            CreateTexture2D(r, levels, format, texture);
         }
+        texture.samplerFlags = TextureSamplerFlags(file.flags);
+        if (outSamplerFlags)
+            *outSamplerFlags = texture.samplerFlags;
         return r.gpuTextures.emplace(key, texture).first->second.view;
     }
 
@@ -3453,10 +3547,11 @@ namespace kes::vk
         VkDescriptorImageInfo images[render::kMaterialTextureCount] = {};
         for (int i = 0; i < render::kMaterialTextureCount; ++i)
         {
-            VkImageView view = GetMaterialTexture(r, *slots[i].path, slots[i].usage);
+            uint32_t samplerFlags = 0;
+            VkImageView view = GetMaterialTexture(r, *slots[i].path, slots[i].usage, &samplerFlags);
             if (view)
                 entry.textureFlags |= slots[i].flag;
-            images[i] = { r.materialSampler, view ? view : r.whiteTexture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            images[i] = { GetTextureSampler(r, samplerFlags), view ? view : r.whiteTexture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         }
         entry.set = AllocateDescriptorSet(r, r.materialSetLayout);
         if (entry.set)
@@ -5355,6 +5450,7 @@ namespace kes::vk
                 *layout = VK_NULL_HANDLE;
             }
         }
+        DestroyTextureSamplers(r);
         for (VkSampler* sampler : { &r.materialSampler, &r.linearSampler, &r.shadowSampler })
         {
             if (*sampler)

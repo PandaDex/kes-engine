@@ -5,6 +5,7 @@
 #include "animation_clip.h"
 #include "kmodel.h"
 #include "sound_file.h"
+#include "texture_cook.h"
 #include "texture_file.h"
 
 namespace
@@ -503,4 +504,196 @@ TEST_CASE("ktex: rejects truncated and foreign files")
     const std::string path = dir.File("checker.ktex");
     REQUIRE(SaveKTexFile(path.c_str(), MakeTexture()));
     CheckRejectsCorruption(dir, path, LoadTexture);
+}
+
+namespace
+{
+    // Smooth gradient with a soft alpha ramp: BC formats should land close to it.
+    std::vector<uint8_t> MakeGradient(uint32_t width, uint32_t height)
+    {
+        std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4);
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            for (uint32_t x = 0; x < width; ++x)
+            {
+                uint8_t* p = &rgba[(static_cast<size_t>(y) * width + x) * 4];
+                p[0] = static_cast<uint8_t>(x * 255 / (width - 1));
+                p[1] = static_cast<uint8_t>(y * 255 / (height - 1));
+                p[2] = 128;
+                p[3] = static_cast<uint8_t>(255 - x * 128 / (width - 1));
+            }
+        }
+        return rgba;
+    }
+
+    int MaxChannelError(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, int channels)
+    {
+        int worst = 0;
+        for (size_t i = 0; i < a.size() && i < b.size(); i += 4)
+        {
+            for (int c = 0; c < channels; ++c)
+                worst = std::max(worst, std::abs(int(a[i + c]) - int(b[i + c])));
+        }
+        return worst;
+    }
+
+    TextureFileData CookWith(TextureCompression compression, uint32_t width = 64, uint32_t height = 32)
+    {
+        TextureGroupSettings settings;
+        settings.compression = compression;
+        settings.srgb = compression == TextureCompression::Default;
+        const std::vector<uint8_t> rgba = MakeGradient(width, height);
+        TextureFileData texture;
+        CookTexture(rgba.data(), width, height, settings, texture);
+        return texture;
+    }
+}
+
+TEST_CASE("ktex: settings text round trips only the overridden keys")
+{
+    TextureSettings settings;
+    settings.group = "WorldNormalMap";
+    settings.overrides = TextureSetting_MaxSize | TextureSetting_AddressU;
+    settings.values.maxSize = 512;
+    settings.values.addressU = TextureAddress::Mirror;
+    settings.values.lodBias = 3; // not overridden, so not written
+    const std::string text = SerializeTextureSettings(settings);
+    CHECK(text.find("LODBias") == std::string::npos);
+
+    const TextureSettings parsed = ParseTextureSettings(text);
+    CHECK(parsed.group == "WorldNormalMap");
+    CHECK(parsed.overrides == settings.overrides);
+    CHECK(parsed.values.maxSize == 512);
+    CHECK(parsed.values.addressU == TextureAddress::Mirror);
+}
+
+TEST_CASE("ktex: groups resolve, project ini overrides and adds groups")
+{
+    std::vector<TextureGroup> groups = DefaultTextureGroups();
+    ParseTextureGroups("[Group.World]\nMaxSize=1024\n\n[Group.Terrain]\nCompression=DefaultSmall\nSRGB=True\nLODBias=1\n", groups);
+    REQUIRE(FindTextureGroup(groups, "terrain") != nullptr);
+
+    TextureSettings world;
+    CHECK(ResolveTextureSettings(world, groups).maxSize == 1024);
+
+    TextureSettings terrain;
+    terrain.group = "Terrain";
+    const TextureGroupSettings t = ResolveTextureSettings(terrain, groups);
+    CHECK(t.compression == TextureCompression::DefaultSmall);
+    CHECK(t.lodBias == 1);
+
+    // A normal map is never sRGB, whatever the override says.
+    TextureSettings normal;
+    normal.group = "WorldNormalMap";
+    normal.overrides = TextureSetting_Srgb;
+    normal.values.srgb = true;
+    CHECK(!ResolveTextureSettings(normal, groups).srgb);
+
+    TextureSettings unknown;
+    unknown.group = "Missing";
+    CHECK(ResolveTextureSettings(unknown, groups).compression == TextureCompression::Default);
+}
+
+TEST_CASE("ktex: import picks a group from the file name")
+{
+    CHECK(GuessTextureGroup("textures/Brick_N.png") == "WorldNormalMap");
+    CHECK(GuessTextureGroup("C:\\art\\brick_normal.tga") == "WorldNormalMap");
+    CHECK(GuessTextureGroup("brick_ORM.png") == "WorldMasks");
+    CHECK(GuessTextureGroup("brick_roughness.png") == "WorldMasks");
+    CHECK(GuessTextureGroup("ui/button.png") == "UI");
+    CHECK(GuessTextureGroup("brick.png") == "World");
+    CHECK(GuessTextureGroup("_n.png") == "World");
+}
+
+TEST_CASE("ktex: cooking builds the mip chain in the group's format")
+{
+    const TextureFileData bc7 = CookWith(TextureCompression::Default);
+    CHECK(bc7.format == TexturePixelFormat::BC7);
+    CHECK(bc7.mipCount == 7); // 64x32 .. 1x1
+    CHECK((bc7.flags & TextureFileFlag_Srgb) != 0);
+    CHECK(bc7.pixels.size() == TextureMipOffset(bc7, bc7.mipCount));
+    // 1x1 and 2x2 mips still take a whole block
+    CHECK(TextureMipByteSize(TexturePixelFormat::BC7, 1, 1) == 16);
+    CHECK(TextureMipByteSize(TexturePixelFormat::BC1, 6, 5) == 2 * 2 * 8);
+
+    CHECK(CookWith(TextureCompression::DefaultSmall).format == TexturePixelFormat::BC1);
+    CHECK(CookWith(TextureCompression::Grayscale).format == TexturePixelFormat::BC4);
+    const TextureFileData normal = CookWith(TextureCompression::NormalMap);
+    CHECK(normal.format == TexturePixelFormat::BC5);
+    CHECK((normal.flags & TextureFileFlag_NormalMap) != 0);
+    CHECK(CookWith(TextureCompression::UserInterface).format == TexturePixelFormat::RGBA8);
+}
+
+TEST_CASE("ktex: BC formats decode close to the source")
+{
+    const std::vector<uint8_t> source = MakeGradient(64, 32);
+    std::vector<uint8_t> decoded;
+
+    REQUIRE(DecodeTextureMip(CookWith(TextureCompression::Default), 0, decoded));
+    CHECK(decoded.size() == source.size());
+    CHECK(MaxChannelError(source, decoded, 4) <= 12);
+
+    REQUIRE(DecodeTextureMip(CookWith(TextureCompression::DefaultSmall), 0, decoded));
+    CHECK(MaxChannelError(source, decoded, 3) <= 24);
+
+    REQUIRE(DecodeTextureMipRaw(CookWith(TextureCompression::Grayscale), 0, decoded));
+    CHECK(MaxChannelError(source, decoded, 1) <= 8);
+    CHECK(decoded[1] == 0);
+
+    REQUIRE(DecodeTextureMipRaw(CookWith(TextureCompression::NormalMap), 0, decoded));
+    CHECK(MaxChannelError(source, decoded, 2) <= 8);
+
+    // Odd sizes: the last partial blocks are cropped.
+    REQUIRE(DecodeTextureMip(CookWith(TextureCompression::Default, 13, 7), 0, decoded));
+    CHECK(decoded.size() == 13u * 7u * 4u);
+}
+
+TEST_CASE("ktex: max size and LOD bias drop the top mips")
+{
+    TextureGroupSettings settings;
+    settings.compression = TextureCompression::Uncompressed;
+    settings.maxSize = 32;
+    settings.lodBias = 1;
+    const std::vector<uint8_t> rgba = MakeGradient(128, 64);
+    TextureFileData texture;
+    REQUIRE(CookTexture(rgba.data(), 128, 64, settings, texture));
+    CHECK(texture.width == 16);
+    CHECK(texture.height == 8);
+    CHECK(texture.mipCount == 5);
+
+    settings.mipGen = TextureMipGen::NoMipmaps;
+    REQUIRE(CookTexture(rgba.data(), 128, 64, settings, texture));
+    CHECK(texture.mipCount == 1);
+}
+
+TEST_CASE("ktex: v2 keeps settings and source, packaging strips the source")
+{
+    TextureFileData texture = CookWith(TextureCompression::NormalMap);
+    texture.sourcePath = "brick_n.png";
+    texture.settings.group = "WorldNormalMap";
+    texture.settings.overrides = TextureSetting_MaxSize;
+    texture.settings.values.maxSize = 256;
+    texture.sourceData = { 0x89, 'P', 'N', 'G', 1, 2, 3 };
+
+    std::vector<uint8_t> bytes;
+    REQUIRE(WriteKTex(texture, bytes, nullptr));
+    TextureFileData loaded;
+    REQUIRE(ReadKTex(bytes.data(), bytes.size(), loaded, nullptr));
+    CHECK(loaded.version == 2);
+    CHECK(loaded.format == TexturePixelFormat::BC5);
+    CHECK(loaded.mipCount == texture.mipCount);
+    CHECK(loaded.pixels == texture.pixels);
+    CHECK(loaded.settings.group == "WorldNormalMap");
+    CHECK(loaded.settings.values.maxSize == 256);
+    CHECK(loaded.sourceData == texture.sourceData);
+
+    REQUIRE(ReadKTex(bytes.data(), bytes.size(), loaded, nullptr, false));
+    CHECK(loaded.sourceData.empty());
+
+    std::vector<uint8_t> stripped;
+    REQUIRE(WriteKTex(texture, stripped, nullptr, true));
+    CHECK(stripped.size() == bytes.size() - texture.sourceData.size());
+    REQUIRE(ReadKTex(stripped.data(), stripped.size(), loaded, nullptr));
+    CHECK(loaded.sourceData.empty());
+    CHECK(loaded.pixels == texture.pixels);
 }

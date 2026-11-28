@@ -1,9 +1,13 @@
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "pak_file_system.h"
+#include "texture_format.h"
 
 namespace
 {
@@ -19,6 +23,7 @@ namespace
         std::cout << "Usage:\n";
         std::cout << "  Pack:   pak-tool <source-dir> <output.pak> [--encrypt <hex-key> | --generate-key]\n";
         std::cout << "  Unpack: pak-tool --unpack <input.pak> <output-dir> [--decrypt <hex-key>]\n";
+        std::cout << "  Strip:  pak-tool --strip-texture-sources <dir>   (removes editor-only source images from every .ktex)\n";
         std::cout << "\nExamples:\n";
         std::cout << "  pak-tool game/assets out/content/game_data0.pak\n";
         std::cout << "  pak-tool game/assets out/content/game_data0.pak --generate-key\n";
@@ -28,6 +33,49 @@ namespace
     }
 
     enum class Mode { Pack, Unpack };
+
+    int StripTextureSources(const std::filesystem::path& dir)
+    {
+        namespace fs = std::filesystem;
+        size_t stripped = 0;
+        uint64_t saved = 0;
+        for (const fs::directory_entry& entry : fs::recursive_directory_iterator(dir))
+        {
+            if (!entry.is_regular_file() || entry.path().extension() != ".ktex")
+                continue;
+            std::vector<uint8_t> bytes;
+            {
+                std::ifstream in(entry.path(), std::ios::binary);
+                bytes.assign(std::istreambuf_iterator<char>(in), {});
+            }
+            TextureFileData texture;
+            std::string error;
+            if (!ReadKTex(bytes.data(), bytes.size(), texture, &error))
+            {
+                std::cerr << "Invalid texture " << entry.path().string() << ": " << error << "\n";
+                return 1;
+            }
+            if (texture.version < 2 || texture.sourceData.empty())
+                continue;
+            std::vector<uint8_t> out;
+            if (!WriteKTex(texture, out, &error, true))
+            {
+                std::cerr << "Failed to rewrite " << entry.path().string() << ": " << error << "\n";
+                return 1;
+            }
+            std::ofstream file(entry.path(), std::ios::binary | std::ios::trunc);
+            file.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+            if (!file.good())
+            {
+                std::cerr << "Failed to write " << entry.path().string() << "\n";
+                return 1;
+            }
+            ++stripped;
+            saved += bytes.size() - out.size();
+        }
+        std::cout << "Stripped texture sources from " << stripped << " file(s), " << saved / 1024 << " KiB\n";
+        return 0;
+    }
 }
 
 int main(int argc, char* argv[])
@@ -41,6 +89,16 @@ int main(int argc, char* argv[])
     for (int index = 1; index < argc; ++index)
     {
         const std::string argument = argv[index] ? argv[index] : "";
+
+        if (argument == "--strip-texture-sources")
+        {
+            if (index + 1 >= argc || !argv[index + 1] || !argv[index + 1][0])
+            {
+                PrintUsage();
+                return 1;
+            }
+            return StripTextureSources(std::filesystem::path(argv[index + 1]));
+        }
 
         if (argument == "--unpack")
         {

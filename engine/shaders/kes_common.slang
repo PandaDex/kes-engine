@@ -374,6 +374,14 @@ struct KesSurface
     float occlusion;
 };
 
+// Tangent-space normal from a normal map's XY. Z is rebuilt, so BC5 (two
+// channel) normal maps and RGBA8 ones decode the same way.
+float3 KesUnpackNormal(float2 xy)
+{
+    float2 n = xy * 2.0 - 1.0;
+    return float3(n, sqrt(saturate(1.0 - dot(n, n))));
+}
+
 float3 KesGeometricNormal(SurfaceInput s)
 {
     float3 n = normalize(s.worldNormal);
@@ -406,7 +414,7 @@ KesSurface KesMaterialSurface(SurfaceInput s)
     {
         if (KesMaterialHas(kMaterialFlagHasNormal))
         {
-            float3 tangentNormal = uNormalTexture.Sample(s.uv).xyz * 2.0 - 1.0;
+            float3 tangentNormal = KesUnpackNormal(uNormalTexture.Sample(s.uv).xy);
             tangentNormal.xy *= uPbr.z;
             m.normal = KesTangentNormal(s, tangentNormal);
         }

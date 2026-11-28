@@ -94,6 +94,7 @@ namespace kes::vk
         VmaAllocation memory = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // UI textures only (set 0 of the UI pipeline)
+        uint32_t samplerFlags = 0;
     };
 
     // Per-material texture set (set 1) and the Has*Texture flags it implies.
@@ -207,6 +208,7 @@ namespace kes::vk
         VmaAllocator allocator = VK_NULL_HANDLE; // all buffer and image memory (vulkan_memory.cpp)
         VkPhysicalDeviceProperties physicalDeviceProperties = {};
         bool anisotropySupported = false;
+        bool bcSupported = false; // textureCompressionBC
 
         uint32_t graphicsQueueFamily = 0;
         uint32_t presentQueueFamily = 0;
@@ -432,6 +434,7 @@ namespace kes::vk
 
         // Samplers / default texture
         VkSampler materialSampler = VK_NULL_HANDLE; // anisotropic, repeat
+        std::unordered_map<uint32_t, VkSampler> textureSamplers;
         VkSampler shadowSampler = VK_NULL_HANDLE; // depth comparison
         GPUTexture whiteTexture = {};
 
