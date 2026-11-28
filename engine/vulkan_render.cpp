@@ -67,21 +67,6 @@ namespace kes::vk
         }                                                                       \
     } while (0)
 
-    static uint32_t FindMemoryType(Renderer& r, uint32_t typeBits, VkMemoryPropertyFlags properties)
-    {
-        VkPhysicalDeviceMemoryProperties memProps = {};
-        vkGetPhysicalDeviceMemoryProperties(r.physicalDevice, &memProps);
-
-        for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
-        {
-            if ((typeBits & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & properties) == properties)
-                return i;
-        }
-
-        EngineLogf("FindMemoryType: no suitable memory type found (typeBits=0x%08X)", typeBits);
-        return UINT32_MAX;
-    }
-
     static VkDeviceSize AlignUp(VkDeviceSize value, VkDeviceSize alignment)
     {
         if (alignment == 0)
@@ -89,47 +74,49 @@ namespace kes::vk
         return (value + alignment - 1) & ~(alignment - 1);
     }
 
-    static bool CreateBuffer(Renderer& r, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& outBuffer, VkDeviceMemory& outMemory)
+    // Host-visible buffers are persistently mapped: outMapped receives the pointer.
+    static bool CreateBuffer(Renderer& r, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& outBuffer, VmaAllocation& outMemory,
+        void** outMapped = nullptr)
     {
         VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferInfo.size = size;
         bufferInfo.usage = usage;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        VK_CHECK_RET(vkCreateBuffer(r.device, &bufferInfo, nullptr, &outBuffer), "vkCreateBuffer", false);
+        const bool hostVisible = (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+        VmaAllocationCreateInfo allocInfo = {};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        allocInfo.requiredFlags = properties;
+        if (hostVisible)
+            allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-        VkMemoryRequirements memReq = {};
-        vkGetBufferMemoryRequirements(r.device, outBuffer, &memReq);
-
-        const uint32_t memoryType = FindMemoryType(r, memReq.memoryTypeBits, properties);
-        if (memoryType == UINT32_MAX)
+        VmaAllocationInfo info = {};
+        const VkResult result = vmaCreateBuffer(r.allocator, &bufferInfo, &allocInfo, &outBuffer, &outMemory, &info);
+        if (result != VK_SUCCESS)
         {
-            vkDestroyBuffer(r.device, outBuffer, nullptr);
+            EngineLogf("vmaCreateBuffer failed: %d (%llu bytes)", static_cast<int>(result), static_cast<unsigned long long>(size));
             outBuffer = VK_NULL_HANDLE;
+            outMemory = VK_NULL_HANDLE;
             return false;
         }
-
-        VkMemoryAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
-        allocInfo.allocationSize = memReq.size;
-        allocInfo.memoryTypeIndex = memoryType;
-
-        if (vkAllocateMemory(r.device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS)
-        {
-            EngineLogf("vkAllocateMemory failed for buffer");
-            vkDestroyBuffer(r.device, outBuffer, nullptr);
-            outBuffer = VK_NULL_HANDLE;
-            return false;
-        }
-
-        vkBindBufferMemory(r.device, outBuffer, outMemory, 0);
+        if (outMapped)
+            *outMapped = info.pMappedData;
         return true;
     }
 
-    static void DestroyBuffer(Renderer& r, VkBuffer& buffer, VkDeviceMemory& memory)
+    static void DestroyBuffer(Renderer& r, VkBuffer& buffer, VmaAllocation& memory)
     {
-        if (buffer) vkDestroyBuffer(r.device, buffer, nullptr);
-        if (memory) vkFreeMemory(r.device, memory, nullptr);
+        if (buffer || memory)
+            vmaDestroyBuffer(r.allocator, buffer, memory);
         buffer = VK_NULL_HANDLE;
+        memory = VK_NULL_HANDLE;
+    }
+
+    static void DestroyImage(Renderer& r, VkImage& image, VmaAllocation& memory)
+    {
+        if (image || memory)
+            vmaDestroyImage(r.allocator, image, memory);
+        image = VK_NULL_HANDLE;
         memory = VK_NULL_HANDLE;
     }
 
@@ -216,7 +203,7 @@ namespace kes::vk
     // Staging memory of a batch is capped: past this the batch is submitted and a new one begun.
     constexpr VkDeviceSize kMaxBatchStagingBytes = 256ull * 1024 * 1024;
 
-    static void ReleaseStaging(Renderer& r, VkBuffer& buffer, VkDeviceMemory& memory, VkDeviceSize size)
+    static void ReleaseStaging(Renderer& r, VkBuffer& buffer, VmaAllocation& memory, VkDeviceSize size)
     {
         if (!r.uploadBatch)
         {
@@ -234,19 +221,17 @@ namespace kes::vk
         }
     }
 
-    static bool CreateDeviceLocalBufferWithData(Renderer& r, const void* data, VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& outBuffer, VkDeviceMemory& outMemory)
+    static bool CreateDeviceLocalBufferWithData(Renderer& r, const void* data, VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& outBuffer, VmaAllocation& outMemory)
     {
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
-        VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+        VmaAllocation stagingMemory = VK_NULL_HANDLE;
+        void* mapped = nullptr;
         if (!CreateBuffer(r, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                stagingBuffer, stagingMemory))
+                stagingBuffer, stagingMemory, &mapped))
             return false;
 
-        void* mapped = nullptr;
-        vkMapMemory(r.device, stagingMemory, 0, size, 0, &mapped);
         std::memcpy(mapped, data, static_cast<size_t>(size));
-        vkUnmapMemory(r.device, stagingMemory);
 
         if (!CreateBuffer(r, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outBuffer, outMemory))
         {
@@ -285,7 +270,7 @@ namespace kes::vk
         VkImageCreateFlags flags = 0;
     };
 
-    static bool CreateImage(Renderer& r, const ImageDesc& desc, VkImage& outImage, VkDeviceMemory& outMemory)
+    static bool CreateImage(Renderer& r, const ImageDesc& desc, VkImage& outImage, VmaAllocation& outMemory)
     {
         VkImageCreateInfo imageInfo = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
         imageInfo.flags = desc.flags;
@@ -300,24 +285,21 @@ namespace kes::vk
         imageInfo.samples = desc.samples;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        VK_CHECK_RET(vkCreateImage(r.device, &imageInfo, nullptr, &outImage), "vkCreateImage", false);
+        VmaAllocationCreateInfo allocInfo = {};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        // Render targets are large and recreated on resize: their own blocks, so they don't fragment the pools.
+        if (desc.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
+            allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 
-        VkMemoryRequirements memReq = {};
-        vkGetImageMemoryRequirements(r.device, outImage, &memReq);
-
-        const uint32_t memoryType = FindMemoryType(r, memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        VkMemoryAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
-        allocInfo.allocationSize = memReq.size;
-        allocInfo.memoryTypeIndex = memoryType;
-        if (memoryType == UINT32_MAX || vkAllocateMemory(r.device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS)
+        const VkResult result = vmaCreateImage(r.allocator, &imageInfo, &allocInfo, &outImage, &outMemory, nullptr);
+        if (result != VK_SUCCESS)
         {
-            vkDestroyImage(r.device, outImage, nullptr);
             outImage = VK_NULL_HANDLE;
-            EngineLogf("Image memory allocation failed (%ux%u x%u)", desc.width, desc.height, desc.layers);
+            outMemory = VK_NULL_HANDLE;
+            EngineLogf("vmaCreateImage failed: %d (%ux%u x%u)", static_cast<int>(result), desc.width, desc.height, desc.layers);
             return false;
         }
-
-        vkBindImageMemory(r.device, outImage, outMemory, 0);
         return true;
     }
 
@@ -376,15 +358,13 @@ namespace kes::vk
         uint32_t levels, uint32_t layers)
     {
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
-        VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+        VmaAllocation stagingMemory = VK_NULL_HANDLE;
+        void* mapped = nullptr;
         if (!CreateBuffer(r, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingMemory))
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingMemory, &mapped))
             return false;
 
-        void* mapped = nullptr;
-        vkMapMemory(r.device, stagingMemory, 0, size, 0, &mapped);
         std::memcpy(mapped, bytes, static_cast<size_t>(size));
-        vkUnmapMemory(r.device, stagingMemory);
 
         VkCommandBuffer cmd = BeginSingleTimeCommands(r);
         if (!cmd)
@@ -738,6 +718,13 @@ namespace kes::vk
 
         vkGetDeviceQueue(r.device, r.graphicsQueueFamily, 0, &r.graphicsQueue);
         vkGetDeviceQueue(r.device, r.presentQueueFamily, 0, &r.presentQueue);
+
+        VmaAllocatorCreateInfo allocatorInfo = {};
+        allocatorInfo.instance = r.instance;
+        allocatorInfo.physicalDevice = r.physicalDevice;
+        allocatorInfo.device = r.device;
+        allocatorInfo.vulkanApiVersion = r.physicalDeviceProperties.apiVersion >= VK_API_VERSION_1_1 ? VK_API_VERSION_1_1 : VK_API_VERSION_1_0;
+        VK_CHECK_RET(vmaCreateAllocator(&allocatorInfo, &r.allocator), "vmaCreateAllocator", false);
         return true;
     }
 
@@ -1529,16 +1516,13 @@ namespace kes::vk
 
         if (!CreateBuffer(r, size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                ring.buffer, ring.memory))
+                ring.buffer, ring.memory, reinterpret_cast<void**>(&ring.mapped)))
             return false;
-
-        VK_CHECK_RET(vkMapMemory(r.device, ring.memory, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void**>(&ring.mapped)), "vkMapMemory (ring)", false);
         return true;
     }
 
     static void DestroyDynamicRingBuffer(Renderer& r, GPUDynamicRingBuffer& ring)
     {
-        if (ring.mapped) vkUnmapMemory(r.device, ring.memory);
         DestroyBuffer(r, ring.buffer, ring.memory);
         ring.mapped = nullptr;
         ring.size = 0;
@@ -2029,7 +2013,7 @@ namespace kes::vk
         {
             VkImageView* view;
             VkImage* image;
-            VkDeviceMemory* memory;
+            VmaAllocation* memory;
         } targets[] = {
             { &r.sceneColorView, &r.sceneColorImage, &r.sceneColorMemory },
             { &r.sceneColorMSView, &r.sceneColorMSImage, &r.sceneColorMSMemory },
@@ -2042,16 +2026,7 @@ namespace kes::vk
                 vkDestroyImageView(r.device, *target.view, nullptr);
                 *target.view = VK_NULL_HANDLE;
             }
-            if (*target.image)
-            {
-                vkDestroyImage(r.device, *target.image, nullptr);
-                *target.image = VK_NULL_HANDLE;
-            }
-            if (*target.memory)
-            {
-                vkFreeMemory(r.device, *target.memory, nullptr);
-                *target.memory = VK_NULL_HANDLE;
-            }
+            DestroyImage(r, *target.image, *target.memory);
         }
     }
 
@@ -2163,16 +2138,7 @@ namespace kes::vk
             vkDestroyImageView(r.device, shadows.arrayView, nullptr);
             shadows.arrayView = VK_NULL_HANDLE;
         }
-        if (shadows.image)
-        {
-            vkDestroyImage(r.device, shadows.image, nullptr);
-            shadows.image = VK_NULL_HANDLE;
-        }
-        if (shadows.memory)
-        {
-            vkFreeMemory(r.device, shadows.memory, nullptr);
-            shadows.memory = VK_NULL_HANDLE;
-        }
+        DestroyImage(r, shadows.image, shadows.memory);
         shadows.resolution = 0;
         shadows.layers = 0;
     }
@@ -3369,14 +3335,12 @@ namespace kes::vk
         for (FrameResources& frame : r.frames)
         {
             if (!CreateBuffer(r, sizeof(render::SceneCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, frame.sceneCB, frame.sceneCBMemory))
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, frame.sceneCB, frame.sceneCBMemory, &frame.sceneCBMapped))
                 return false;
-            VK_CHECK_RET(vkMapMemory(r.device, frame.sceneCBMemory, 0, sizeof(render::SceneCBData), 0, &frame.sceneCBMapped), "vkMapMemory (sceneCB)", false);
 
             if (!CreateBuffer(r, sizeof(render::SkyCBData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, frame.skyCB, frame.skyCBMemory))
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, frame.skyCB, frame.skyCBMemory, &frame.skyCBMapped))
                 return false;
-            VK_CHECK_RET(vkMapMemory(r.device, frame.skyCBMemory, 0, sizeof(render::SkyCBData), 0, &frame.skyCBMapped), "vkMapMemory (skyCB)", false);
 
             if (!CreateDynamicRingBuffer(r, frame.modelCBRing, sizeof(render::ModelCBData), kInitialDynamicRingSize))
                 return false;
@@ -3722,16 +3686,7 @@ namespace kes::vk
             vkDestroyImageView(r.device, texture.view, nullptr);
             texture.view = VK_NULL_HANDLE;
         }
-        if (texture.image)
-        {
-            vkDestroyImage(r.device, texture.image, nullptr);
-            texture.image = VK_NULL_HANDLE;
-        }
-        if (texture.memory)
-        {
-            vkFreeMemory(r.device, texture.memory, nullptr);
-            texture.memory = VK_NULL_HANDLE;
-        }
+        DestroyImage(r, texture.image, texture.memory);
     }
 
     static void DestroyGPUShaderProgram(Renderer& r, GPUShaderProgram& program)
@@ -5046,8 +5001,6 @@ namespace kes::vk
 
         // Only this frame's copy is replaced; the GPU finished with it before
         // BeginFrameIfNeeded's fence wait returned.
-        if (stream.mapped)
-            vkUnmapMemory(r.device, stream.memory);
         stream.mapped = nullptr;
         DestroyBuffer(r, stream.buffer, stream.memory);
 
@@ -5056,22 +5009,14 @@ namespace kes::vk
             size *= 2;
         stream.size = 0;
 
-        if (!CreateBuffer(r, size, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stream.buffer, stream.memory))
+        if (!CreateBuffer(r, size, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stream.buffer, stream.memory, &stream.mapped))
             return false;
-        if (vkMapMemory(r.device, stream.memory, 0, size, 0, &stream.mapped) != VK_SUCCESS)
-        {
-            stream.mapped = nullptr;
-            DestroyBuffer(r, stream.buffer, stream.memory);
-            return false;
-        }
         stream.size = size;
         return true;
     }
 
     static void DestroyStreamBuffer(Renderer& r, GPUStreamBuffer& stream)
     {
-        if (stream.mapped)
-            vkUnmapMemory(r.device, stream.memory);
         stream.mapped = nullptr;
         DestroyBuffer(r, stream.buffer, stream.memory);
         stream.size = 0;
@@ -5320,17 +5265,9 @@ namespace kes::vk
             }
             DestroyDynamicRingBuffer(r, frame.modelCBRing);
             DestroyDynamicRingBuffer(r, frame.materialCBRing);
-            if (frame.sceneCBMapped)
-            {
-                vkUnmapMemory(r.device, frame.sceneCBMemory);
-                frame.sceneCBMapped = nullptr;
-            }
+            frame.sceneCBMapped = nullptr;
             DestroyBuffer(r, frame.sceneCB, frame.sceneCBMemory);
-            if (frame.skyCBMapped)
-            {
-                vkUnmapMemory(r.device, frame.skyCBMemory);
-                frame.skyCBMapped = nullptr;
-            }
+            frame.skyCBMapped = nullptr;
             DestroyBuffer(r, frame.skyCB, frame.skyCBMemory);
         }
 
@@ -5427,6 +5364,11 @@ namespace kes::vk
             }
         }
 
+        if (r.allocator)
+        {
+            vmaDestroyAllocator(r.allocator);
+            r.allocator = VK_NULL_HANDLE;
+        }
         vkDestroyDevice(r.device, nullptr);
         r.device = VK_NULL_HANDLE;
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <string>
@@ -48,9 +49,9 @@ namespace kes::vk
     struct GPUMesh
     {
         VkBuffer vertexBuffer = VK_NULL_HANDLE;
-        VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+        VmaAllocation vertexMemory = VK_NULL_HANDLE;
         VkBuffer indexBuffer = VK_NULL_HANDLE;
-        VkDeviceMemory indexMemory = VK_NULL_HANDLE;
+        VmaAllocation indexMemory = VK_NULL_HANDLE;
         uint32_t indexCount = 0;
         std::vector<MeshSection> sections; // never empty once uploaded
         std::vector<MeshLod> lods; // sections per LOD, after the base indices in the same buffers
@@ -90,7 +91,7 @@ namespace kes::vk
     struct GPUTexture
     {
         VkImage image = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VmaAllocation memory = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // UI textures only (set 0 of the UI pipeline)
     };
@@ -108,7 +109,7 @@ namespace kes::vk
     struct GPUShadowArray
     {
         VkImage image = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VmaAllocation memory = VK_NULL_HANDLE;
         VkImageView arrayView = VK_NULL_HANDLE;
         std::vector<VkImageView> layerViews;
         std::vector<VkFramebuffer> framebuffers;
@@ -119,7 +120,7 @@ namespace kes::vk
     struct GPUDynamicRingBuffer
     {
         VkBuffer buffer = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VmaAllocation memory = VK_NULL_HANDLE;
         uint8_t* mapped = nullptr;
         VkDeviceSize size = 0;
         VkDeviceSize rangeSize = 0; // descriptor range: the whole struct, even when a draw writes less of it
@@ -137,7 +138,7 @@ namespace kes::vk
     struct GPUStreamBuffer
     {
         VkBuffer buffer = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VmaAllocation memory = VK_NULL_HANDLE;
         void* mapped = nullptr;
         VkDeviceSize size = 0;
     };
@@ -156,11 +157,11 @@ namespace kes::vk
         VkFence inFlightFence = VK_NULL_HANDLE;
 
         VkBuffer sceneCB = VK_NULL_HANDLE;
-        VkDeviceMemory sceneCBMemory = VK_NULL_HANDLE;
+        VmaAllocation sceneCBMemory = VK_NULL_HANDLE;
         void* sceneCBMapped = nullptr;
 
         VkBuffer skyCB = VK_NULL_HANDLE;
-        VkDeviceMemory skyCBMemory = VK_NULL_HANDLE;
+        VmaAllocation skyCBMemory = VK_NULL_HANDLE;
         void* skyCBMapped = nullptr;
 
         GPUDynamicRingBuffer modelCBRing;
@@ -203,6 +204,7 @@ namespace kes::vk
         VkSurfaceKHR surface = VK_NULL_HANDLE;
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
         VkDevice device = VK_NULL_HANDLE;
+        VmaAllocator allocator = VK_NULL_HANDLE; // all buffer and image memory (vulkan_memory.cpp)
         VkPhysicalDeviceProperties physicalDeviceProperties = {};
         bool anisotropySupported = false;
 
@@ -231,13 +233,13 @@ namespace kes::vk
         VkFormat shadowFormat = VK_FORMAT_UNDEFINED;
         bool shadowLinearFilter = true;
         VkImage depthImage = VK_NULL_HANDLE;
-        VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+        VmaAllocation depthMemory = VK_NULL_HANDLE;
         VkImageView depthView = VK_NULL_HANDLE;
         VkImage sceneColorMSImage = VK_NULL_HANDLE;
-        VkDeviceMemory sceneColorMSMemory = VK_NULL_HANDLE;
+        VmaAllocation sceneColorMSMemory = VK_NULL_HANDLE;
         VkImageView sceneColorMSView = VK_NULL_HANDLE;
         VkImage sceneColorImage = VK_NULL_HANDLE; // resolved, sampled by the tonemap
-        VkDeviceMemory sceneColorMemory = VK_NULL_HANDLE;
+        VmaAllocation sceneColorMemory = VK_NULL_HANDLE;
         VkImageView sceneColorView = VK_NULL_HANDLE;
         VkFramebuffer sceneFramebuffer = VK_NULL_HANDLE;
         VkDescriptorSet sceneColorDescriptorSet = VK_NULL_HANDLE; // texSetLayout: scene color (bloom input)
@@ -312,7 +314,7 @@ namespace kes::vk
         GPUTexture cmaa2Edges = {}; // R32_UINT, two pixels per texel
         GPUTexture cmaa2Heads = {}; // R32_UINT, one per 2x2 quad
         VkBuffer cmaa2Buffers[kCmaa2BufferCount] = {};
-        VkDeviceMemory cmaa2BufferMemory[kCmaa2BufferCount] = {};
+        VmaAllocation cmaa2BufferMemory[kCmaa2BufferCount] = {};
         VkDescriptorSet cmaa2DescriptorSet = VK_NULL_HANDLE;
         uint32_t cmaa2GroupsX = 0;
         uint32_t cmaa2GroupsY = 0;
@@ -406,9 +408,9 @@ namespace kes::vk
         VkPipeline exposureHistogramPipeline = VK_NULL_HANDLE;
         VkPipeline exposureAdaptPipeline = VK_NULL_HANDLE;
         VkBuffer histogramBuffer = VK_NULL_HANDLE;
-        VkDeviceMemory histogramMemory = VK_NULL_HANDLE;
+        VmaAllocation histogramMemory = VK_NULL_HANDLE;
         VkBuffer exposureStateBuffer = VK_NULL_HANDLE;
-        VkDeviceMemory exposureStateMemory = VK_NULL_HANDLE;
+        VmaAllocation exposureStateMemory = VK_NULL_HANDLE;
         VkDescriptorSet exposureDescriptorSet = VK_NULL_HANDLE;
         bool exposureNeedsInit = true; // zero both buffers before the first use
         uint32_t exposureResetSerial = ~0u; // Scene::GetExposureResetSerial last seen
@@ -470,7 +472,7 @@ namespace kes::vk
         // Upload batch (RendererPreloadAssets): uploads share one command buffer
         // and one queue wait; staging buffers live until the batch is submitted.
         VkCommandBuffer uploadBatch = VK_NULL_HANDLE;
-        std::vector<std::pair<VkBuffer, VkDeviceMemory>> uploadStaging;
+        std::vector<std::pair<VkBuffer, VmaAllocation>> uploadStaging;
         VkDeviceSize uploadStagingBytes = 0;
 
         int windowWidth = 0;

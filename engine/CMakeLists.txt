@@ -227,8 +227,14 @@ kes_target_profiler(engine)
 
 # Renderer backends
 if(KES_RENDERER_VULKAN)
-    target_sources(engine PRIVATE "vulkan_render.h" "vulkan_render.cpp")
+    target_sources(engine PRIVATE "vulkan_render.h" "vulkan_render.cpp" "vulkan_memory.cpp")
     target_link_libraries(engine PRIVATE Vulkan::Vulkan)
+    # Vulkan Memory Allocator (git submodule, header only)
+    set(_kes_vma_dir "${CMAKE_SOURCE_DIR}/external/VulkanMemoryAllocator")
+    if(NOT EXISTS "${_kes_vma_dir}/include/vk_mem_alloc.h")
+        message(FATAL_ERROR "KES: external/VulkanMemoryAllocator is missing. Fetch it: git submodule update --init external/VulkanMemoryAllocator")
+    endif()
+    target_include_directories(engine SYSTEM PRIVATE "${_kes_vma_dir}/include")
 endif()
 
 if(KES_RENDERER_D3D11)
